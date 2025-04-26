@@ -4,7 +4,7 @@ import {main} from '../models';
 
 export function CopyDatabase(arg1:string):Promise<void>;
 
-export function CreateEntry(arg1:main.CodexEntry):Promise<main.CodexEntry>;
+export function CreateEntry(arg1:string,arg2:string,arg3:string):Promise<main.CodexEntry>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
 

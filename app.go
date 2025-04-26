@@ -168,32 +168,30 @@ func (a *App) GetAllEntries() ([]CodexEntry, error) {
 	return entries, nil
 }
 
-// CreateEntry adds a new codex entry.
-func (a *App) CreateEntry(entry CodexEntry) (CodexEntry, error) {
-	if a.db == nil { // Check App's db handle
+// CreateEntry handles adding a new codex entry
+func (a *App) CreateEntry(name, entryType, content string) (CodexEntry, error) {
+	if a.db == nil {
 		return CodexEntry{}, fmt.Errorf("database is not initialized")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	stmt, err := a.db.Prepare("INSERT INTO codex_entries(name, type, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)")
-	if err != nil {
-		return CodexEntry{}, fmt.Errorf("failed to prepare insert statement: %w", err)
-	}
-	defer stmt.Close()
-
-	res, err := stmt.Exec(entry.Name, entry.Type, entry.Content, now, now)
-	if err != nil {
-		return CodexEntry{}, fmt.Errorf("failed to execute insert: %w", err)
+	// Basic validation: ensure name is not empty
+	if strings.TrimSpace(name) == "" {
+		return CodexEntry{}, fmt.Errorf("entry name cannot be empty")
 	}
 
-	id, err := res.LastInsertId()
+	newID, err := DBInsertEntry(a.db, name, entryType, content)
 	if err != nil {
-		return CodexEntry{}, fmt.Errorf("failed to get last insert ID: %w", err)
+		return CodexEntry{}, fmt.Errorf("failed to insert entry: %w", err)
 	}
 
-	entry.ID = id
-	entry.CreatedAt = now
-	entry.UpdatedAt = now
-	return entry, nil
+	// Fetch the newly created entry to return the full object
+	newEntry, err := a.GetEntryByID(newID)
+	if err != nil {
+		// Log the error, but maybe don't fail the whole operation?
+		// Or return a partial entry? For now, return the error.
+		return CodexEntry{}, fmt.Errorf("failed to retrieve newly created entry (ID: %d): %w", newID, err)
+	}
+
+	return newEntry, nil
 }
 
 // GetEntryByID retrieves a single entry by its ID.
@@ -218,7 +216,7 @@ func (a *App) GetEntryByID(id int64) (CodexEntry, error) {
 	return entry, nil
 }
 
-// UpdateEntry updates an existing codex entry in the database.
+// UpdateEntry handles updating an existing codex entry
 func (a *App) UpdateEntry(entry CodexEntry) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
@@ -227,7 +225,7 @@ func (a *App) UpdateEntry(entry CodexEntry) error {
 	return DBUpdateEntry(a.db, entry)
 }
 
-// DeleteEntry deletes a codex entry by its ID.
+// DeleteEntry handles deleting a codex entry by its ID
 func (a *App) DeleteEntry(id int64) error {
 	if a.db == nil { // Check App's db handle
 		return fmt.Errorf("database is not initialized")
@@ -280,7 +278,7 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) { // Renamed 
 			Type:    "Generated",                      // Provide a default type
 			Content: generatedText,
 		}
-		createdEntry, createErr := a.CreateEntry(fallbackEntry) // Use App's CreateEntry method
+		createdEntry, createErr := a.CreateEntry(fallbackEntry.Name, fallbackEntry.Type, fallbackEntry.Content) // Use App's CreateEntry method
 		if createErr != nil {
 			return nil, fmt.Errorf("failed to create fallback database entry: %w", createErr)
 		}
@@ -300,7 +298,7 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) { // Renamed 
 			Content: llmEntry.Content,
 		}
 
-		createdEntry, err := a.CreateEntry(newEntry) // Use App's CreateEntry method
+		createdEntry, err := a.CreateEntry(newEntry.Name, newEntry.Type, newEntry.Content) // Use App's CreateEntry method
 		if err != nil {
 			log.Printf("Failed to create entry '%s': %v. Skipping.", newEntry.Name, err)
 			continue // Continue processing other potential entries

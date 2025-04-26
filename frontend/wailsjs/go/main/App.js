@@ -6,8 +6,8 @@ export function CopyDatabase(arg1) {
   return window['go']['main']['App']['CopyDatabase'](arg1);
 }
 
-export function CreateEntry(arg1) {
-  return window['go']['main']['App']['CreateEntry'](arg1);
+export function CreateEntry(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CreateEntry'](arg1, arg2, arg3);
 }
 
 export function DeleteEntry(arg1) {

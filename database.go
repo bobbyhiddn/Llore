@@ -102,3 +102,44 @@ func DBUpdateEntry(dbConn *sql.DB, entry CodexEntry) error {
 
 	return nil
 }
+
+// DBInsertEntry adds a new entry to the database and returns its ID
+func DBInsertEntry(dbConn *sql.DB, name, entryType, content string) (int64, error) {
+	insertSQL := `INSERT INTO codex_entries(name, type, content, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'));`
+	stmt, err := dbConn.Prepare(insertSQL)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(name, entryType, content)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute insert statement: %w", err)
+	}
+
+	newID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to retrieve last insert ID: %w", err)
+	}
+
+	log.Printf("Inserted new entry with ID: %d", newID)
+	return newID, nil
+}
+
+// DBDeleteEntry removes an entry from the database by its ID
+func DBDeleteEntry(dbConn *sql.DB, id int64) error {
+	deleteSQL := `DELETE FROM codex_entries WHERE id = ?;`
+	stmt, err := dbConn.Prepare(deleteSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare delete statement: %w", err)
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(id)
+	if err != nil {
+		return fmt.Errorf("failed to execute delete statement: %w", err)
+	}
+
+	log.Printf("Deleted entry with ID: %d", id)
+	return nil
+}

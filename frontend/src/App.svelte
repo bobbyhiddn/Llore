@@ -3,6 +3,7 @@
   import { 
     GetAllEntries, 
     UpdateEntry, 
+    CreateEntry, 
     DeleteEntry, 
     GenerateContent, 
     ProcessStory,
@@ -93,8 +94,31 @@
         isLoading = false;
       }
     } else {
-       errorMsg = 'Create functionality not yet implemented.';
-       console.log("Save clicked for new entry, currentEntry:", currentEntry);
+      if (!currentEntry.name) {
+        errorMsg = 'Entry must have a name to create.';
+        return;
+      }
+
+      isLoading = true;
+      errorMsg = '';
+      try {
+        console.log("Attempting to create entry:", currentEntry);
+        const newEntry = await CreateEntry(currentEntry.name, currentEntry.type, currentEntry.content);
+        alert(`Entry '${newEntry.name}' created successfully!`);
+        await loadEntries(); // Reload list to show the new entry
+        // Optionally select the newly created entry
+        const newEntryInList = entries.find(e => e.id === newEntry.id);
+        if (newEntryInList) {
+          handleEntrySelect(newEntryInList);
+        } else {
+          resetForm(); // Or just reset if not found (shouldn't happen)
+        }
+      } catch (err) {
+        console.error("Error creating entry:", err);
+        errorMsg = `Failed to create entry: ${err}`;
+      } finally {
+        isLoading = false;
+      }
     }
   }
 
@@ -315,7 +339,7 @@
         {/if}
 
         <div class="button-group">
-          <button type="submit" disabled={isLoading}>Save Entry</button> 
+          <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
           
           {#if isEditing} 
             <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
