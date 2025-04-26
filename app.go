@@ -338,6 +338,19 @@ func (a *App) shutdown(ctx context.Context) {
 
 // --- LLM Interaction ---
 
+
+
+// GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
+func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
+	if err := LoadOpenRouterConfig(); err != nil {
+		return "", fmt.Errorf("failed to load OpenRouter config: %w", err)
+	}
+	if err := LoadOpenRouterCache(); err != nil {
+		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
+	}
+	return GetOpenRouterCompletion(prompt, model)
+}
+
 // ProcessStory sends a prompt to the LLM and processes the structured response.
 func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) { 
 	if a.llmClient == nil {

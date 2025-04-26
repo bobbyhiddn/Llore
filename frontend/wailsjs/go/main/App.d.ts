@@ -8,7 +8,11 @@ export function CreateNewVault(arg1:string):Promise<string>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
 
+export function FetchOpenRouterModels():Promise<Array<main.OpenRouterModel>>;
+
 export function GenerateContent(arg1:string):Promise<string>;
+
+export function GenerateOpenRouterContent(arg1:string,arg2:string):Promise<string>;
 
 export function GetAllEntries():Promise<Array<main.CodexEntry>>;
 
@@ -21,6 +25,8 @@ export function ListLibraryFiles():Promise<Array<string>>;
 export function ProcessStory(arg1:string):Promise<Array<main.CodexEntry>>;
 
 export function ReadLibraryFile(arg1:string):Promise<string>;
+
+export function SaveOpenRouterApiKey(arg1:string):Promise<void>;
 
 export function SelectVaultFolder():Promise<string>;
 

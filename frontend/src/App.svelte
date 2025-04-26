@@ -6,6 +6,8 @@
     UpdateEntry, 
     DeleteEntry, 
     GenerateContent, 
+    GenerateOpenRouterContent, 
+    SaveOpenRouterApiKey, 
     SelectVaultFolder, 
     CreateNewVault, 
     SwitchVault, 
@@ -16,6 +18,56 @@
     ProcessStory, 
   } from '@wailsjs/go/main/App';
   import type { main } from '@wailsjs/go/models';
+
+  // --- OpenRouter API Key UI State ---
+  let showApiKeyModal = false;
+  let openrouterApiKey = '';
+  let apiKeySaveMsg = '';
+  let apiKeyErrorMsg = '';
+
+  // --- Model Selector State ---
+  import { FetchOpenRouterModels } from '@wailsjs/go/main/App';
+  let modelList: { id: string, name: string }[] = [];
+  let selectedModel: string = '';
+  let isModelListLoading = false;
+  let modelListError = '';
+
+  async function loadModelList() {
+    isModelListLoading = true;
+    modelListError = '';
+    try {
+      modelList = await FetchOpenRouterModels();
+      selectedModel = modelList.length > 0 ? modelList[0].id : '';
+    } catch (err) {
+      modelListError = 'Failed to load models: ' + err;
+      modelList = [];
+      selectedModel = '';
+    } finally {
+      isModelListLoading = false;
+    }
+  }
+
+  async function saveApiKey() {
+    apiKeySaveMsg = '';
+    apiKeyErrorMsg = '';
+    try {
+      // Save to config.json via backend Go function
+      await SaveOpenRouterApiKey(openrouterApiKey);
+      apiKeySaveMsg = 'API key saved!';
+      showApiKeyModal = false;
+      await loadModelList(); // Refresh model list after saving key
+    } catch (err) {
+      apiKeyErrorMsg = 'Failed to save API key: ' + err;
+    }
+  }
+
+  function openApiKeyModal() {
+    showApiKeyModal = true;
+    apiKeySaveMsg = '';
+    apiKeyErrorMsg = '';
+    openrouterApiKey = '';
+  }
+
 
   // State Variables
   let entries: main.Entry[] = [];
@@ -71,16 +123,36 @@
     }
   }
 
+  // Track if chat context has been injected
+  let chatContextInjected = false;
+
   // Helper: Lore Chat send
   async function sendChat() {
     if (!chatInput.trim()) return;
     chatError = '';
     isChatLoading = true;
     chatMessages = [...chatMessages, { sender: 'user', text: chatInput }];
-    const prompt = chatInput;
+    let prompt = chatInput;
     chatInput = '';
     try {
-      const aiReply = await GenerateContent(prompt);
+      // On first chat message, load codex entries as context
+      if (!chatContextInjected) {
+        let codexEntries = await GetAllEntries();
+        let contextString = '';
+        if (codexEntries && codexEntries.length > 0) {
+          // Use name/type/content for each entry; keep it concise
+          contextString = codexEntries.map(e => `Name: ${e.name}\nType: ${e.type}\nContent: ${e.content}`)
+            .join('\n---\n');
+          // Limit context length (optional, e.g., first 10 entries or 4000 chars)
+          if (contextString.length > 4000) contextString = contextString.slice(0, 4000) + '\n...';
+        }
+        if (contextString) {
+          prompt = `Context:\n${contextString}\n\nUser: ${prompt}`;
+        }
+        chatContextInjected = true;
+      }
+      // Use OpenRouter if model is selected
+      const aiReply = await GenerateOpenRouterContent(prompt, selectedModel);
       chatMessages = [...chatMessages, { sender: 'ai', text: aiReply }];
     } catch (err) {
       chatError = `AI error: ${err}`;
@@ -123,6 +195,7 @@
     resetForm();
     isEditing = false;
     currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
+    await loadModelList();
   });
 
   async function loadEntries() {
@@ -571,6 +644,21 @@
   <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
   <section class="lore-chat">
     <h2>Lore Chat</h2>
+    <div class="chat-settings-row">
+      <label for="model-select">Model:</label>
+      {#if isModelListLoading}
+        <span>Loading models...</span>
+      {:else if modelListError}
+        <span style="color:red">{modelListError}</span>
+      {:else}
+        <select id="model-select" bind:value={selectedModel}>
+          {#each modelList as model}
+            <option value={model.id}>{model.name}</option>
+          {/each}
+        </select>
+      {/if}
+      <button on:click={openApiKeyModal} style="margin-left: 1em;">Set API Key</button>
+    </div>
     <div class="chat-display" bind:this={chatDisplayElement}>
       {#each chatMessages as message}
         <div class="message {message.sender}">
@@ -593,6 +681,24 @@
     {/if}
   </section>
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
+
+{#if showApiKeyModal}
+  <div class="modal-backdrop">
+    <div class="modal-content">
+      <h3>Set OpenRouter API Key</h3>
+      <input type="text" bind:value={openrouterApiKey} placeholder="sk-..." style="width: 100%; padding: 0.5em; margin-bottom: 1em;" />
+      <button on:click={saveApiKey} style="margin-right: 1em;">Save</button>
+      <button on:click={() => showApiKeyModal = false}>Cancel</button>
+      {#if apiKeySaveMsg}
+        <p style="color: green;">{apiKeySaveMsg}</p>
+      {/if}
+      {#if apiKeyErrorMsg}
+        <p class="error-message">{apiKeyErrorMsg}</p>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 
 {#if showImportModal}
   <div class="modal-backdrop">
@@ -718,6 +824,12 @@
   .chat-ai {
     text-align: left;
     margin-bottom: 0.5rem;
+  }
+  .chat-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+    margin-bottom: 1em;
   }
   .chat-form {
     display: flex;

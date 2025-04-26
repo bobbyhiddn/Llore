@@ -14,8 +14,16 @@ export function DeleteEntry(arg1) {
   return window['go']['main']['App']['DeleteEntry'](arg1);
 }
 
+export function FetchOpenRouterModels() {
+  return window['go']['main']['App']['FetchOpenRouterModels']();
+}
+
 export function GenerateContent(arg1) {
   return window['go']['main']['App']['GenerateContent'](arg1);
+}
+
+export function GenerateOpenRouterContent(arg1, arg2) {
+  return window['go']['main']['App']['GenerateOpenRouterContent'](arg1, arg2);
 }
 
 export function GetAllEntries() {
@@ -40,6 +48,10 @@ export function ProcessStory(arg1) {
 
 export function ReadLibraryFile(arg1) {
   return window['go']['main']['App']['ReadLibraryFile'](arg1);
+}
+
+export function SaveOpenRouterApiKey(arg1) {
+  return window['go']['main']['App']['SaveOpenRouterApiKey'](arg1);
 }
 
 export function SelectVaultFolder() {
