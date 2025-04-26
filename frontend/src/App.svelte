@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, afterUpdate } from 'svelte';
   import { 
     GetAllEntries, 
     UpdateEntry, 
@@ -49,17 +49,19 @@ let chatMessages: { sender: 'user' | 'ai'; text: string }[] = [];
 let chatInput = '';
 let isChatLoading = false;
 let chatError = '';
+let chatDisplayElement: HTMLDivElement;
 
 // Story import feedback
 let showImportModal = false;
-let importCreatedCount = 0;
+let createdEntriesCount = 0;
+let processedEntries: Entry[] = []; // Store processed entries for modal display
 
 // Helper: Refresh Library (filter entries by type)
-function refreshLibrary() {
-  // Accept both 'Story' and 'ImportedStory' types
-  libraryEntries = entries.filter(e =>
-    e.type && (e.type.toLowerCase() === 'story' || e.type.toLowerCase() === 'importedstory')
-  );
+async function refreshLibrary() {
+  isLoading = true; // Add loading state indication
+  await loadEntries(); // Ensure latest entries are loaded
+  libraryEntries = entries.filter(entry => entry.type === 'Story' || entry.type === 'ImportedStory');
+  isLoading = false;
 }
 
 // Helper: Lore Chat send
@@ -82,7 +84,7 @@ async function sendChat() {
 }
 
 // Helper: Save AI chat turn to codex
-async function saveChatToCodex(text) {
+async function saveChatToCodex(text: string) { // Added type: string
   try {
     await CreateEntry('Lore Chat', 'Chat', text);
     await loadEntries();
@@ -92,13 +94,14 @@ async function saveChatToCodex(text) {
   }
 }
 
-
   onMount(async () => {
     await fetchCurrentDBPath(); 
     await loadEntries();
     resetForm();
     isEditing = false;
     currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
+    // Load library on mount as well
+    refreshLibrary();
   });
 
   async function loadEntries() {
@@ -252,25 +255,39 @@ async function saveChatToCodex(text) {
     }
     isProcessingStory = true;
     processStoryErrorMsg = '';
+    processedEntries = []; // Clear previous results
     try {
-      const newEntries = await ProcessStory(storyText);
-      importCreatedCount = Array.isArray(newEntries) ? newEntries.length : 0;
-      showImportModal = true;
-      // Do NOT clear storyText yet; clear after modal closes
-      await loadEntries(); // Refresh codex
+      // Process story and get newly created entries
+      const newEntriesResult = await ProcessStory(storyText);
+      processedEntries = newEntriesResult || []; // Store the actual entries
+      createdEntriesCount = processedEntries.length; // Use the length of the actual result
+      await loadEntries(); // Reload the main entry list
+      refreshLibrary();    // Refresh the library view automatically
+      showImportModal = true; // Show the modal
+      // Story text is cleared when modal closes now
     } catch (err) {
       console.error("Error processing story:", err);
-      processStoryErrorMsg = `Error processing story: ${err}`;
+      processStoryErrorMsg = `Failed to process story: ${err}`;
     } finally {
       isProcessingStory = false;
     }
   }
 
+  // Called when the import result modal is closed
   function closeImportModal(goToCodex = false) {
     showImportModal = false;
-    storyText = '';
+    storyText = ''; // Clear input *after* modal is closed
+    processedEntries = []; // Clear the processed entries list
+    createdEntriesCount = 0;
     if (goToCodex) mode = 'codex';
   }
+
+  // Auto-scroll chat display
+  afterUpdate(() => {
+    if (chatDisplayElement) {
+      chatDisplayElement.scrollTop = chatDisplayElement.scrollHeight;
+    }
+  });
 
   async function fetchCurrentDBPath() {
     try {
@@ -497,7 +514,9 @@ async function saveChatToCodex(text) {
     <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
     <section>
       <h2>Library (Imported Stories)</h2>
-      <button on:click={refreshLibrary}>Refresh Library</button>
+      <button on:click={refreshLibrary} disabled={isLoading}>
+        {#if isLoading}Loading...{:else}Refresh Library{/if}
+      </button>
       {#if libraryEntries.length === 0}
         <p>No imported stories found.</p>
       {:else}
@@ -516,12 +535,12 @@ async function saveChatToCodex(text) {
     <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
     <section class="lore-chat">
       <h2>Lore Chat</h2>
-      <div class="chat-window">
-        {#each chatMessages as msg, i}
-          <div class={msg.sender === 'user' ? 'chat-user' : 'chat-ai'}>
-            <strong>{msg.sender === 'user' ? 'You' : 'AI'}:</strong> {msg.text}
-            {#if msg.sender === 'ai'}
-              <button on:click={() => saveChatToCodex(msg.text)}>Save to Codex</button>
+      <div class="chat-display" bind:this={chatDisplayElement}>
+        {#each chatMessages as message}
+          <div class="message {message.sender}">
+            <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
+            {#if message.sender === 'ai'}
+              <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
             {/if}
           </div>
         {/each}
@@ -551,6 +570,28 @@ async function saveChatToCodex(text) {
     <button on:click={handleLoadExisting} disabled={isLoading}>
         {#if isLoading && !databaseIsReady}Loading...{:else}Load Existing Database{/if}
     </button>
+  </div>
+{/if}
+
+{#if showImportModal}
+  <div class="modal-backdrop">
+    <div class="modal-content">
+      <h3>Story Processed</h3>
+      {#if createdEntriesCount > 0}
+        <p>{createdEntriesCount} new codex entr{createdEntriesCount === 1 ? 'y was' : 'ies were'} created:</p>
+        <ul>
+          {#each processedEntries as entry}
+            <li>{entry.name} ({entry.type})</li>
+          {/each}
+        </ul>
+      {:else}
+        <p>No new entries were created from the story.</p>
+      {/if}
+      <div class="modal-actions">
+        <button on:click={() => closeImportModal(false)}>OK</button>
+        <button on:click={() => closeImportModal(true)}>Go to Codex</button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -667,7 +708,7 @@ async function saveChatToCodex(text) {
 }
 
 /* Modal styles */
-.import-modal {
+.modal-backdrop {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.4);
@@ -676,7 +717,7 @@ async function saveChatToCodex(text) {
   justify-content: center;
   z-index: 1000;
 }
-.import-modal-content {
+.modal-content {
   background: white;
   border-radius: 8px;
   padding: 2rem;
@@ -685,14 +726,3 @@ async function saveChatToCodex(text) {
   box-shadow: 0 2px 16px rgba(0,0,0,0.2);
 }
 </style>
-
-{#if showImportModal}
-  <div class="import-modal">
-    <div class="import-modal-content">
-      <h3>Story Import Complete</h3>
-      <p>{importCreatedCount} codex entries created.</p>
-      <button on:click={() => closeImportModal(false)}>OK</button>
-      <button on:click={() => closeImportModal(true)}>Go to Codex</button>
-    </div>
-  </div>
-{/if}
