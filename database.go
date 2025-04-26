@@ -66,3 +66,39 @@ func DBClose(dbConn *sql.DB) {
 		}
 	}
 }
+
+// DBUpdateEntry updates an existing entry in the database.
+func DBUpdateEntry(dbConn *sql.DB, entry CodexEntry) error {
+	if dbConn == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if entry.ID == 0 {
+		return fmt.Errorf("cannot update entry with ID 0")
+	}
+
+	log.Printf("Updating entry with ID: %d\n", entry.ID)
+
+	updateSQL := `UPDATE codex_entries SET name = ?, type = ?, content = ?, updated_at = datetime('now') WHERE id = ?;`
+	stmt, err := dbConn.Prepare(updateSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare update statement: %w", err)
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(entry.Name, entry.Type, entry.Content, entry.ID)
+	if err != nil {
+		return fmt.Errorf("failed to execute update statement for ID %d: %w", entry.ID, err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		// Log the error but don't necessarily fail the operation if rowsAffected fails
+		log.Printf("Warning: could not determine rows affected after update for ID %d: %v", entry.ID, err)
+	} else if rowsAffected == 0 {
+		return fmt.Errorf("no entry found with ID %d to update", entry.ID)
+	} else {
+		log.Printf("Successfully updated entry ID %d (%d row affected).", entry.ID, rowsAffected)
+	}
+
+	return nil
+}

@@ -218,26 +218,16 @@ func (a *App) GetEntryByID(id int64) (CodexEntry, error) {
 	return entry, nil
 }
 
-// UpdateEntry modifies an existing codex entry.
+// UpdateEntry updates an existing codex entry in the database.
 func (a *App) UpdateEntry(entry CodexEntry) error {
-	if a.db == nil { // Check App's db handle
+	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	stmt, err := a.db.Prepare("UPDATE codex_entries SET name = ?, type = ?, content = ?, updated_at = ? WHERE id = ?")
-	if err != nil {
-		return fmt.Errorf("failed to prepare update statement: %w", err)
-	}
-	defer stmt.Close()
-
-	_, err = stmt.Exec(entry.Name, entry.Type, entry.Content, now, entry.ID)
-	if err != nil {
-		return fmt.Errorf("failed to execute update for ID %d: %w", entry.ID, err)
-	}
-	return nil
+	log.Printf("App.UpdateEntry called for ID: %d", entry.ID)
+	return DBUpdateEntry(a.db, entry)
 }
 
-// DeleteEntry removes a codex entry by its ID.
+// DeleteEntry deletes a codex entry by its ID.
 func (a *App) DeleteEntry(id int64) error {
 	if a.db == nil { // Check App's db handle
 		return fmt.Errorf("database is not initialized")
