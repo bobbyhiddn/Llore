@@ -52,13 +52,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 	log.Println("AWS Bedrock client initialized successfully.")
 
-	// Initialize the database connection using the path from config
-	a.dbPath = a.config.DatabasePath   // Store initial path
-	a.db, err = DBInitialize(a.dbPath) // Assign handle to a.db
-	if err != nil {
-		log.Fatalf("Failed to initialize database at '%s': %v", a.dbPath, err)
-	}
-	log.Printf("Database connection established for: %s", a.dbPath)
+	// Database will be initialized later by user action (Create/Load)
+	log.Println("App startup complete. Waiting for user to load or create a database.")
 }
 
 // shutdown is called when the app terminates. Closes the database connection.
@@ -132,6 +127,11 @@ func (a *App) SwitchDatabase(newPath string) error {
 // GetCurrentDatabasePath returns the path of the currently loaded database.
 func (a *App) GetCurrentDatabasePath() string {
 	return a.dbPath
+}
+
+// IsDatabaseLoaded checks if a database connection is currently active.
+func (a *App) IsDatabaseLoaded() bool {
+	return a.db != nil
 }
 
 // --- Codex Entry Management (Now using a.db) ---

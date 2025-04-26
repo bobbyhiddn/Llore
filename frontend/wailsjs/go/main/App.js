@@ -30,6 +30,10 @@ export function GetEntryByID(arg1) {
   return window['go']['main']['App']['GetEntryByID'](arg1);
 }
 
+export function IsDatabaseLoaded() {
+  return window['go']['main']['App']['IsDatabaseLoaded']();
+}
+
 export function ProcessStory(arg1) {
   return window['go']['main']['App']['ProcessStory'](arg1);
 }

@@ -11,7 +11,8 @@
     SelectDatabaseFile,
     SaveDatabaseFile,
     SwitchDatabase,
-    CopyDatabase,      
+    CopyDatabase,
+    IsDatabaseLoaded,
   } from '../wailsjs/go/main/App.js';
 
   let entries = [];
@@ -22,7 +23,9 @@
   let processStoryErrorMsg = ''; // Separate error message for story processing
   let storyText = ''; // State variable for the story textarea
   let selectedEntry = null; // Variable to hold the selected entry details
-  let currentDBPath = 'Loading...'; // Added for DB path display
+  let currentDBPath = 'No database loaded'; // Default state
+  let databaseIsReady = false;
+  let initialErrorMsg = '';
 
   // Ensure currentEntry includes all fields expected from Go's CodexEntry struct
   let currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null }; 
@@ -210,8 +213,45 @@
     } 
   }
 
+  async function handleCreateNew() {
+    try {
+      const newPath = await SaveDatabaseFile();
+      if (newPath) {
+        await SwitchDatabase(newPath);
+        databaseIsReady = true;
+        await updateCurrentDBPath();
+        await loadEntries();
+      }
+    } catch (err) {
+      initialErrorMsg = `Error creating database: ${err}`;
+      databaseIsReady = false;
+    }
+  }
+
+  async function handleLoadExisting() {
+    try {
+      const existingPath = await SelectDatabaseFile();
+      if (existingPath) {
+        await SwitchDatabase(existingPath);
+        databaseIsReady = true;
+        await updateCurrentDBPath();
+        await loadEntries();
+      }
+    } catch (err) {
+      initialErrorMsg = `Error loading database: ${err}`;
+      databaseIsReady = false;
+    }
+  }
+  async function updateCurrentDBPath() {
+    try {
+      currentDBPath = await GetCurrentDatabasePath();
+    } catch (err) {
+      currentDBPath = "Error loading path";
+    }
+  }
 </script>
 
+{#if databaseIsReady}
 <main>
   <h1>Llore Codex</h1>
 
@@ -316,6 +356,17 @@
   {/if}
 
 </main>
+{:else}
+  <div class="initial-prompt">
+    <h1>Welcome to Llore</h1>
+    <p>Create a new database or load an existing one to continue.</p>
+    {#if initialErrorMsg}
+      <p style="color: red">{initialErrorMsg}</p>
+    {/if}
+    <button on:click={handleCreateNew}>Create New Database</button>
+    <button on:click={handleLoadExisting}>Load Existing Database</button>
+  </div>
+{/if}
 
 <style>
   main {

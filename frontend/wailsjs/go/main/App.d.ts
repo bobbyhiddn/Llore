@@ -16,6 +16,8 @@ export function GetCurrentDatabasePath():Promise<string>;
 
 export function GetEntryByID(arg1:number):Promise<main.CodexEntry>;
 
+export function IsDatabaseLoaded():Promise<boolean>;
+
 export function ProcessStory(arg1:string):Promise<Array<main.CodexEntry>>;
 
 export function SaveDatabaseFile():Promise<string>;
