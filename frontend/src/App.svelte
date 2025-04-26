@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
   import { 
     GetAllEntries, 
@@ -15,7 +15,17 @@
     IsDatabaseLoaded
   } from '../wailsjs/go/main/App.js';
 
-  let entries = [];
+  // Define the type for an entry
+  interface Entry {
+    id: number | null;
+    name: string;
+    type: string;
+    content: string;
+    createdAt: string | null; // Assuming date comes as string or null
+    updatedAt: string | null;
+  }
+
+  let entries: Entry[] = [];
   let isLoading = false;
   let isGenerating = false;
   let isProcessingStory = false;
@@ -25,8 +35,63 @@
   let currentDBPath = 'No database loaded';
   let databaseIsReady = false;
   let initialErrorMsg = '';
-  let currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null }; 
+  let currentEntry: Entry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null }; 
   let isEditing = false;
+
+  // New: Track current mode (null = show mode selection)
+  let mode: 'codex' | 'story' | 'library' | 'chat' | null = null;
+
+// Library state: filter entries that are stories
+let libraryEntries: Entry[] = [];
+
+// Lore Chat state
+let chatMessages: { sender: 'user' | 'ai'; text: string }[] = [];
+let chatInput = '';
+let isChatLoading = false;
+let chatError = '';
+
+// Story import feedback
+let showImportModal = false;
+let importCreatedCount = 0;
+
+// Helper: Refresh Library (filter entries by type)
+function refreshLibrary() {
+  // Accept both 'Story' and 'ImportedStory' types
+  libraryEntries = entries.filter(e =>
+    e.type && (e.type.toLowerCase() === 'story' || e.type.toLowerCase() === 'importedstory')
+  );
+}
+
+// Helper: Lore Chat send
+async function sendChat() {
+  if (!chatInput.trim()) return;
+  chatError = '';
+  isChatLoading = true;
+  chatMessages = [...chatMessages, { sender: 'user', text: chatInput }];
+  const prompt = chatInput;
+  chatInput = '';
+  try {
+    // Use GenerateContent for chat
+    const aiReply = await GenerateContent(prompt);
+    chatMessages = [...chatMessages, { sender: 'ai', text: aiReply }];
+  } catch (err) {
+    chatError = `AI error: ${err}`;
+  } finally {
+    isChatLoading = false;
+  }
+}
+
+// Helper: Save AI chat turn to codex
+async function saveChatToCodex(text) {
+  try {
+    await CreateEntry('Lore Chat', 'Chat', text);
+    await loadEntries();
+    alert('Chat response saved to codex.');
+  } catch (err) {
+    alert('Failed to save chat: ' + err);
+  }
+}
+
 
   onMount(async () => {
     await fetchCurrentDBPath(); 
@@ -49,7 +114,7 @@
     }
   }
 
-  function handleEntrySelect(entry) {
+  function handleEntrySelect(entry: Entry) {
     if (!entry) return;
     currentEntry = JSON.parse(JSON.stringify(entry)); 
     isEditing = true; 
@@ -77,7 +142,9 @@
       errorMsg = '';
       try {
         console.log("Attempting to update entry:", currentEntry);
-        await UpdateEntry(currentEntry); 
+        // Assert id, createdAt, and updatedAt are non-null here because they are expected for existing entries.
+        const updatePayload = { ...currentEntry, id: currentEntry.id!, createdAt: currentEntry.createdAt!, updatedAt: currentEntry.updatedAt! };
+        await UpdateEntry(updatePayload); 
         alert('Entry updated successfully!'); 
         const updatedId = currentEntry.id; 
         await loadEntries(); 
@@ -185,18 +252,24 @@
     }
     isProcessingStory = true;
     processStoryErrorMsg = '';
-    errorMsg = ''; 
     try {
-      const createdEntries = await ProcessStory(storyText);
-      console.log('Successfully processed story, created entries:', createdEntries);
-      storyText = ''; 
-      await loadEntries(); 
+      const newEntries = await ProcessStory(storyText);
+      importCreatedCount = Array.isArray(newEntries) ? newEntries.length : 0;
+      showImportModal = true;
+      // Do NOT clear storyText yet; clear after modal closes
+      await loadEntries(); // Refresh codex
     } catch (err) {
       console.error("Error processing story:", err);
       processStoryErrorMsg = `Error processing story: ${err}`;
     } finally {
       isProcessingStory = false;
     }
+  }
+
+  function closeImportModal(goToCodex = false) {
+    showImportModal = false;
+    storyText = '';
+    if (goToCodex) mode = 'codex';
   }
 
   async function fetchCurrentDBPath() {
@@ -264,8 +337,15 @@
     }
   }
 
+  // Helper function to create a typed event handler for the list items
+  function createKeyDownHandler(entry: Entry) {
+    return (event: KeyboardEvent) => {
+      handleLiKeyDown(event, entry);
+    };
+  }
+
   // Handle keydown for accessibility on list items
-  function handleLiKeyDown(event, entry) {
+  function handleLiKeyDown(event: KeyboardEvent, entry: Entry) {
     // Trigger selection on Enter or Space key press
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault(); // Prevent default space bar scroll
@@ -273,89 +353,131 @@
     }
   }
 
+  // Global error handler
+  function handleError(message: string | Event, source?: string, lineno?: number, colno?: number, error?: Error) {
+    console.error('Global error caught:', message, source, lineno, colno, error);
+    initialErrorMsg = `An application error occurred: ${message}${error ? ' (' + error.message + ')' : ''}. Please check console for details.`;
+    // Optionally send error details to a logging service
+    return true; // Prevents the firing of the default event handler
+  }
+  window.onerror = handleError;
+
 </script>
 
 {#if databaseIsReady}
-<main>
-  <h1>Llore Codex</h1>
+  {#if mode === null}
+    <!-- Mode Choice Screen -->
+    <div class="mode-choice">
+      <h2>Choose a mode</h2>
+      <button on:click={() => mode = 'codex'}>Codex</button>
+      <button on:click={() => mode = 'story'}>Story Import</button>
+      <button on:click={() => mode = 'library'}>Library</button>
+      <button on:click={() => mode = 'chat'}>Lore Chat</button>
+    </div>
+  {:else if mode === 'codex'}
+    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
 
-  <div class="db-path-display">
-      Current DB: {currentDBPath || 'None loaded'}
-      <button on:click={handleCopyDB} disabled={isLoading}>Copy DB</button>
-  </div>
+    <main>
+      <h1>Llore Codex</h1>
 
-  <div class="layout-container">
-    <aside class="sidebar">
-      <h2>Entries</h2>
-      <button on:click={prepareNewEntry} disabled={isLoading}>+ New Entry</button> 
-      {#if isLoading && entries.length === 0}
-        <p>Loading entries...</p>
-      {:else if entries.length === 0}
-        <p>No entries found.</p>
-      {/if}
-      <ul>
-        {#each entries as entry (entry.id)}
-          <!-- Keep li for list structure, move interaction to inner div -->
-          <li class:selected={currentEntry?.id === entry.id}>
-            <div 
-              class="entry-item-button"
-              role="button"
-              tabindex="0"
-              on:click={() => handleEntrySelect(entry)} 
-              on:keydown={(e) => handleLiKeyDown(e, entry)}
-            >
-              {entry.name || '(Unnamed)'} ({entry.type || 'Untyped'})
-            </div>
-          </li>
-        {/each}
-      </ul>
-    </aside>
+      <div class="db-path-display">
+        Current DB: {currentDBPath || 'None loaded'}
+        <button on:click={handleCopyDB} disabled={isLoading}>Copy DB</button>
+      </div>
 
-    <section class="main-content">
-      {#if isEditing}
-        <h2>Edit Entry: {currentEntry.name}</h2>
-      {:else}
-         <h2>Create New Entry</h2> 
-      {/if}
+      <div class="layout-container">
+        <aside class="sidebar">
+          <h2>Entries</h2>
+          <button on:click={prepareNewEntry} disabled={isLoading}>+ New Entry</button> 
+          {#if isLoading && entries.length === 0}
+            <p>Loading entries...</p>
+          {:else if entries.length === 0}
+            <p>No entries found.</p>
+          {/if}
+          <ul>
+            {#each entries as entry (entry.id)}
+              <!-- Keep li for list structure, move interaction to inner div -->
+              <li class:selected={currentEntry?.id === entry.id}>
+                <div 
+                  class="entry-item-button"
+                  role="button"
+                  tabindex="0"
+                  on:click={() => handleEntrySelect(entry)} 
+                  on:keydown={createKeyDownHandler(entry)}
+                >
+                  {entry.name || '(Unnamed)'} ({entry.type || 'Untyped'})
+                </div>
+              </li>
+            {/each}
+          </ul>
+        </aside>
 
-      <form on:submit|preventDefault={handleSaveEntry}>
-        <div class="form-group">
-          <label for="entry-name">Name:</label>
-          <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
-        </div>
-        <div class="form-group">
-          <label for="entry-type">Type:</label>
-          <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
-        </div>
-        <div class="form-group">
-          <label for="entry-content">Content:</label>
-          <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
-        </div>
-        
-        {#if currentEntry.id} 
-          <div class="timestamps">
-            <small>Created: {currentEntry.createdAt || 'N/A'} | Updated: {currentEntry.updatedAt || 'N/A'}</small>
-          </div>
-        {/if}
-
-        <div class="button-group">
-          <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
-          
-          {#if isEditing} 
-            <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
+        <section class="main-content">
+          {#if isEditing}
+            <h2>Edit Entry: {currentEntry.name}</h2>
+          {:else}
+            <h2>Create New Entry</h2> 
           {/if}
 
-          <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
-            {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
+          <form on:submit|preventDefault={handleSaveEntry}>
+            <div class="form-group">
+              <label for="entry-name">Name:</label>
+              <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
+            </div>
+            <div class="form-group">
+              <label for="entry-type">Type:</label>
+              <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
+            </div>
+            <div class="form-group">
+              <label for="entry-content">Content:</label>
+              <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
+            </div>
+            
+            {#if currentEntry.id} 
+              <div class="timestamps">
+                <small>Created: {currentEntry.createdAt || 'N/A'} | Updated: {currentEntry.updatedAt || 'N/A'}</small>
+              </div>
+            {/if}
+
+            <div class="button-group">
+              <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
+              
+              {#if isEditing} 
+                <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
+              {/if}
+
+              <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
+                {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
+              </button>
+            </div>
+          </form>
+
+          {#if errorMsg}
+            <p class="error-message">{errorMsg}</p>
+          {/if}
+        </section>
+
+        <section class="story-processor">
+          <h2>Process Story (AI)</h2>
+          <textarea 
+            bind:value={storyText} 
+            rows="15" 
+            placeholder="Paste your story text here..."
+            disabled={isProcessingStory}
+          ></textarea>
+          <button on:click={handleProcessStory} disabled={isProcessingStory || !storyText.trim()}>
+            {#if isProcessingStory}Processing...{:else}Process Story & Add Entries{/if}
           </button>
-        </div>
-      </form>
+          {#if processStoryErrorMsg}
+            <p class="error-message">{processStoryErrorMsg}</p>
+          {/if}
+        </section>
 
-      {#if errorMsg}
-        <p class="error-message">{errorMsg}</p>
-      {/if}
-    </section>
+      </div> 
 
+    </main>
+  {:else if mode === 'story'}
+    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
     <section class="story-processor">
       <h2>Process Story (AI)</h2>
       <textarea 
@@ -371,10 +493,51 @@
         <p class="error-message">{processStoryErrorMsg}</p>
       {/if}
     </section>
-
-  </div> 
-
-</main>
+  {:else if mode === 'library'}
+    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+    <section>
+      <h2>Library (Imported Stories)</h2>
+      <button on:click={refreshLibrary}>Refresh Library</button>
+      {#if libraryEntries.length === 0}
+        <p>No imported stories found.</p>
+      {:else}
+        <ul>
+          {#each libraryEntries as entry}
+            <li>
+              <strong>{entry.name}</strong> ({entry.type})<br>
+              <small>Created: {entry.createdAt}</small>
+              <div>{entry.content.slice(0, 120)}{entry.content.length > 120 ? '...' : ''}</div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  {:else if mode === 'chat'}
+    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+    <section class="lore-chat">
+      <h2>Lore Chat</h2>
+      <div class="chat-window">
+        {#each chatMessages as msg, i}
+          <div class={msg.sender === 'user' ? 'chat-user' : 'chat-ai'}>
+            <strong>{msg.sender === 'user' ? 'You' : 'AI'}:</strong> {msg.text}
+            {#if msg.sender === 'ai'}
+              <button on:click={() => saveChatToCodex(msg.text)}>Save to Codex</button>
+            {/if}
+          </div>
+        {/each}
+        {#if isChatLoading}
+          <div class="chat-ai"><em>AI is thinking...</em></div>
+        {/if}
+      </div>
+      <form on:submit|preventDefault={sendChat} class="chat-form">
+        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
+        <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
+      </form>
+      {#if chatError}
+        <p class="error-message">{chatError}</p>
+      {/if}
+    </section>
+  {/if}
 {:else}
   <div class="initial-prompt">
     <h1>Welcome to Llore</h1>
@@ -477,4 +640,59 @@
       color: #666;
       margin-top: 0.5rem;
   }
+.lore-chat {
+  max-width: 600px;
+  margin: 0 auto;
+}
+.chat-window {
+  border: 1px solid #ccc;
+  background: #fafaff;
+  padding: 1rem;
+  min-height: 200px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+.chat-user {
+  text-align: right;
+  margin-bottom: 0.5rem;
+}
+.chat-ai {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+.chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Modal styles */
+.import-modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.import-modal-content {
+  background: white;
+  border-radius: 8px;
+  padding: 2rem;
+  min-width: 300px;
+  text-align: center;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+}
 </style>
+
+{#if showImportModal}
+  <div class="import-modal">
+    <div class="import-modal-content">
+      <h3>Story Import Complete</h3>
+      <p>{importCreatedCount} codex entries created.</p>
+      <button on:click={() => closeImportModal(false)}>OK</button>
+      <button on:click={() => closeImportModal(true)}>Go to Codex</button>
+    </div>
+  </div>
+{/if}

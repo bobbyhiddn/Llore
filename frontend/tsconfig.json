@@ -8,6 +8,8 @@
     "allowJs": true,
     "checkJs": true,
     "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "moduleResolution": "node", // Important for resolving node_modules types
     "strict": true, // Optional, but good practice
     "noEmit": true, // We don't need TS to emit JS, Vite handles it
