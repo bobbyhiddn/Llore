@@ -2,109 +2,131 @@
   import { onMount, afterUpdate } from 'svelte';
   import { 
     GetAllEntries, 
-    UpdateEntry, 
     CreateEntry, 
+    UpdateEntry, 
     DeleteEntry, 
     GenerateContent, 
-    ProcessStory,
-    GetCurrentDatabasePath,
-    SelectDatabaseFile,
-    SaveDatabaseFile,
-    SwitchDatabase,
-    CopyDatabase,
-    IsDatabaseLoaded
-  } from '../wailsjs/go/main/App.js';
+    SelectVaultFolder, 
+    CreateNewVault, 
+    SwitchVault, 
+    GetCurrentVaultPath, 
+    ListLibraryFiles, 
+    ImportStoryTextAndFile, 
+    ReadLibraryFile, 
+    ProcessStory, 
+  } from '@wailsjs/go/main/App';
+  import type { main } from '@wailsjs/go/models';
 
-  // Define the type for an entry
-  interface Entry {
-    id: number | null;
-    name: string;
-    type: string;
-    content: string;
-    createdAt: string | null; // Assuming date comes as string or null
-    updatedAt: string | null;
-  }
-
-  let entries: Entry[] = [];
+  // State Variables
+  let entries: main.Entry[] = [];
+  let currentEntry: Partial<main.Entry> | null = null;
   let isLoading = false;
-  let isGenerating = false;
-  let isProcessingStory = false;
-  let errorMsg = '';
-  let processStoryErrorMsg = '';
-  let storyText = '';
-  let currentDBPath = 'No database loaded';
-  let databaseIsReady = false;
-  let initialErrorMsg = '';
-  let currentEntry: Entry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null }; 
   let isEditing = false;
+  let isGenerating = false;
+  let errorMsg = '';
+  let initialErrorMsg = ''; // Declare the missing variable
+  let vaultErrorMsg = ''; // Keep this one too, might be used elsewhere
 
-  // New: Track current mode (null = show mode selection)
-  let mode: 'codex' | 'story' | 'library' | 'chat' | null = null;
+  // Vault State
+  let vaultIsReady = false;
+  let currentVaultPath: string | null = null;
 
-// Library state: filter entries that are stories
-let libraryEntries: Entry[] = [];
+  // Mode ('codex', 'story', 'library', 'chat', or null for choice screen)
+  let mode: 'codex' | 'story' | 'library' | 'chat' | null = null; 
 
-// Lore Chat state
-let chatMessages: { sender: 'user' | 'ai'; text: string }[] = [];
-let chatInput = '';
-let isChatLoading = false;
-let chatError = '';
-let chatDisplayElement: HTMLDivElement;
+  // Library State (Files)
+  let libraryFiles: string[] = []; 
+  let isLibraryLoading = false;
 
-// Story import feedback
-let showImportModal = false;
-let createdEntriesCount = 0;
-let processedEntries: Entry[] = []; // Store processed entries for modal display
+  // Story Processing State
+  let storyText = '';
+  let isProcessingStory = false;
+  let processStoryErrorMsg = '';
 
-// Helper: Refresh Library (filter entries by type)
-async function refreshLibrary() {
-  isLoading = true; // Add loading state indication
-  await loadEntries(); // Ensure latest entries are loaded
-  libraryEntries = entries.filter(entry => entry.type === 'Story' || entry.type === 'ImportedStory');
-  isLoading = false;
-}
+  // Chat State
+  let chatMessages: { sender: 'user' | 'ai', text: string }[] = [];
+  let chatInput = '';
+  let isChatLoading = false;
+  let chatError = '';
+  let chatDisplayElement: HTMLDivElement;
 
-// Helper: Lore Chat send
-async function sendChat() {
-  if (!chatInput.trim()) return;
-  chatError = '';
-  isChatLoading = true;
-  chatMessages = [...chatMessages, { sender: 'user', text: chatInput }];
-  const prompt = chatInput;
-  chatInput = '';
-  try {
-    // Use GenerateContent for chat
-    const aiReply = await GenerateContent(prompt);
-    chatMessages = [...chatMessages, { sender: 'ai', text: aiReply }];
-  } catch (err) {
-    chatError = `AI error: ${err}`;
-  } finally {
-    isChatLoading = false;
+  // Story import feedback
+  let showImportModal = false;
+  let createdEntriesCount = 0;
+  let processedEntries: main.Entry[] = []; 
+
+  // Helper: Refresh Library Files 
+  async function refreshLibraryFiles() {
+    if (!vaultIsReady) return;
+    isLibraryLoading = true;
+    errorMsg = ''; 
+    try {
+      libraryFiles = await ListLibraryFiles() || []; 
+    } catch (err) {
+      console.error("Error loading library files:", err);
+      errorMsg = `Error loading library: ${err}`;
+      libraryFiles = []; 
+    } finally {
+      isLibraryLoading = false;
+    }
   }
-}
 
-// Helper: Save AI chat turn to codex
-async function saveChatToCodex(text: string) { // Added type: string
-  try {
-    await CreateEntry('Lore Chat', 'Chat', text);
-    await loadEntries();
-    alert('Chat response saved to codex.');
-  } catch (err) {
-    alert('Failed to save chat: ' + err);
+  // Helper: Lore Chat send
+  async function sendChat() {
+    if (!chatInput.trim()) return;
+    chatError = '';
+    isChatLoading = true;
+    chatMessages = [...chatMessages, { sender: 'user', text: chatInput }];
+    const prompt = chatInput;
+    chatInput = '';
+    try {
+      const aiReply = await GenerateContent(prompt);
+      chatMessages = [...chatMessages, { sender: 'ai', text: aiReply }];
+    } catch (err) {
+      chatError = `AI error: ${err}`;
+    } finally {
+      isChatLoading = false;
+    }
   }
-}
+
+  // Helper: Save AI chat turn to codex
+  async function saveChatToCodex(text: string) { 
+    try {
+      await CreateEntry('Lore Chat', 'Chat', text);
+      await loadEntries();
+      alert('Chat response saved to codex.');
+    } catch (err) {
+      alert('Failed to save chat: ' + err);
+    }
+  }
+
+  // Helper to format date strings (basic example)
+  function formatDate(dateString: string | null | undefined): string {
+    if (!dateString) return 'N/A';
+    try {
+      // Attempt to create a Date object and format it simply
+      // Adjust formatting as needed (e.g., locale, options)
+      return new Date(dateString).toLocaleDateString(); 
+    } catch (e) {
+      // Handle potential invalid date strings
+      return dateString; // Return original string if formatting fails
+    }
+  }
 
   onMount(async () => {
-    await fetchCurrentDBPath(); 
-    await loadEntries();
+    await fetchCurrentVaultPath(); 
+    if (currentVaultPath) {
+      vaultIsReady = true;
+      await loadEntries(); 
+      refreshLibraryFiles(); 
+    }
     resetForm();
     isEditing = false;
     currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
-    // Load library on mount as well
-    refreshLibrary();
   });
 
   async function loadEntries() {
+    if (!vaultIsReady) return; 
     isLoading = true;
     errorMsg = '';
     try {
@@ -117,7 +139,7 @@ async function saveChatToCodex(text: string) { // Added type: string
     }
   }
 
-  function handleEntrySelect(entry: Entry) {
+  function handleEntrySelect(entry: main.Entry) {
     if (!entry) return;
     currentEntry = JSON.parse(JSON.stringify(entry)); 
     isEditing = true; 
@@ -145,7 +167,6 @@ async function saveChatToCodex(text: string) { // Added type: string
       errorMsg = '';
       try {
         console.log("Attempting to update entry:", currentEntry);
-        // Assert id, createdAt, and updatedAt are non-null here because they are expected for existing entries.
         const updatePayload = { ...currentEntry, id: currentEntry.id!, createdAt: currentEntry.createdAt!, updatedAt: currentEntry.updatedAt! };
         await UpdateEntry(updatePayload); 
         alert('Entry updated successfully!'); 
@@ -175,13 +196,12 @@ async function saveChatToCodex(text: string) { // Added type: string
         console.log("Attempting to create entry:", currentEntry);
         const newEntry = await CreateEntry(currentEntry.name, currentEntry.type, currentEntry.content);
         alert(`Entry '${newEntry.name}' created successfully!`);
-        await loadEntries(); // Reload list to show the new entry
-        // Optionally select the newly created entry
+        await loadEntries(); 
         const newEntryInList = entries.find(e => e.id === newEntry.id);
         if (newEntryInList) {
           handleEntrySelect(newEntryInList);
         } else {
-          resetForm(); // Or just reset if not found (shouldn't happen)
+          resetForm(); 
         }
       } catch (err) {
         console.error("Error creating entry:", err);
@@ -248,330 +268,331 @@ async function saveChatToCodex(text: string) { // Added type: string
     }
   }
 
-  async function handleProcessStory() {
+  // Renamed from handleProcessStory -> handleImportStory
+  async function handleImportStory() { 
     if (!storyText.trim()) {
       processStoryErrorMsg = 'Please paste the story text into the textarea.';
       return;
     }
+    if (!vaultIsReady) {
+      processStoryErrorMsg = 'No Lore Vault is currently loaded.';
+      return;
+    }
+
     isProcessingStory = true;
     processStoryErrorMsg = '';
-    processedEntries = []; // Clear previous results
+    processedEntries = []; 
     try {
-      // Process story and get newly created entries
-      const newEntriesResult = await ProcessStory(storyText);
-      processedEntries = newEntriesResult || []; // Store the actual entries
-      createdEntriesCount = processedEntries.length; // Use the length of the actual result
-      await loadEntries(); // Reload the main entry list
-      refreshLibrary();    // Refresh the library view automatically
-      showImportModal = true; // Show the modal
-      // Story text is cleared when modal closes now
+      const newEntriesResult = await ImportStoryTextAndFile(storyText);
+      
+      processedEntries = newEntriesResult || []; 
+      createdEntriesCount = processedEntries.length; 
+      
+      await loadEntries(); 
+      refreshLibraryFiles(); 
+      showImportModal = true; 
+      // Story text is cleared when modal closes
     } catch (err) {
-      console.error("Error processing story:", err);
-      processStoryErrorMsg = `Failed to process story: ${err}`;
+      console.error("Error importing story:", err);
+      processStoryErrorMsg = `Failed to import story: ${err}`;
     } finally {
       isProcessingStory = false;
     }
   }
 
-  // Called when the import result modal is closed
-  function closeImportModal(goToCodex = false) {
-    showImportModal = false;
-    storyText = ''; // Clear input *after* modal is closed
-    processedEntries = []; // Clear the processed entries list
-    createdEntriesCount = 0;
-    if (goToCodex) mode = 'codex';
+  // Function to potentially view library file content
+  async function viewLibraryFileContent(filename: string) {
+    if (!vaultIsReady) return;
+    alert(`Viewing file (Not Implemented): ${filename}\nNeed ReadLibraryFile Go function.`);
+    // try {
+    //   const content = await ReadLibraryFile(filename);
+    //   // Display content in a modal or dedicated view
+    //   console.log(`Content of ${filename}:\n`, content);
+    //   alert(`Content of ${filename}:\n${content.substring(0, 200)}...`);
+    // } catch (err) {
+    //   errorMsg = `Failed to read library file ${filename}: ${err}`;
+    // }
   }
 
-  // Auto-scroll chat display
-  afterUpdate(() => {
-    if (chatDisplayElement) {
-      chatDisplayElement.scrollTop = chatDisplayElement.scrollHeight;
-    }
-  });
-
-  async function fetchCurrentDBPath() {
+  // Renamed from fetchCurrentDBPath
+  async function fetchCurrentVaultPath() {
     try {
-      currentDBPath = await GetCurrentDatabasePath();
+      currentVaultPath = await GetCurrentVaultPath();
+      vaultIsReady = !!currentVaultPath; 
     } catch (err) {
-      errorMsg = `Error fetching current DB path: ${err}`;
-      currentDBPath = 'Error loading path';
+      console.warn("Could not get current vault path:", err); 
+      currentVaultPath = null;
+      vaultIsReady = false;
     }
   }
 
-  async function handleCopyDB() {
+  // Renamed from handleCreateNew
+  async function handleNewLore() {
     try {
-      const newPath = await SaveDatabaseFile(); 
-      if (newPath) {
-        console.log(`Attempting to copy database to: ${newPath}`);
-        await CopyDatabase(newPath); 
-        console.log(`Database successfully copied to ${newPath}`);
-        alert(`Database saved as ${newPath}`); 
+      let vaultName = prompt('Enter a name for your new Lore Vault:', 'LoreVault');
+      if (!vaultName) {
+        vaultErrorMsg = 'Vault creation cancelled.';
+        return;
+      }
+      const newVaultPath = await CreateNewVault(vaultName);
+      if (newVaultPath) {
+        await SwitchVault(newVaultPath);
+        vaultIsReady = true;
+        await updateCurrentVaultPath();
+        await loadEntries();
+        refreshLibraryFiles();
+        vaultErrorMsg = '';
       } else {
-        console.log("Save As dialog cancelled.");
+        vaultErrorMsg = 'Vault creation was cancelled or failed.';
       }
-    } catch (error) {
-      errorMsg = `Error during Save As: ${error}`;
-      console.error('Error during Save As:', error);
-      alert(errorMsg); 
+    } catch (err) {
+      vaultErrorMsg = `Error creating new vault: ${err}`;
+      vaultIsReady = false;
     }
   }
 
-  async function handleCreateNew() {
+  // Renamed from handleLoadExisting
+  async function handleLoadLore() {
     try {
-      const newPath = await SaveDatabaseFile();
-      if (newPath) {
-        await SwitchDatabase(newPath);
-        databaseIsReady = true;
-        await updateCurrentDBPath();
+      const selectedPath = await SelectVaultFolder(); 
+      if (selectedPath) {
+        await SwitchVault(selectedPath); 
+        vaultIsReady = true;
+        await updateCurrentVaultPath();
         await loadEntries();
+        refreshLibraryFiles();
+        vaultErrorMsg = '';
+      } else {
+        vaultErrorMsg = ''; 
       }
     } catch (err) {
-      initialErrorMsg = `Error creating database: ${err}`;
-      databaseIsReady = false;
+      vaultErrorMsg = `Error loading vault: ${err}`;
+      vaultIsReady = false;
     }
   }
 
-  async function handleLoadExisting() {
+  // Renamed from updateCurrentDBPath
+  async function updateCurrentVaultPath() {
     try {
-      const existingPath = await SelectDatabaseFile();
-      if (existingPath) {
-        await SwitchDatabase(existingPath);
-        databaseIsReady = true;
-        await updateCurrentDBPath();
-        await loadEntries();
-      }
+      currentVaultPath = await GetCurrentVaultPath();
     } catch (err) {
-      initialErrorMsg = `Error loading database: ${err}`;
-      databaseIsReady = false;
-    }
-  }
-
-  async function updateCurrentDBPath() {
-    try {
-      currentDBPath = await GetCurrentDatabasePath();
-    } catch (err) {
-      currentDBPath = "Error loading path";
-    }
-  }
-
-  // Helper function to create a typed event handler for the list items
-  function createKeyDownHandler(entry: Entry) {
-    return (event: KeyboardEvent) => {
-      handleLiKeyDown(event, entry);
-    };
-  }
-
-  // Handle keydown for accessibility on list items
-  function handleLiKeyDown(event: KeyboardEvent, entry: Entry) {
-    // Trigger selection on Enter or Space key press
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault(); // Prevent default space bar scroll
-      handleEntrySelect(entry);
+      currentVaultPath = "Error loading path";
     }
   }
 
   // Global error handler
   function handleError(message: string | Event, source?: string, lineno?: number, colno?: number, error?: Error) {
     console.error('Global error caught:', message, source, lineno, colno, error);
-    initialErrorMsg = `An application error occurred: ${message}${error ? ' (' + error.message + ')' : ''}. Please check console for details.`;
-    // Optionally send error details to a logging service
-    return true; // Prevents the firing of the default event handler
+    vaultErrorMsg = `An application error occurred: ${message}${error ? ' (' + error.message + ')' : ''}. Please check console for details.`;
+    return true; 
   }
   window.onerror = handleError;
 
+  // Handler for keyboard navigation in entry list
+  function createKeyDownHandler(entry: main.Entry) {
+    return (event: KeyboardEvent) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault(); // Prevent scrolling on Space
+        handleEntrySelect(entry);
+      }
+      // Add ArrowUp/ArrowDown logic here if needed for list navigation
+    };
+  }
+
+  // Close the import success modal
+  function closeImportModal(switchToCodex: boolean) {
+    showImportModal = false;
+    if (switchToCodex) {
+      mode = 'codex'; // Optionally switch view after closing
+    }
+  }
+
 </script>
 
-{#if databaseIsReady}
-  {#if mode === null}
-    <!-- Mode Choice Screen -->
-    <div class="mode-choice">
-      <h2>Choose a mode</h2>
-      <button on:click={() => mode = 'codex'}>Codex</button>
-      <button on:click={() => mode = 'story'}>Story Import</button>
-      <button on:click={() => mode = 'library'}>Library</button>
-      <button on:click={() => mode = 'chat'}>Lore Chat</button>
+{#if !vaultIsReady} <!-- Vault is NOT ready, show initial screen FIRST -->
+  <div class="initial-prompt">
+    <h1>Welcome to Llore</h1>
+    <p>Load an existing Lore Vault or create a new one.</p>
+    {#if initialErrorMsg}
+      <p class="error-message">{initialErrorMsg}</p>
+    {/if}
+    <button on:click={handleLoadLore} disabled={isLoading}> 
+        {#if isLoading && !vaultIsReady}Loading...{:else}Load Lore Vault{/if}
+    </button>
+    <button on:click={handleNewLore} disabled={isLoading}>
+        {#if isLoading && !vaultIsReady}Creating...{:else}Create New Vault{/if} 
+    </button>
+  </div>
+{:else if mode === null} <!-- Vault IS ready, but no mode selected -->
+  <!-- Mode Choice Screen -->
+  <div class="mode-choice">
+    <h2>Choose a mode</h2>
+    <button on:click={() => mode = 'codex'}>Codex</button>
+    <button on:click={() => mode = 'story'}>Story Import</button>
+    <button on:click={() => mode = 'library'}>Library</button>
+    <button on:click={() => mode = 'chat'}>Lore Chat</button>
+  </div>
+{:else if mode === 'codex'}
+  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+
+  <main>
+    <h1>Llore Codex</h1>
+
+    <div class="db-path-display">
+      Current Vault: {currentVaultPath || 'None loaded'}
     </div>
-  {:else if mode === 'codex'}
-    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
 
-    <main>
-      <h1>Llore Codex</h1>
-
-      <div class="db-path-display">
-        Current DB: {currentDBPath || 'None loaded'}
-        <button on:click={handleCopyDB} disabled={isLoading}>Copy DB</button>
-      </div>
-
-      <div class="layout-container">
-        <aside class="sidebar">
-          <h2>Entries</h2>
-          <button on:click={prepareNewEntry} disabled={isLoading}>+ New Entry</button> 
-          {#if isLoading && entries.length === 0}
-            <p>Loading entries...</p>
-          {:else if entries.length === 0}
-            <p>No entries found.</p>
-          {/if}
-          <ul>
-            {#each entries as entry (entry.id)}
-              <!-- Keep li for list structure, move interaction to inner div -->
-              <li class:selected={currentEntry?.id === entry.id}>
-                <div 
-                  class="entry-item-button"
-                  role="button"
-                  tabindex="0"
-                  on:click={() => handleEntrySelect(entry)} 
-                  on:keydown={createKeyDownHandler(entry)}
-                >
-                  {entry.name || '(Unnamed)'} ({entry.type || 'Untyped'})
-                </div>
-              </li>
-            {/each}
-          </ul>
-        </aside>
-
-        <section class="main-content">
-          {#if isEditing}
-            <h2>Edit Entry: {currentEntry.name}</h2>
-          {:else}
-            <h2>Create New Entry</h2> 
-          {/if}
-
-          <form on:submit|preventDefault={handleSaveEntry}>
-            <div class="form-group">
-              <label for="entry-name">Name:</label>
-              <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
-            </div>
-            <div class="form-group">
-              <label for="entry-type">Type:</label>
-              <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
-            </div>
-            <div class="form-group">
-              <label for="entry-content">Content:</label>
-              <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
-            </div>
-            
-            {#if currentEntry.id} 
-              <div class="timestamps">
-                <small>Created: {currentEntry.createdAt || 'N/A'} | Updated: {currentEntry.updatedAt || 'N/A'}</small>
-              </div>
-            {/if}
-
-            <div class="button-group">
-              <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
-              
-              {#if isEditing} 
-                <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
-              {/if}
-
-              <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
-                {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
-              </button>
-            </div>
-          </form>
-
-          {#if errorMsg}
-            <p class="error-message">{errorMsg}</p>
-          {/if}
-        </section>
-
-        <section class="story-processor">
-          <h2>Process Story (AI)</h2>
-          <textarea 
-            bind:value={storyText} 
-            rows="15" 
-            placeholder="Paste your story text here..."
-            disabled={isProcessingStory}
-          ></textarea>
-          <button on:click={handleProcessStory} disabled={isProcessingStory || !storyText.trim()}>
-            {#if isProcessingStory}Processing...{:else}Process Story & Add Entries{/if}
-          </button>
-          {#if processStoryErrorMsg}
-            <p class="error-message">{processStoryErrorMsg}</p>
-          {/if}
-        </section>
-
-      </div> 
-
-    </main>
-  {:else if mode === 'story'}
-    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
-    <section class="story-processor">
-      <h2>Process Story (AI)</h2>
-      <textarea 
-        bind:value={storyText} 
-        rows="15" 
-        placeholder="Paste your story text here..."
-        disabled={isProcessingStory}
-      ></textarea>
-      <button on:click={handleProcessStory} disabled={isProcessingStory || !storyText.trim()}>
-        {#if isProcessingStory}Processing...{:else}Process Story & Add Entries{/if}
-      </button>
-      {#if processStoryErrorMsg}
-        <p class="error-message">{processStoryErrorMsg}</p>
-      {/if}
-    </section>
-  {:else if mode === 'library'}
-    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
-    <section>
-      <h2>Library (Imported Stories)</h2>
-      <button on:click={refreshLibrary} disabled={isLoading}>
-        {#if isLoading}Loading...{:else}Refresh Library{/if}
-      </button>
-      {#if libraryEntries.length === 0}
-        <p>No imported stories found.</p>
-      {:else}
+    <div class="layout-container">
+      <aside class="sidebar">
+        <h2>Entries</h2>
+        <button on:click={prepareNewEntry} disabled={isLoading}>+ New Entry</button> 
+        {#if isLoading && entries.length === 0}
+          <p>Loading entries...</p>
+        {:else if entries.length === 0}
+          <p>No entries found.</p>
+        {/if}
         <ul>
-          {#each libraryEntries as entry}
-            <li>
-              <strong>{entry.name}</strong> ({entry.type})<br>
-              <small>Created: {entry.createdAt}</small>
-              <div>{entry.content.slice(0, 120)}{entry.content.length > 120 ? '...' : ''}</div>
+          {#each entries as entry (entry.id)}
+            <li class:selected={currentEntry?.id === entry.id}>
+              <div 
+                class="entry-item-button"
+                role="button"
+                tabindex="0"
+                on:click={() => handleEntrySelect(entry)} 
+                on:keydown={createKeyDownHandler(entry)}
+              >
+                {entry.name || '(Unnamed)'} ({entry.type || 'Untyped'})
+              </div>
             </li>
           {/each}
         </ul>
-      {/if}
-    </section>
-  {:else if mode === 'chat'}
-    <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
-    <section class="lore-chat">
-      <h2>Lore Chat</h2>
-      <div class="chat-display" bind:this={chatDisplayElement}>
-        {#each chatMessages as message}
-          <div class="message {message.sender}">
-            <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
-            {#if message.sender === 'ai'}
-              <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
-            {/if}
-          </div>
-        {/each}
-        {#if isChatLoading}
-          <div class="chat-ai"><em>AI is thinking...</em></div>
+      </aside>
+
+      <section class="main-content">
+        {#if isEditing}
+          <h2>Edit Entry: {currentEntry.name}</h2>
+        {:else}
+          <h2>Create New Entry</h2> 
         {/if}
-      </div>
-      <form on:submit|preventDefault={sendChat} class="chat-form">
-        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
-        <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
-      </form>
-      {#if chatError}
-        <p class="error-message">{chatError}</p>
-      {/if}
-    </section>
-  {/if}
-{:else}
-  <div class="initial-prompt">
-    <h1>Welcome to Llore</h1>
-    <p>Create a new database or load an existing one to continue.</p>
-    {#if initialErrorMsg}
-      <p style="color: red">{initialErrorMsg}</p>
+
+        <form on:submit|preventDefault={handleSaveEntry}>
+          <div class="form-group">
+            <label for="entry-name">Name:</label>
+            <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
+          </div>
+          <div class="form-group">
+            <label for="entry-type">Type:</label>
+            <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
+          </div>
+          <div class="form-group">
+            <label for="entry-content">Content:</label>
+            <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
+          </div>
+          
+          {#if currentEntry.id} 
+            <div class="timestamps">
+              <small>Created: {formatDate(currentEntry.createdAt)} | Updated: {formatDate(currentEntry.updatedAt)}</small>
+            </div>
+          {/if}
+
+          <div class="button-group">
+            <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
+            
+            {#if isEditing} 
+              <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
+            {/if}
+
+            <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
+              {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
+            </button>
+          </div>
+        </form>
+
+        {#if errorMsg}
+          <p class="error-message">{errorMsg}</p>
+        {/if}
+      </section>
+
+    </div> 
+
+  </main>
+{:else if mode === 'story'} 
+  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <section class="story-processor">
+    <h2>Import New Story</h2>
+    <p>Paste story text below. It will be saved as a new file in the vault's Library and processed for codex entries.</p>
+    <textarea 
+      bind:value={storyText} 
+      rows="15" 
+      placeholder="Paste your story text here..."
+      disabled={isProcessingStory}
+    ></textarea>
+    <button on:click={handleImportStory} disabled={isProcessingStory || !storyText.trim()}>
+      {#if isProcessingStory}Processing...{:else}Import Story & Add Entries{/if}
+    </button>
+    {#if processStoryErrorMsg}
+      <p class="error-message">{processStoryErrorMsg}</p>
     {/if}
-    <button on:click={handleCreateNew} disabled={isLoading}>
-        {#if isLoading && !databaseIsReady}Creating...{:else}Create New Database{/if}
+  </section>
+{:else if mode === 'library'}
+  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <section>
+    <h2>Library</h2>
+    <button on:click={refreshLibraryFiles} disabled={isLibraryLoading}>
+      {#if isLibraryLoading}Loading...{:else}Refresh Library{/if}
     </button>
-    <button on:click={handleLoadExisting} disabled={isLoading}>
-        {#if isLoading && !databaseIsReady}Loading...{:else}Load Existing Database{/if}
-    </button>
-  </div>
-{/if}
+
+    {#if isLibraryLoading}
+      <p>Loading library files...</p>
+    {:else}
+      <!-- Not loading -->
+      {#if errorMsg}
+        <p class="error-message">{errorMsg}</p>
+      {:else}
+        <!-- Not loading and no error -->
+        {#if libraryFiles.length === 0}
+          <p>No files found in the vault's Library folder.</p>
+        {:else}
+          <!-- Not loading, no error, and files exist -->
+          <ul>
+            {#each libraryFiles as filename (filename)}
+              <li>
+                {filename}
+                <button on:click={() => viewLibraryFileContent(filename)} style="margin-left: 10px; font-size: 0.8em;">View</button>
+              </li>
+            {/each}
+          </ul>
+        {/if} <!-- End check file list -->
+      {/if} <!-- End check error -->
+    {/if} <!-- End check loading -->
+
+  </section>
+{:else if mode === 'chat'}
+  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <section class="lore-chat">
+    <h2>Lore Chat</h2>
+    <div class="chat-display" bind:this={chatDisplayElement}>
+      {#each chatMessages as message}
+        <div class="message {message.sender}">
+          <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
+          {#if message.sender === 'ai'}
+            <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
+          {/if}
+        </div>
+      {/each}
+      {#if isChatLoading}
+        <div class="chat-ai"><em>AI is thinking...</em></div>
+      {/if}
+    </div>
+    <form on:submit|preventDefault={sendChat} class="chat-form">
+      <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
+      <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
+    </form>
+    {#if chatError}
+      <p class="error-message">{chatError}</p>
+    {/if}
+  </section>
+{/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
 
 {#if showImportModal}
   <div class="modal-backdrop">
@@ -614,35 +635,31 @@ async function saveChatToCodex(text: string) { // Added type: string
     margin: 0;
   }
   .sidebar li {
-    padding: 0; /* Remove padding from li itself */
-    cursor: default; /* Li is no longer directly clickable */
+    padding: 0; 
+    cursor: default; 
     border-bottom: 1px solid #eee;
-    /* Remove transition and hover effects from li */
   }
   .sidebar li.selected .entry-item-button {
-    /* Apply selected styles to the inner div now */
     background-color: #e0e0ff; 
     font-weight: bold;
   }
-  /* Style the inner div to be interactive */
   .entry-item-button {
-    display: block; /* Make it take full width of li */
-    padding: 0.5rem; /* Apply padding here */
+    display: block; 
+    padding: 0.5rem; 
     cursor: pointer;
     transition: background-color 0.2s;
-    outline: none; /* Remove default outline, rely on :focus style */
+    outline: none; 
   }
   .entry-item-button:hover {
     background-color: #f0f0f0;
   }
-  /* Add focus style for keyboard navigation to the inner div */
   .entry-item-button:focus {
-    outline: 2px solid blue; /* Or your preferred focus style */
-    outline-offset: -2px; /* Adjust offset as needed */
-    background-color: #e8e8ff; /* Slightly different background on focus */
+    outline: 2px solid blue; 
+    outline-offset: -2px; 
+    background-color: #e8e8ff; 
   }
   .main-content {
-    flex: 1; /* Take remaining space */
+    flex: 1; 
   }
   .story-processor {
     flex: 0 0 300px; 
@@ -681,48 +698,92 @@ async function saveChatToCodex(text: string) { // Added type: string
       color: #666;
       margin-top: 0.5rem;
   }
-.lore-chat {
-  max-width: 600px;
-  margin: 0 auto;
-}
-.chat-window {
-  border: 1px solid #ccc;
-  background: #fafaff;
-  padding: 1rem;
-  min-height: 200px;
-  max-height: 300px;
-  overflow-y: auto;
-  margin-bottom: 1rem;
-}
-.chat-user {
-  text-align: right;
-  margin-bottom: 0.5rem;
-}
-.chat-ai {
-  text-align: left;
-  margin-bottom: 0.5rem;
-}
-.chat-form {
-  display: flex;
-  gap: 0.5rem;
-}
+  .lore-chat {
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  .chat-window {
+    border: 1px solid #ccc;
+    background: #fafaff;
+    padding: 1rem;
+    min-height: 200px;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+  }
+  .chat-user {
+    text-align: right;
+    margin-bottom: 0.5rem;
+  }
+  .chat-ai {
+    text-align: left;
+    margin-bottom: 0.5rem;
+  }
+  .chat-form {
+    display: flex;
+    gap: 0.5rem;
+  }
 
-/* Modal styles */
-.modal-backdrop {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-.modal-content {
-  background: white;
-  border-radius: 8px;
-  padding: 2rem;
-  min-width: 300px;
-  text-align: center;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.2);
-}
+  /* Modal styles */
+  .modal-backdrop {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal-content {
+    background: white;
+    color: #222;
+    border-radius: 8px;
+    padding: 2rem;
+    min-width: 300px;
+    text-align: center;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+  }
+
+  /* Vault Selection Screen */
+  .initial-prompt {
+    max-width: 500px;
+    margin: 5rem auto;
+    padding: 2rem;
+    text-align: center;
+    background: #f9f9f9;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  }
+
+  .initial-prompt h1 {
+    margin-bottom: 1rem;
+  }
+
+  .initial-prompt p {
+    margin-bottom: 1.5rem;
+    color: #555;
+  }
+
+  /* Adjusted styles for clarity */
+  .db-path-display {
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    background-color: #eee;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: #333;
+  }
+
+  /* Make sure library list items are distinct */
+  .library-section ul li {
+    padding: 0.5rem;
+    border-bottom: 1px solid #eee;
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+  }
+
+  .library-section ul li:last-child {
+    border-bottom: none;
+  }
 </style>
