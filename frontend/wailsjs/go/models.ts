@@ -1,5 +1,19 @@
 export namespace main {
 	
+	export class ChatMessage {
+	    sender: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sender = source["sender"];
+	        this.text = source["text"];
+	    }
+	}
 	export class CodexEntry {
 	    id: number;
 	    name: string;

@@ -38,8 +38,16 @@ export function ImportStoryTextAndFile(arg1) {
   return window['go']['main']['App']['ImportStoryTextAndFile'](arg1);
 }
 
+export function ListChatLogs() {
+  return window['go']['main']['App']['ListChatLogs']();
+}
+
 export function ListLibraryFiles() {
   return window['go']['main']['App']['ListLibraryFiles']();
+}
+
+export function LoadChatLog(arg1) {
+  return window['go']['main']['App']['LoadChatLog'](arg1);
 }
 
 export function ProcessStory(arg1) {
@@ -48,6 +56,10 @@ export function ProcessStory(arg1) {
 
 export function ReadLibraryFile(arg1) {
   return window['go']['main']['App']['ReadLibraryFile'](arg1);
+}
+
+export function SaveChatLog(arg1, arg2) {
+  return window['go']['main']['App']['SaveChatLog'](arg1, arg2);
 }
 
 export function SaveOpenRouterApiKey(arg1) {

@@ -303,6 +303,96 @@ func (a *App) ReadLibraryFile(filename string) (string, error) {
 	return string(content), nil
 }
 
+// --- Chat Log Management ---
+
+// ListChatLogs returns a list of .json files in the vault's Chat folder
+func (a *App) ListChatLogs() ([]string, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("no vault is currently loaded")
+	}
+	chatPath := filepath.Join(a.dbPath, "Chat")
+	entries, err := os.ReadDir(chatPath)
+	if err != nil {
+		// If the chat directory doesn't exist, return an empty list instead of an error
+		if os.IsNotExist(err) {
+			log.Printf("Chat directory does not exist, returning empty list: %s", chatPath)
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to read Chat directory '%s': %w", chatPath, err)
+	}
+
+	logs := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			logs = append(logs, entry.Name())
+		}
+	}
+	return logs, nil
+}
+
+// LoadChatLog reads a JSON chat log file from the vault's Chat folder
+func (a *App) LoadChatLog(filename string) ([]ChatMessage, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("no vault is currently loaded")
+	}
+	// Basic validation to prevent path traversal
+	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
+		return nil, fmt.Errorf("invalid chat log filename")
+	}
+
+	chatFilePath := filepath.Join(a.dbPath, "Chat", filename)
+	content, err := os.ReadFile(chatFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chat log file '%s': %w", filename, err)
+	}
+
+	var messages []ChatMessage
+	if err := json.Unmarshal(content, &messages); err != nil {
+		return nil, fmt.Errorf("failed to parse chat log file '%s': %w", filename, err)
+	}
+
+	return messages, nil
+}
+
+// SaveChatLog saves chat messages to a JSON file in the vault's Chat folder
+func (a *App) SaveChatLog(filename string, messages []ChatMessage) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	// Basic validation to prevent path traversal
+	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
+		return fmt.Errorf("invalid chat log filename")
+	}
+	if !strings.HasSuffix(filename, ".json") {
+		filename += ".json" // Ensure .json extension
+	}
+
+	chatPath := filepath.Join(a.dbPath, "Chat")
+	// Ensure Chat directory exists
+	if err := os.MkdirAll(chatPath, 0755); err != nil {
+		return fmt.Errorf("failed to create Chat directory '%s': %w", chatPath, err)
+	}
+
+	chatFilePath := filepath.Join(chatPath, filename)
+	content, err := json.MarshalIndent(messages, "", "  ") // Pretty print JSON
+	if err != nil {
+		return fmt.Errorf("failed to marshal chat messages for '%s': %w", filename, err)
+	}
+
+	if err := os.WriteFile(chatFilePath, content, 0644); err != nil {
+		return fmt.Errorf("failed to write chat log file '%s': %w", filename, err)
+	}
+
+	log.Printf("Saved chat log to: %s", chatFilePath)
+	return nil
+}
+
+// ChatMessage represents a single message in a chat log.
+type ChatMessage struct {
+	Sender string `json:"sender"` // "user" or "ai"
+	Text   string `json:"text"`
+}
+
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{}
@@ -331,14 +421,12 @@ func (a *App) startup(ctx context.Context) {
 	log.Println("App startup complete.")
 }
 
-// shutdown is called when the app terminates.
+ // shutdown is called when the app terminates.
 func (a *App) shutdown(ctx context.Context) {
 	log.Println("Llore application shutting down...")
 }
 
 // --- LLM Interaction ---
-
-
 
 // GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
 func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {

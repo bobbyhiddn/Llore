@@ -1,23 +1,20 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"log"
 )
 
-// SaveOpenRouterApiKey updates config.json with the given API key
+// SaveOpenRouterApiKey updates the API key in the global config and saves it to ~/.llore/config.json
 func (a *App) SaveOpenRouterApiKey(apiKey string) error {
-	config := OpenRouterConfig{APIKey: apiKey}
-	file, err := os.Create("config.json")
-	if err != nil {
-		return fmt.Errorf("failed to open config.json: %w", err)
+	log.Println("Backend API: Attempting to save OpenRouter API key...")
+	openRouterConfig.APIKey = apiKey // Update the global config variable
+	if err := SaveOpenRouterConfig(); err != nil { // Call the central save function
+		log.Printf("Backend API: Error saving OpenRouter config: %v", err)
+		return fmt.Errorf("failed to save OpenRouter configuration: %w", err)
 	}
-	defer file.Close()
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(config); err != nil {
-		return fmt.Errorf("failed to encode config.json: %w", err)
-	}
+	log.Println("Backend API: OpenRouter API key saved successfully via SaveOpenRouterConfig.")
 	return nil
 }
+
+// FetchOpenRouterModels retrieves the list of models from OpenRouter

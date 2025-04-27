@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -22,15 +24,85 @@ type OpenRouterCache struct {
 var openRouterConfig OpenRouterConfig
 var openRouterCache OpenRouterCache
 
-// LoadOpenRouterConfig loads the OpenRouter API key from config.json
-func LoadOpenRouterConfig() error {
-	file, err := os.Open("config.json")
+// getConfigPath returns the absolute path to the config file (~/.llore/config.json)
+func getConfigPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+	configDir := filepath.Join(homeDir, ".llore")
+	return filepath.Join(configDir, "config.json"), nil
+}
+
+// LoadOpenRouterConfig loads the OpenRouter API key from ~/.llore/config.json
+func LoadOpenRouterConfig() error {
+	configPath, err := getConfigPath()
+	if err != nil {
+		log.Printf("Error getting config path: %v", err)
+		return err // Return error if we can't determine path
+	}
+
+	log.Printf("Attempting to load config from: %s", configPath)
+
+	// Ensure the directory exists
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0750); err != nil { // Use 0750 for permissions
+		log.Printf("Error creating config directory '%s': %v", configDir, err)
+		// If we can't create the dir, we likely can't read/write the file either
+		return fmt.Errorf("failed to ensure config directory exists: %w", err)
+	}
+
+	file, err := os.Open(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Config file '%s' does not exist. Using default empty config.", configPath)
+			// File doesn't exist, initialize with default empty config
+			openRouterConfig = OpenRouterConfig{}
+			return nil // Not an error if file doesn't exist yet
+		}
+		log.Printf("Error opening config file '%s': %v", configPath, err)
+		return fmt.Errorf("failed to open config file: %w", err) // Other error opening file
 	}
 	defer file.Close()
+
 	decoder := json.NewDecoder(file)
-	return decoder.Decode(&openRouterConfig)
+	if err := decoder.Decode(&openRouterConfig); err != nil {
+		log.Printf("Error decoding config file '%s': %v", configPath, err)
+		return fmt.Errorf("failed to decode config file: %w", err)
+	}
+	log.Printf("Successfully loaded config from %s", configPath)
+	return nil
+}
+
+// SaveOpenRouterConfig saves the current OpenRouter configuration to ~/.llore/config.json
+func SaveOpenRouterConfig() error {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return err // Return error if we can't determine path
+	}
+
+	log.Printf("Attempting to save config to: %s", configPath)
+
+	// Ensure the directory exists
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		return fmt.Errorf("failed to ensure config directory exists: %w", err)
+	}
+
+	file, err := os.Create(configPath) // Create or truncate the file
+	if err != nil {
+		return fmt.Errorf("failed to create/open config file for writing: %w", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ") // Pretty print
+	if err := encoder.Encode(openRouterConfig); err != nil {
+		return fmt.Errorf("failed to encode config to file: %w", err)
+	}
+
+	log.Printf("Successfully saved config to %s", configPath)
+	return nil
 }
 
 // LoadOpenRouterCache loads the prompt cache from openrouter_cache.json

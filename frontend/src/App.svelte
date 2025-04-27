@@ -16,6 +16,9 @@
     ImportStoryTextAndFile, 
     ReadLibraryFile, 
     ProcessStory, 
+    ListChatLogs, 
+    LoadChatLog, 
+    SaveChatLog 
   } from '@wailsjs/go/main/App';
   import type { main } from '@wailsjs/go/models';
 
@@ -96,11 +99,23 @@
   let processStoryErrorMsg = '';
 
   // Chat State
-  let chatMessages: { sender: 'user' | 'ai', text: string }[] = [];
   let chatInput = '';
   let isChatLoading = false;
   let chatError = '';
   let chatDisplayElement: HTMLDivElement;
+
+  // --- Chat Log Selection State ---
+  let chatMessages: { sender: 'user' | 'ai', text: string }[] = []; // Re-add declaration
+  let showChatSelection = false; // Controls the visibility of the selection UI
+  let availableChatLogs: string[] = []; // List of filenames like "chat_2024-04-27.json"
+  let currentChatLogFilename: string | null = null; // Track the loaded/saved log file
+  let isLoadingChatLogs = false;
+  let chatLogError = '';
+
+  // --- Save New Chat State ---
+  let showSaveChatModal = false;
+  let newChatFilename = '';
+  let saveChatError = '';
 
   // Story import feedback
   let showImportModal = false;
@@ -135,25 +150,36 @@
     let prompt = chatInput;
     chatInput = '';
     try {
-      // On first chat message, load codex entries as context
+      // --- Context Injection Logic (Modified) ---
+      let currentPrompt = prompt; // Use a local var for the potentially modified prompt
       if (!chatContextInjected) {
         let codexEntries = await GetAllEntries();
         let contextString = '';
         if (codexEntries && codexEntries.length > 0) {
-          // Use name/type/content for each entry; keep it concise
           contextString = codexEntries.map(e => `Name: ${e.name}\nType: ${e.type}\nContent: ${e.content}`)
             .join('\n---\n');
-          // Limit context length (optional, e.g., first 10 entries or 4000 chars)
           if (contextString.length > 4000) contextString = contextString.slice(0, 4000) + '\n...';
         }
         if (contextString) {
-          prompt = `Context:\n${contextString}\n\nUser: ${prompt}`;
+          currentPrompt = `Context:\n${contextString}\n\nUser: ${prompt}`;
         }
-        chatContextInjected = true;
+        chatContextInjected = true; // Mark context as injected for this session
       }
-      // Use OpenRouter if model is selected
-      const aiReply = await GenerateOpenRouterContent(prompt, selectedModel);
-      chatMessages = [...chatMessages, { sender: 'ai', text: aiReply }];
+
+      // --- Call LLM ---
+      const aiReply = await GenerateOpenRouterContent(currentPrompt, selectedModel);
+      const newAiMessage = { sender: 'ai' as const, text: aiReply };
+      chatMessages = [...chatMessages, newAiMessage];
+
+      // --- Auto-Save Logic ---
+      if (currentChatLogFilename) {
+        // If a log is loaded, save the updated messages back to the same file
+        await SaveChatLog(currentChatLogFilename, chatMessages);
+      } else {
+        // Optional: Could prompt user to save new chat here, or add a separate save button
+        console.log("New chat message added, but log not saved yet.");
+      }
+
     } catch (err) {
       chatError = `AI error: ${err}`;
     } finally {
@@ -189,8 +215,11 @@
     await fetchCurrentVaultPath(); 
     if (currentVaultPath) {
       vaultIsReady = true;
-      await loadEntries(); 
-      refreshLibraryFiles(); 
+      // Don't load codex/library/chat immediately, wait for user mode selection
+      // await loadEntries(); 
+      // refreshLibraryFiles(); 
+    } else {
+      mode = null; // Show vault selection if no path
     }
     resetForm();
     isEditing = false;
@@ -480,6 +509,134 @@
     }
   }
 
+  // --- Chat Log Selection Logic ---
+  async function initiateChatSelection() {
+    console.log('initiateChatSelection called'); // Log entry
+    if (!vaultIsReady) {
+      chatLogError = 'Cannot start chat: No vault loaded.';
+      console.log('initiateChatSelection aborted: Vault not ready');
+      return;
+    }
+    isLoadingChatLogs = true;
+    showChatSelection = true; // Show the selection UI/modal
+    console.log(`initiateChatSelection set showChatSelection: ${showChatSelection}`); // Log set true
+    chatLogError = '';
+    availableChatLogs = [];
+    try {
+      availableChatLogs = await ListChatLogs() || [];
+      console.log('Chat logs fetched:', availableChatLogs); // Log fetched logs
+    } catch (err) {
+      console.error('Error loading chat logs:', err); // Log error
+      chatLogError = `Error loading chat logs: ${err}`;
+    } finally {
+      isLoadingChatLogs = false;
+      console.log(`initiateChatSelection finished. showChatSelection: ${showChatSelection}`); // Log finish
+    }
+  }
+
+  function startNewChat() {
+    chatMessages = [];
+    currentChatLogFilename = null; // Indicate it's a new, unsaved chat
+    chatContextInjected = false;
+    showChatSelection = false; // Hide selection UI
+    chatError = '';
+  }
+
+  async function loadSelectedChat(filename: string) {
+    if (!filename) return;
+    isChatLoading = true;
+    showChatSelection = false; // Hide selection UI
+    chatError = '';
+    try {
+      const loadedMessages = await LoadChatLog(filename) || [];
+      // Need to ensure the loaded data structure matches { sender: string, text: string }
+      chatMessages = loadedMessages.map(msg => ({ sender: msg.sender as ('user' | 'ai'), text: msg.text }));
+      currentChatLogFilename = filename;
+      chatContextInjected = true; // Assume context was injected when log was saved
+    } catch (err) {
+      chatError = `Error loading chat log '${filename}': ${err}`;
+      chatMessages = [];
+      currentChatLogFilename = null;
+    } finally {
+      isChatLoading = false;
+    }
+  }
+
+  // --- Save New Chat Logic ---
+  function promptToSaveChat() {
+    if (chatMessages.length === 0) {
+      alert("Nothing to save.");
+      return;
+    }
+    // Suggest a default filename based on date
+    const today = new Date();
+    const dateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    newChatFilename = `Chat ${dateStr}.json`; 
+    saveChatError = '';
+    showSaveChatModal = true;
+  }
+
+  async function saveNewChat() {
+    if (!newChatFilename.trim()) {
+      saveChatError = "Filename cannot be empty.";
+      return;
+    }
+    let filenameToSave = newChatFilename.trim();
+    if (!filenameToSave.toLowerCase().endsWith('.json')) {
+        filenameToSave += '.json';
+    }
+
+    saveChatError = '';
+    isChatLoading = true; // Reuse loading indicator
+    try {
+      await SaveChatLog(filenameToSave, chatMessages);
+      currentChatLogFilename = filenameToSave; // Start auto-saving to this file now
+      showSaveChatModal = false; // Close modal on success
+      // Optionally refresh the list of logs if the selection screen is still accessible
+      if (showChatSelection) {
+        await initiateChatSelection(); 
+      }
+    } catch (err) {
+      saveChatError = `Failed to save chat: ${err}`;
+    } finally {
+      isChatLoading = false;
+    }
+  }
+
+  async function setMode(newMode: 'codex' | 'story' | 'library' | 'chat' | null) {
+    console.log(`setMode called with: ${newMode}, current mode: ${mode}`); // Log entry
+    if (newMode !== mode) { // Only run if mode changes
+      console.log(`Mode changing from ${mode} to ${newMode}`); // Log change
+      mode = newMode;
+      errorMsg = ''; // Clear general errors on mode change
+ 
+      // Handle actions specific to the new mode
+      if (newMode === 'codex') {
+        console.log('Handling mode: codex');
+        await loadEntries();
+      } else if (newMode === 'library') {
+        console.log('Handling mode: library');
+        await refreshLibraryFiles();
+      } else if (newMode === 'chat') {
+        console.log('Resetting chat state for selection...'); // Log chat branch
+        chatMessages = [];
+        currentChatLogFilename = null;
+        chatContextInjected = false;
+        chatError = '';
+        await initiateChatSelection(); // This should set showChatSelection = true
+        console.log(`setMode finished for chat. showChatSelection: ${showChatSelection}`); // Log after initiate
+      } else if (newMode === 'story') {
+        console.log('Handling mode: story');
+        storyText = '';
+        processStoryErrorMsg = '';
+      } else if (newMode === null) {
+        console.log('Handling mode: null (Vault selection)');
+      }
+    } else {
+      console.log(`Mode ${newMode} is already active.`); // Log no change
+    }
+  }
+
 </script>
 
 {#if !vaultIsReady} <!-- Vault is NOT ready, show initial screen FIRST -->
@@ -500,13 +657,13 @@
   <!-- Mode Choice Screen -->
   <div class="mode-choice">
     <h2>Choose a mode</h2>
-    <button on:click={() => mode = 'codex'}>Codex</button>
-    <button on:click={() => mode = 'story'}>Story Import</button>
-    <button on:click={() => mode = 'library'}>Library</button>
-    <button on:click={() => mode = 'chat'}>Lore Chat</button>
+    <button on:click={() => setMode('codex')}>Codex</button>
+    <button on:click={() => setMode('story')}>Story Import</button>
+    <button on:click={() => setMode('library')}>Library</button>
+    <button on:click={() => setMode('chat')}>Lore Chat</button>
   </div>
 {:else if mode === 'codex'}
-  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
 
   <main>
     <h1>Llore Codex</h1>
@@ -590,7 +747,7 @@
 
   </main>
 {:else if mode === 'story'} 
-  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section class="story-processor">
     <h2>Import New Story</h2>
     <p>Paste story text below. It will be saved as a new file in the vault's Library and processed for codex entries.</p>
@@ -608,7 +765,7 @@
     {/if}
   </section>
 {:else if mode === 'library'}
-  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section>
     <h2>Library</h2>
     <button on:click={refreshLibraryFiles} disabled={isLibraryLoading}>
@@ -641,50 +798,90 @@
 
   </section>
 {:else if mode === 'chat'}
-  <button class="back-btn" on:click={() => mode = null}>← Back to Mode Choice</button>
-  <section class="lore-chat">
-    <h2>Lore Chat</h2>
-    <div class="chat-settings-row">
-      <label for="model-select">Model:</label>
-      {#if isModelListLoading}
-        <span>Loading models...</span>
-      {:else if modelListError}
-        <span style="color:red">{modelListError}</span>
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
+  {#if showChatSelection}
+    <section class="chat-log-selection">
+      <h2>Select a Chat Log</h2>
+      <button on:click={startNewChat}>Start New Chat</button>
+      {#if isLoadingChatLogs}
+        <p>Loading chat logs...</p>
+      {:else if chatLogError}
+        <p class="error-message">{chatLogError}</p>
       {:else}
-        <select id="model-select" bind:value={selectedModel}>
-          {#each modelList as model}
-            <option value={model.id}>{model.name}</option>
+        <ul>
+          {#each availableChatLogs as filename (filename)}
+            <li>
+              <button on:click={() => loadSelectedChat(filename)}>{filename}</button>
+            </li>
           {/each}
-        </select>
+        </ul>
       {/if}
-      <button on:click={openApiKeyModal} style="margin-left: 1em;">Set API Key</button>
-    </div>
-    <div class="chat-display" bind:this={chatDisplayElement}>
-      {#each chatMessages as message}
-        <div class="message {message.sender}">
-          <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
-          {#if message.sender === 'ai'}
-            <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
-          {/if}
-        </div>
-      {/each}
-      {#if isChatLoading}
-        <div class="chat-ai"><em>AI is thinking...</em></div>
+    </section>
+  {:else}
+    <section class="lore-chat">
+      <h2>Lore Chat</h2>
+      <div class="chat-settings-row">
+        <label for="model-select">Model:</label>
+        {#if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span style="color:red">{modelListError}</span>
+        {:else}
+          <select id="model-select" bind:value={selectedModel}>
+            {#each modelList as model}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <button on:click={openApiKeyModal} style="margin-left: 1em;">Set API Key</button>
+        {#if !currentChatLogFilename && chatMessages.length > 0}
+          <button on:click={promptToSaveChat} style="margin-left: 1em;">Save Chat As...</button>
+        {/if}
+      </div>
+      <div class="chat-display" bind:this={chatDisplayElement}>
+        {#each chatMessages as message}
+          <div class="message {message.sender}">
+            <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
+            {#if message.sender === 'ai'}
+              <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
+            {/if}
+          </div>
+        {/each}
+        {#if isChatLoading}
+          <div class="chat-ai"><em>AI is thinking...</em></div>
+        {/if}
+      </div>
+      <form on:submit|preventDefault={sendChat} class="chat-form">
+        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
+        <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
+      </form>
+      {#if chatError}
+        <p class="error-message">{chatError}</p>
       {/if}
-    </div>
-    <form on:submit|preventDefault={sendChat} class="chat-form">
-      <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
-      <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
-    </form>
-    {#if chatError}
-      <p class="error-message">{chatError}</p>
-    {/if}
-  </section>
+    </section>
+  {/if}
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
+
+{#if showSaveChatModal}
+  <div class="modal-backdrop">
+    <div class="modal save-chat-modal">
+      <h3>Save New Chat Log</h3>
+      <label for="chat-filename">Filename:</label>
+      <input id="chat-filename" type="text" bind:value={newChatFilename} placeholder="e.g., Chat with Claude.json">
+      {#if saveChatError}
+        <p class="error-message">{saveChatError}</p>
+      {/if}
+      <div class="modal-buttons">
+        <button on:click={saveNewChat} disabled={isChatLoading || !newChatFilename.trim()}>Save</button>
+        <button on:click={() => showSaveChatModal = false} disabled={isChatLoading}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if showApiKeyModal}
   <div class="modal-backdrop">
-    <div class="modal-content">
+    <div class="modal api-key-modal">
       <h3>Set OpenRouter API Key</h3>
       <input type="text" bind:value={openrouterApiKey} placeholder="sk-..." style="width: 100%; padding: 0.5em; margin-bottom: 1em;" />
       <button on:click={saveApiKey} style="margin-right: 1em;">Save</button>
@@ -698,7 +895,6 @@
     </div>
   </div>
 {/if}
-
 
 {#if showImportModal}
   <div class="modal-backdrop">

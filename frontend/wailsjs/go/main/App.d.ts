@@ -20,11 +20,17 @@ export function GetCurrentVaultPath():Promise<string>;
 
 export function ImportStoryTextAndFile(arg1:string):Promise<Array<main.CodexEntry>>;
 
+export function ListChatLogs():Promise<Array<string>>;
+
 export function ListLibraryFiles():Promise<Array<string>>;
+
+export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
 
 export function ProcessStory(arg1:string):Promise<Array<main.CodexEntry>>;
 
 export function ReadLibraryFile(arg1:string):Promise<string>;
+
+export function SaveChatLog(arg1:string,arg2:Array<main.ChatMessage>):Promise<void>;
 
 export function SaveOpenRouterApiKey(arg1:string):Promise<void>;
 
