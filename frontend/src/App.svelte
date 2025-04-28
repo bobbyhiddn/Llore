@@ -5,7 +5,6 @@
     CreateEntry, 
     UpdateEntry, 
     DeleteEntry, 
-    GenerateContent, 
     GenerateOpenRouterContent, 
     SaveOpenRouterApiKey, 
     SelectVaultFolder, 
@@ -16,6 +15,7 @@
     ImportStoryTextAndFile, 
     ReadLibraryFile, 
     ProcessStory, 
+    ProcessAndSaveTextAsEntries,
     ListChatLogs, 
     LoadChatLog, 
     SaveChatLog 
@@ -176,10 +176,8 @@
         // If a log is loaded, save the updated messages back to the same file
         await SaveChatLog(currentChatLogFilename, chatMessages);
       } else {
-        // Optional: Could prompt user to save new chat here, or add a separate save button
-        console.log("New chat message added, but log not saved yet.");
+        // TODO: Maybe add a prompt to save the chat if currentChatLogFilename is null?
       }
-
     } catch (err) {
       chatError = `AI error: ${err}`;
     } finally {
@@ -190,24 +188,49 @@
   // Helper: Save AI chat turn to codex
   async function saveChatToCodex(text: string) { 
     try {
-      await CreateEntry('Lore Chat', 'Chat', text);
-      await loadEntries();
-      alert('Chat response saved to codex.');
+      const potentialEntries = await ProcessStory(text);
+      console.log(`ProcessStory returned ${potentialEntries ? potentialEntries.length : 0} potential entries`);
+      
+      if (!potentialEntries || potentialEntries.length === 0) {
+        alert('AI processing did not extract any structured entries from the chat response.');
+        return;
+      }
+      
+      // Process each entry returned by ProcessStory
+      let processedCount = 0;
+      let errorMessages = [];
+      
+      for (const entry of potentialEntries) {
+        try {
+          // Basic validation
+          if (!entry.name || !entry.type) {
+            console.warn("Skipping entry with missing name or type:", entry);
+            continue;
+          }
+          
+          console.log(`Creating entry: ${entry.name} (${entry.type})`);
+          await CreateEntry(entry.name, entry.type, entry.content);
+          processedCount++;
+        } catch (entryError) {
+          console.error(`Error saving entry "${entry.name}":`, entryError);
+          errorMessages.push(`${entry.name}: ${entryError}`);
+        }
+      }
+      
+      // Report results
+      if (processedCount > 0) {
+        alert(`Processed ${processedCount} entries from the chat response.`);
+        await loadEntries(); // Refresh the entries list
+      } else {
+        alert('No entries could be saved to the Codex.');
+      }
+      
+      if (errorMessages.length > 0) {
+        console.error("Errors during codex entry saving:", errorMessages);
+      }
     } catch (err) {
-      alert('Failed to save chat: ' + err);
-    }
-  }
-
-  // Helper to format date strings (basic example)
-  function formatDate(dateString: string | null | undefined): string {
-    if (!dateString) return 'N/A';
-    try {
-      // Attempt to create a Date object and format it simply
-      // Adjust formatting as needed (e.g., locale, options)
-      return new Date(dateString).toLocaleDateString(); 
-    } catch (e) {
-      // Handle potential invalid date strings
-      return dateString; // Return original string if formatting fails
+      console.error("Error processing chat for codex:", err);
+      alert(`Error processing chat: ${err}`);
     }
   }
 
@@ -355,13 +378,24 @@
         errorMsg = 'Please select an entry or provide a name for a new one before generating content.';
         return;
     }
+    if (!selectedModel) {
+        errorMsg = 'Please select an AI model from the settings first.';
+        return;
+    }
     isGenerating = true;
     errorMsg = '';
-    const prompt = `Generate a descriptive paragraph for a codex entry.\nName: ${currentEntry.name}\nType: ${currentEntry.type}\nExisting Content (if any): ${currentEntry.content || 'None'}`;
+
+    // Construct a prompt for OpenRouter
+    // Example: Ask it to expand or elaborate on the existing entry
+    // TODO: Make this prompt more sophisticated or user-configurable
+    let prompt = `Expand on the following codex entry. Provide more details, background, or connections based on its name, type, and existing content.\n\nName: ${currentEntry.name}\nType: ${currentEntry.type}\nContent: ${currentEntry.content || '(empty)'}`;
+
     try {
-      const generated = await GenerateContent(prompt); 
-      currentEntry.content = generated; 
-      currentEntry = { ...currentEntry }; 
+      console.log(`Generating content for entry '${currentEntry.name}' using model ${selectedModel}`);
+      const generated = await GenerateOpenRouterContent(prompt, selectedModel);
+      // Update the content of the current entry
+      currentEntry = { ...currentEntry, content: generated };
+      console.log(`Generated content received: ${generated.substring(0, 100)}...`);
     } catch (err) {
       console.error("Error generating content:", err);
       errorMsg = `Error generating content: ${err}`;

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"database/sql"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,10 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-
-	bedrockruntime "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
 
 // CodexCodexEntry represents an entry in the codex database.
@@ -93,11 +90,9 @@ func (a *App) GetCurrentVaultPath() string {
 
 // App struct holds application state
 type App struct {
-	ctx       context.Context
-	llmClient *bedrockruntime.Client // AWS Bedrock client
-	config    *AppConfig             // Application configuration
-	db        *sql.DB                // Database connection handle
-	dbPath    string                 // Current database path
+	ctx    context.Context
+	db     *sql.DB // Database connection handle
+	dbPath string  // Current database path
 }
 
 // --- Vault Management ---
@@ -403,57 +398,45 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Llore application starting up...")
 
-	// Load configuration
-	cfg, err := LoadConfig() // Assuming LoadConfig is defined elsewhere (e.g., config.go)
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+	// Load OpenRouter config (which now reads from ~/.llore/config.json)
+	if err := LoadOpenRouterConfig(); err != nil {
+		// Log warning but don't necessarily fail startup, user might add key later
+		log.Printf("Warning: Failed to load OpenRouter configuration: %v. API key might be missing.", err)
 	}
-	a.config = cfg
-	log.Println("Configuration loaded successfully.")
-
-	// Initialize AWS Bedrock client
-	a.llmClient, err = initializeBedrockClient(ctx, a.config.AWSRegion)
-	if err != nil {
-		log.Fatalf("Failed to initialize Bedrock client: %v", err)
+	// Load OpenRouter cache (from local dir)
+	if err := LoadOpenRouterCache(); err != nil {
+		log.Printf("Warning: Failed to load OpenRouter cache: %v", err)
 	}
-	log.Println("AWS Bedrock client initialized successfully.")
 
 	log.Println("App startup complete.")
 }
 
- // shutdown is called when the app terminates.
+// shutdown is called when the app terminates.
 func (a *App) shutdown(ctx context.Context) {
 	log.Println("Llore application shutting down...")
 }
 
-// --- LLM Interaction ---
-
-// GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
-func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
-	if err := LoadOpenRouterConfig(); err != nil {
-		return "", fmt.Errorf("failed to load OpenRouter config: %w", err)
-	}
-	if err := LoadOpenRouterCache(); err != nil {
-		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
-	}
-	return GetOpenRouterCompletion(prompt, model)
-}
-
 // ProcessStory sends a prompt to the LLM and processes the structured response.
-func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) { 
-	if a.llmClient == nil {
-		return nil, fmt.Errorf("LLM client is not initialized")
-	}
+func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
+	// Construct a simplified prompt asking for JSON output
+	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
 
-	// Construct the specific prompt for story analysis and JSON output
-	structuredPrompt := fmt.Sprintf(`Analyze the following story text to identify key entities (like Characters, Locations, Items, or significant Lore concepts). For each significant entity found, generate a concise description based solely on the information presented in the text.\n\nFormat your entire response *strictly* as a JSON array of objects. Each object in the array must represent one entity and contain exactly three keys:\n1. "name": The name of the entity (string).\n2. "type": The type of entity (string, e.g., 'Character', 'Location', 'Item', 'Lore').\n3. "content": The concise description generated from the text (string).\n\n**IMPORTANT: Your response must contain *only* the valid JSON array. Do not include any introductory text, concluding remarks, explanations, apologies, markdown formatting (like backticks or 'json' tags), or anything else outside the JSON array itself.**\n\nIf no significant entities are found in the text, return an empty JSON array: []\n\nStory Text:\n"""\n%s\n"""\n\nJSON Array Output:`, storyText)
+	log.Println("Sending prompt to OpenRouter for story processing...")
 
-	// Generate content using the LLM with the structured prompt
-	generatedText, err := a.GenerateContent(structuredPrompt) // Use the constructed prompt
+	// --- Model Selection ---
+	// TODO: Allow user to select model for processing in the future.
+	// For now, use a capable default model.
+	processingModel := "anthropic/claude-3.5-sonnet"
+	log.Printf("Using model: %s for processing", processingModel)
+
+	// Call the OpenRouter client
+	llmResponse, err := a.GenerateOpenRouterContent(simplifiedPrompt, processingModel)
 	if err != nil {
-		return nil, fmt.Errorf("error generating content from LLM: %w", err)
+		log.Printf("Error generating content from OpenRouter: %v", err)
+		return nil, fmt.Errorf("failed to get OpenRouter response: %w", err)
 	}
 
+	log.Println("Received LLM response, attempting to parse JSON...")
 	// Attempt to parse the structured response (expecting a JSON array of objects)
 	var llmEntries []struct {
 		Name    string `json:"name"`
@@ -461,21 +444,20 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 		Content string `json:"content"`
 	}
 
-	err = json.Unmarshal([]byte(generatedText), &llmEntries)
+	err = json.Unmarshal([]byte(llmResponse), &llmEntries)
 	if err != nil {
 		// Handle cases where the response isn't valid JSON or the expected structure
 		log.Printf("Warning: LLM response was not a valid JSON array of entries. Treating as single entry. Error: %v", err)
-		log.Printf("LLM Response Text:\n%s", generatedText)
+		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
 		now := time.Now().UTC()
 		fallbackCodexEntry := CodexEntry{
 			ID:        time.Now().UnixNano(),
 			Name:      "Generated CodexEntry (Unstructured)", // Provide a default name
-			Type:      "Generated",                      // Provide a default type
-			Content:   generatedText,
+			Type:      "Generated",                           // Provide a default type
+			Content:   llmResponse,
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
-			
 		}
 		return []CodexEntry{fallbackCodexEntry}, nil // Return as a slice
 	}
@@ -495,7 +477,6 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 			Content:   llmCodexEntry.Content,
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
-			
 		}
 
 		createdEntries = append(createdEntries, createdCodexEntry)
@@ -504,77 +485,87 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 	return createdEntries, nil
 }
 
-// GenerateContent uses the configured Bedrock client to generate text based on a prompt.
-func (a *App) GenerateContent(prompt string) (string, error) {
-	if a.llmClient == nil {
-		return "", fmt.Errorf("Bedrock client not initialized")
+// GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
+func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
+	if err := LoadOpenRouterConfig(); err != nil { // Ensure config is loaded (or attempt reload)
+		return "", fmt.Errorf("failed to load OpenRouter configuration: %w", err)
 	}
-
-	// Model ID set by user edit
-	modelID := "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
-
-	// Prepare the payload using the Messages API format for Claude 3
-	payload := map[string]interface{}{
-		"anthropic_version": "bedrock-2023-05-31", // Required for Claude 3 models
-		"max_tokens":        1024,                   // Use max_tokens instead of max_tokens_to_sample
-		"temperature":       0.7,
-		"top_p":             1,
-		"messages": []map[string]string{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
+	if err := LoadOpenRouterCache(); err != nil {
+		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
 	}
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	// Invoke the model
-	output, err := a.llmClient.InvokeModel(a.ctx, &bedrockruntime.InvokeModelInput{
-		Body:        payloadBytes,
-		ModelId:     &modelID,
-		ContentType: Ptr("application/json"),
-		Accept:      Ptr("*/*"), // Changed Accept as per Messages API common practice
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to invoke Bedrock model %s: %w", modelID, err)
-	}
-
-	// Parse the response using the Messages API structure
-	var respBody struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		// Add other fields like Usage if needed
-	}
-	if err := json.Unmarshal(output.Body, &respBody); err != nil {
-		return "", fmt.Errorf("failed to unmarshal Bedrock Messages API response body: %w", err)
-	}
-
-	// Extract the text content
-	if len(respBody.Content) > 0 && respBody.Content[0].Type == "text" {
-		log.Printf("LLM generated content successfully using Messages API.")
-		return strings.TrimSpace(respBody.Content[0].Text), nil
-	}
-
-	log.Printf("Warning: LLM response did not contain expected text content.")
-	return "", fmt.Errorf("LLM response did not contain expected text content structure")
+	return GetOpenRouterCompletion(prompt, model)
 }
 
-// initializeBedrockClient initializes the AWS Bedrock Runtime client.
-func initializeBedrockClient(ctx context.Context, region string) (*bedrockruntime.Client, error) {
-	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS configuration: %w. Ensure credentials are set (env vars, ~/.aws/credentials, etc.)", err)
-	}
-	client := bedrockruntime.NewFromConfig(awsCfg)
-	return client, nil
-}
+// ProcessAndSaveTextAsEntries takes text, processes it via LLM to extract structured
+// codex entries (like ProcessStory), and then saves those entries directly to the DB.
+// It returns the number of entries successfully created.
+func (a *App) ProcessAndSaveTextAsEntries(textToProcess string) (int, error) {
+	log.Printf("Processing text and saving entries...")
 
-// Helper function to get a pointer to a string
-func Ptr(s string) *string {
-	return &s
+	// 1. Process the text using the same logic as ProcessStory
+	// Construct a simplified prompt asking for JSON output
+	simplifiedPrompt := fmt.Sprintf("Analyze the following text and extract key entities (characters, locations, items, concepts) and their descriptions. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Text to analyze:\n\n%s", textToProcess)
+
+	// TODO: Allow user to select model for processing in the future.
+	processingModel := "anthropic/claude-3.5-sonnet"
+	log.Printf("Using model: %s for processing", processingModel)
+
+	// Call the OpenRouter client
+	llmResponse, err := a.GenerateOpenRouterContent(simplifiedPrompt, processingModel)
+	if err != nil {
+		log.Printf("Error generating content from OpenRouter: %v", err)
+		return 0, fmt.Errorf("failed to get OpenRouter response: %w", err)
+	}
+
+	// 2. Parse the LLM response (expecting JSON array)
+	var llmEntries []struct {
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+
+	err = json.Unmarshal([]byte(llmResponse), &llmEntries)
+	if err != nil {
+		// Handle cases where the response isn't valid JSON or the expected structure
+		log.Printf("Warning: LLM response for ProcessAndSaveTextAsEntries was not a valid JSON array. Error: %v", err)
+		log.Printf("LLM Response Text:\n%s", llmResponse)
+		// Decide if we should save the raw text as one entry or just fail?
+		// For now, let's just return an error indicating parsing failure.
+		return 0, fmt.Errorf("LLM response was not the expected JSON array format")
+	}
+
+	// 3. Save the parsed entries to the database
+	createdCount := 0
+	if a.db == nil {
+		log.Println("Error: Database connection is nil in ProcessAndSaveTextAsEntries")
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	for _, entryData := range llmEntries {
+		// Basic validation
+		if entryData.Name == "" || entryData.Type == "" {
+			log.Printf("Skipping entry with missing name or type: %+v", entryData)
+			continue
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, err := a.db.ExecContext(a.ctx,
+			"INSERT INTO entries (name, type, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+			entryData.Name,
+			entryData.Type,
+			entryData.Content,
+			now,
+			now,
+		)
+		if err != nil {
+			log.Printf("Error saving extracted entry '%s' to database: %v", entryData.Name, err)
+			// Continue trying to save other entries
+		} else {
+			log.Printf("Successfully saved extracted entry: %s (%s)", entryData.Name, entryData.Type)
+			createdCount++
+		}
+	}
+
+	log.Printf("Finished processing text. Created %d entries.", createdCount)
+	return createdCount, nil
 }

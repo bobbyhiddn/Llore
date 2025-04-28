@@ -128,7 +128,11 @@ func SaveOpenRouterCache() error {
 	defer file.Close()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(openRouterCache)
+	dataToSave := make(map[string]string)
+	for k, v := range openRouterCache.PromptCache {
+		dataToSave[k] = v
+	}
+	return encoder.Encode(dataToSave)
 }
 
 // GetOpenRouterCompletion returns a completion from OpenRouter API, using cache if available

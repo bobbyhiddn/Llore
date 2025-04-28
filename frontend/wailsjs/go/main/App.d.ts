@@ -10,8 +10,6 @@ export function DeleteEntry(arg1:number):Promise<void>;
 
 export function FetchOpenRouterModels():Promise<Array<main.OpenRouterModel>>;
 
-export function GenerateContent(arg1:string):Promise<string>;
-
 export function GenerateOpenRouterContent(arg1:string,arg2:string):Promise<string>;
 
 export function GetAllEntries():Promise<Array<main.CodexEntry>>;
@@ -25,6 +23,8 @@ export function ListChatLogs():Promise<Array<string>>;
 export function ListLibraryFiles():Promise<Array<string>>;
 
 export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
+
+export function ProcessAndSaveTextAsEntries(arg1:string):Promise<number>;
 
 export function ProcessStory(arg1:string):Promise<Array<main.CodexEntry>>;
 
