@@ -8,13 +8,15 @@ export function CreateNewVault(arg1:string):Promise<string>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
 
-export function FetchOpenRouterModels():Promise<Array<main.OpenRouterModel>>;
+export function FetchOpenRouterModelsWithKey(arg1:string):Promise<Array<main.OpenRouterModel>>;
 
 export function GenerateOpenRouterContent(arg1:string,arg2:string):Promise<string>;
 
 export function GetAllEntries():Promise<Array<main.CodexEntry>>;
 
 export function GetCurrentVaultPath():Promise<string>;
+
+export function GetSettings():Promise<main.OpenRouterConfig>;
 
 export function ImportStoryTextAndFile(arg1:string):Promise<Array<main.CodexEntry>>;
 
@@ -30,9 +32,11 @@ export function ProcessStory(arg1:string):Promise<Array<main.CodexEntry>>;
 
 export function ReadLibraryFile(arg1:string):Promise<string>;
 
+export function SaveAPIKeyOnly(arg1:string):Promise<void>;
+
 export function SaveChatLog(arg1:string,arg2:Array<main.ChatMessage>):Promise<void>;
 
-export function SaveOpenRouterApiKey(arg1:string):Promise<void>;
+export function SaveSettings(arg1:main.OpenRouterConfig):Promise<void>;
 
 export function SelectVaultFolder():Promise<string>;
 

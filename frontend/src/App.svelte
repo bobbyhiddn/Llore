@@ -1,26 +1,28 @@
 <script lang="ts">
   import { onMount, afterUpdate } from 'svelte';
-  import { 
-    GetAllEntries, 
-    CreateEntry, 
-    UpdateEntry, 
-    DeleteEntry, 
-    GenerateOpenRouterContent, 
-    SaveOpenRouterApiKey, 
-    SelectVaultFolder, 
-    CreateNewVault, 
-    SwitchVault, 
-    GetCurrentVaultPath, 
-    ListLibraryFiles, 
-    ImportStoryTextAndFile, 
-    ReadLibraryFile, 
-    ProcessStory, 
+  import {
+    GetAllEntries,
+    CreateEntry,
+    UpdateEntry,
+    DeleteEntry,
+    GenerateOpenRouterContent,
+    SelectVaultFolder,
+    CreateNewVault,
+    SwitchVault,
+    GetCurrentVaultPath,
+    ListLibraryFiles,
+    ImportStoryTextAndFile,
+    ReadLibraryFile,
+    ProcessStory,
     ProcessAndSaveTextAsEntries,
-    ListChatLogs, 
-    LoadChatLog, 
-    SaveChatLog 
+    ListChatLogs,
+    LoadChatLog,
+    SaveChatLog,
+    FetchOpenRouterModelsWithKey,
+    GetSettings,
+    SaveSettings,
+    SaveAPIKeyOnly
   } from '@wailsjs/go/main/App';
-  import type { main } from '@wailsjs/go/models';
 
   // --- OpenRouter API Key UI State ---
   let showApiKeyModal = false;
@@ -29,19 +31,31 @@
   let apiKeyErrorMsg = '';
 
   // --- Model Selector State ---
-  import { FetchOpenRouterModels } from '@wailsjs/go/main/App';
-  let modelList: { id: string, name: string }[] = [];
+  let modelList: OpenRouterModel[] = [];
   let selectedModel: string = '';
   let isModelListLoading = false;
   let modelListError = '';
 
   async function loadModelList() {
+    // Don't try to load if API key isn't set (backend also checks, but good for UX)
+    if (!openrouterApiKey) {
+      console.log("API key not set, skipping model list load.");
+      modelListError = 'Set OpenRouter API Key first to load models.';
+      modelList = [];
+      selectedModel = ''; // Ensure no model is selected if list can't load
+      return; 
+    }
+    console.log("Attempting to load models using key...")
     isModelListLoading = true;
     modelListError = '';
     try {
-      modelList = await FetchOpenRouterModels();
-      selectedModel = modelList.length > 0 ? modelList[0].id : '';
+      // Call the backend function that accepts the key
+      const fetchedModels: OpenRouterModel[] = await FetchOpenRouterModelsWithKey(openrouterApiKey);
+      modelList = fetchedModels || [];
+      selectedModel = modelList.length > 0 ? modelList[0].id : ''; // Default to first model if list loaded
+      console.log(`Fetched ${modelList.length} models.`);
     } catch (err) {
+      console.error("Error fetching models:", err);
       modelListError = 'Failed to load models: ' + err;
       modelList = [];
       selectedModel = '';
@@ -51,16 +65,21 @@
   }
 
   async function saveApiKey() {
-    apiKeySaveMsg = '';
     apiKeyErrorMsg = '';
+    // Reverting to the simpler save flow specifically for the chat modal
+    isLoading = true; // Indicate loading while saving from modal
     try {
-      // Save to config.json via backend Go function
-      await SaveOpenRouterApiKey(openrouterApiKey);
+      console.log("Saving API key via SaveAPIKeyOnly...");
+      await SaveAPIKeyOnly(openrouterApiKey); // Call the simpler backend function
       apiKeySaveMsg = 'API key saved!';
+      console.log("API key saved via SaveAPIKeyOnly.");
       showApiKeyModal = false;
       await loadModelList(); // Refresh model list after saving key
     } catch (err) {
       apiKeyErrorMsg = 'Failed to save API key: ' + err;
+      console.error("API key save error (SaveAPIKeyOnly):", err);
+    } finally {
+      isLoading = false;
     }
   }
 
@@ -71,23 +90,34 @@
     openrouterApiKey = '';
   }
 
-
   // State Variables
-  let entries: main.Entry[] = [];
-  let currentEntry: Partial<main.Entry> | null = null;
+  let entries: Entry[] = [];
+  let currentEntry: Entry | null = null;
   let isLoading = false;
   let isEditing = false;
   let isGenerating = false;
   let errorMsg = '';
-  let initialErrorMsg = ''; // Declare the missing variable
-  let vaultErrorMsg = ''; // Keep this one too, might be used elsewhere
+  let initialErrorMsg = ''; 
+  let vaultErrorMsg = ''; 
+
+  // Settings State
+  let settingsErrorMsg = '';
+  let settingsSaveMsg = '';
+  let chatModelId: string = ''; 
+  let storyProcessingModelId: string = '';
+
+  interface OpenRouterConfig {
+    openrouter_api_key: string;
+    chat_model_id: string;
+    story_processing_model_id: string;
+  }
 
   // Vault State
   let vaultIsReady = false;
   let currentVaultPath: string | null = null;
 
-  // Mode ('codex', 'story', 'library', 'chat', or null for choice screen)
-  let mode: 'codex' | 'story' | 'library' | 'chat' | null = null; 
+  // Mode ('codex', 'story', 'library', 'chat', 'settings', or null for choice screen)
+  let mode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | null = null; 
 
   // Library State (Files)
   let libraryFiles: string[] = []; 
@@ -120,7 +150,7 @@
   // Story import feedback
   let showImportModal = false;
   let createdEntriesCount = 0;
-  let processedEntries: main.Entry[] = []; 
+  let processedEntries: Entry[] = []; 
 
   // Helper: Refresh Library Files 
   async function refreshLibraryFiles() {
@@ -128,13 +158,77 @@
     isLibraryLoading = true;
     errorMsg = ''; 
     try {
-      libraryFiles = await ListLibraryFiles() || []; 
+      libraryFiles = (await ListLibraryFiles()) || []; 
     } catch (err) {
       console.error("Error loading library files:", err);
       errorMsg = `Error loading library: ${err}`;
       libraryFiles = []; 
     } finally {
       isLibraryLoading = false;
+    }
+  }
+
+  async function loadSettings() {
+    console.log("Attempting to load settings...");
+    settingsErrorMsg = '';
+    try {
+      const settings = await GetSettings();
+      console.log("Raw settings from backend:", settings);
+      
+      openrouterApiKey = settings.openrouter_api_key || ''; 
+      chatModelId = settings.chat_model_id || ''; 
+      storyProcessingModelId = settings.story_processing_model_id || '';
+      
+      // Debug logging
+      console.log("Settings after processing:", {
+        apiKeySet: !!openrouterApiKey,
+        chatModelId,
+        storyProcessingModelId,
+        modelListLength: modelList.length
+      });
+
+      // If we have an API key, always try to load models
+      if (openrouterApiKey) {
+        console.log("API key present, loading model list...");
+        await loadModelList();
+      }
+    } catch (err) {
+      settingsErrorMsg = `Error loading settings: ${err}`;
+      console.error("Settings load error:", err);
+    }
+  }
+
+  async function saveSettings() {
+    console.log("Attempting to save settings...");
+    settingsErrorMsg = '';
+    settingsSaveMsg = '';
+    isLoading = true;
+    try {
+      console.log("Current values before save:", {
+        apiKeyLength: openrouterApiKey?.length || 0,
+        chatModelId,
+        storyProcessingModelId
+      });
+
+      const settingsToSave: OpenRouterConfig = {
+        openrouter_api_key: openrouterApiKey,
+        chat_model_id: chatModelId,
+        story_processing_model_id: storyProcessingModelId
+      };
+      console.log("Saving settings:", settingsToSave);
+
+      await SaveSettings(settingsToSave);
+      settingsSaveMsg = 'Settings saved successfully!';
+      console.log("Settings saved successfully");
+
+      // Verify the save by reloading settings
+      console.log("Reloading settings to verify...");
+      await loadSettings();
+    } catch (err) {
+      settingsErrorMsg = `Error saving settings: ${err}`;
+      console.error("Settings save error:", err);
+    } finally {
+      isLoading = false;
     }
   }
 
@@ -153,7 +247,7 @@
       // --- Context Injection Logic (Modified) ---
       let currentPrompt = prompt; // Use a local var for the potentially modified prompt
       if (!chatContextInjected) {
-        let codexEntries = await GetAllEntries();
+        let codexEntries: Entry[] = await GetAllEntries();
         let contextString = '';
         if (codexEntries && codexEntries.length > 0) {
           contextString = codexEntries.map(e => `Name: ${e.name}\nType: ${e.type}\nContent: ${e.content}`)
@@ -167,7 +261,11 @@
       }
 
       // --- Call LLM ---
-      const aiReply = await GenerateOpenRouterContent(currentPrompt, selectedModel);
+      // Determine the model to use: Chat View Selector > Settings > Fallback
+      const modelToUse = selectedModel || chatModelId || 'anthropic/claude-3-haiku-20240307'; 
+      console.log(`Using chat model: ${modelToUse}`);
+
+      const aiReply = await GenerateOpenRouterContent(currentPrompt, modelToUse);
       const newAiMessage = { sender: 'ai' as const, text: aiReply };
       chatMessages = [...chatMessages, newAiMessage];
 
@@ -188,7 +286,7 @@
   // Helper: Save AI chat turn to codex
   async function saveChatToCodex(text: string) { 
     try {
-      const potentialEntries = await ProcessStory(text);
+      const potentialEntries: Entry[] = await ProcessStory(text);
       console.log(`ProcessStory returned ${potentialEntries ? potentialEntries.length : 0} potential entries`);
       
       if (!potentialEntries || potentialEntries.length === 0) {
@@ -248,6 +346,7 @@
     isEditing = false;
     currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
     await loadModelList();
+    await loadSettings();
   });
 
   async function loadEntries() {
@@ -255,7 +354,7 @@
     isLoading = true;
     errorMsg = '';
     try {
-      entries = await GetAllEntries() || []; 
+      entries = (await GetAllEntries()) || []; 
     } catch (err) {
       console.error("Error loading entries:", err);
       errorMsg = `Error loading entries: ${err}`;
@@ -264,7 +363,7 @@
     }
   }
 
-  function handleEntrySelect(entry: main.Entry) {
+  function handleEntrySelect(entry: Entry) {
     if (!entry) return;
     currentEntry = JSON.parse(JSON.stringify(entry)); 
     isEditing = true; 
@@ -292,7 +391,8 @@
       errorMsg = '';
       try {
         console.log("Attempting to update entry:", currentEntry);
-        const updatePayload = { ...currentEntry, id: currentEntry.id!, createdAt: currentEntry.createdAt!, updatedAt: currentEntry.updatedAt! };
+        // Ensure all required fields are present for the Go struct
+        const updatePayload: Entry = { ...currentEntry } as Entry;
         await UpdateEntry(updatePayload); 
         alert('Entry updated successfully!'); 
         const updatedId = currentEntry.id; 
@@ -419,7 +519,7 @@
     processStoryErrorMsg = '';
     processedEntries = []; 
     try {
-      const newEntriesResult = await ImportStoryTextAndFile(storyText);
+      const newEntriesResult: Entry[] = await ImportStoryTextAndFile(storyText);
       
       processedEntries = newEntriesResult || []; 
       createdEntriesCount = processedEntries.length; 
@@ -525,7 +625,7 @@
   window.onerror = handleError;
 
   // Handler for keyboard navigation in entry list
-  function createKeyDownHandler(entry: main.Entry) {
+  function createKeyDownHandler(entry: Entry) {
     return (event: KeyboardEvent) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault(); // Prevent scrolling on Space
@@ -557,7 +657,7 @@
     chatLogError = '';
     availableChatLogs = [];
     try {
-      availableChatLogs = await ListChatLogs() || [];
+      availableChatLogs = (await ListChatLogs()) || [];
       console.log('Chat logs fetched:', availableChatLogs); // Log fetched logs
     } catch (err) {
       console.error('Error loading chat logs:', err); // Log error
@@ -582,7 +682,7 @@
     showChatSelection = false; // Hide selection UI
     chatError = '';
     try {
-      const loadedMessages = await LoadChatLog(filename) || [];
+      const loadedMessages = (await LoadChatLog(filename)) || [];
       // Need to ensure the loaded data structure matches { sender: string, text: string }
       chatMessages = loadedMessages.map(msg => ({ sender: msg.sender as ('user' | 'ai'), text: msg.text }));
       currentChatLogFilename = filename;
@@ -637,7 +737,7 @@
     }
   }
 
-  async function setMode(newMode: 'codex' | 'story' | 'library' | 'chat' | null) {
+  async function setMode(newMode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | null) {
     console.log(`setMode called with: ${newMode}, current mode: ${mode}`); // Log entry
     if (newMode !== mode) { // Only run if mode changes
       console.log(`Mode changing from ${mode} to ${newMode}`); // Log change
@@ -663,11 +763,26 @@
         console.log('Handling mode: story');
         storyText = '';
         processStoryErrorMsg = '';
+      } else if (newMode === 'settings') {
+        console.log('Handling mode: settings');
+        await loadSettings();
       } else if (newMode === null) {
         console.log('Handling mode: null (Vault selection)');
       }
     } else {
       console.log(`Mode ${newMode} is already active.`); // Log no change
+    }
+  }
+
+  // Helper function to format timestamps
+  function formatDate(timestamp: string): string {
+    if (!timestamp) return 'N/A';
+    try {
+      // Assuming timestamp is in RFC3339 or ISO 8601 format
+      return new Date(timestamp).toLocaleString();
+    } catch (e) {
+      console.error("Error formatting date:", e);
+      return timestamp; // Return original if formatting fails
     }
   }
 
@@ -695,6 +810,7 @@
     <button on:click={() => setMode('story')}>Story Import</button>
     <button on:click={() => setMode('library')}>Library</button>
     <button on:click={() => setMode('chat')}>Lore Chat</button>
+    <button on:click={() => setMode('settings')}>Settings</button>
   </div>
 {:else if mode === 'codex'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
@@ -862,7 +978,7 @@
           <span style="color:red">{modelListError}</span>
         {:else}
           <select id="model-select" bind:value={selectedModel}>
-            {#each modelList as model}
+            {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
           </select>
@@ -894,6 +1010,52 @@
       {/if}
     </section>
   {/if}
+{:else if mode === 'settings'}
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
+  <section class="settings">
+    <h2>Settings</h2>
+    <form on:submit|preventDefault={saveSettings}>
+      <div class="form-group">
+        <label for="api-key">OpenRouter API Key:</label>
+        <input id="api-key" type="text" bind:value={openrouterApiKey} placeholder="sk-..." required disabled={isLoading}>
+      </div>
+      <div class="form-group">
+        <label for="chat-model-select">Chat Model:</label>
+        {#if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span style="color:red">{modelListError}</span>
+        {:else}
+          <select id="chat-model-select" bind:value={chatModelId}>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+      </div>
+      <div class="form-group">
+        <label for="story-processing-model-select">Story Processing Model:</label>
+        {#if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span style="color:red">{modelListError}</span>
+        {:else}
+          <select id="story-processing-model-select" bind:value={storyProcessingModelId}>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+      </div>
+      <button type="submit" disabled={isLoading}>Save Settings</button>
+      {#if settingsSaveMsg}
+        <p style="color: green;">{settingsSaveMsg}</p>
+      {/if}
+      {#if settingsErrorMsg}
+        <p class="error-message">{settingsErrorMsg}</p>
+      {/if}
+    </form>
+  </section>
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
 
 {#if showSaveChatModal}

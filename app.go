@@ -273,12 +273,35 @@ func (a *App) ImportStoryTextAndFile(text string) ([]CodexEntry, error) {
 	}
 	created := make([]CodexEntry, 0, len(entries))
 	for _, entry := range entries {
-		_, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
-		if err != nil {
-			log.Printf("Warning: Failed to insert codex entry '%s': %v", entry.Name, err)
-			continue
+		// First try to find if an entry with this name exists
+		var existingId int64
+		err := a.db.QueryRow("SELECT id FROM codex_entries WHERE name = ?", entry.Name).Scan(&existingId)
+		
+		if err == nil {
+			// Entry exists, update it
+			updatedEntry := CodexEntry{
+				ID:        existingId,
+				Name:      entry.Name,
+				Type:      entry.Type,
+				Content:   entry.Content,
+				CreatedAt: entry.CreatedAt,
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			err = a.UpdateEntry(updatedEntry)
+			if err != nil {
+				log.Printf("Warning: Failed to update existing codex entry '%s': %v", entry.Name, err)
+				continue
+			}
+			created = append(created, updatedEntry)
+		} else {
+			// Entry doesn't exist, create new
+			newEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
+			if err != nil {
+				log.Printf("Warning: Failed to insert new codex entry '%s': %v", entry.Name, err)
+				continue
+			}
+			created = append(created, newEntry)
 		}
-		created = append(created, entry)
 	}
 	return created, nil
 }
@@ -419,15 +442,20 @@ func (a *App) shutdown(ctx context.Context) {
 // ProcessStory sends a prompt to the LLM and processes the structured response.
 func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 	// Construct a simplified prompt asking for JSON output
-	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
+	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
 
 	log.Println("Sending prompt to OpenRouter for story processing...")
 
 	// --- Model Selection ---
-	// TODO: Allow user to select model for processing in the future.
-	// For now, use a capable default model.
-	processingModel := "anthropic/claude-3.5-sonnet"
-	log.Printf("Using model: %s for processing", processingModel)
+	// Get the model ID from config, with a fallback
+	configMutex.RLock()
+	processingModel := openRouterConfig.StoryProcessingModelID
+	configMutex.RUnlock()
+	if processingModel == "" {
+		log.Println("Warning: StoryProcessingModelID not set in config, using default 'anthropic/claude-3.5-sonnet'")
+		processingModel = "anthropic/claude-3.5-sonnet" // Fallback model
+	}
+	log.Printf("Using model '%s' for processing story", processingModel)
 
 	// Call the OpenRouter client
 	llmResponse, err := a.GenerateOpenRouterContent(simplifiedPrompt, processingModel)
@@ -437,6 +465,22 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 	}
 
 	log.Println("Received LLM response, attempting to parse JSON...")
+	// Clean up response - remove code block markers if present
+	llmResponse = strings.TrimSpace(llmResponse)
+	if strings.HasPrefix(llmResponse, "```") {
+		// Find the end of the opening code block
+		newlineIndex := strings.Index(llmResponse, "\n")
+		if newlineIndex > 0 {
+			// Remove opening code block line
+			llmResponse = llmResponse[newlineIndex+1:]
+		}
+		// Remove closing code block
+		if strings.HasSuffix(llmResponse, "```") {
+			llmResponse = strings.TrimSuffix(llmResponse, "```")
+		}
+	}
+	llmResponse = strings.TrimSpace(llmResponse)
+
 	// Attempt to parse the structured response (expecting a JSON array of objects)
 	var llmEntries []struct {
 		Name    string `json:"name"`
@@ -447,7 +491,7 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 	err = json.Unmarshal([]byte(llmResponse), &llmEntries)
 	if err != nil {
 		// Handle cases where the response isn't valid JSON or the expected structure
-		log.Printf("Warning: LLM response was not a valid JSON array of entries. Treating as single entry. Error: %v", err)
+		log.Printf("Warning: LLM response was not a valid JSON array of entries. Error: %v", err)
 		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
 		now := time.Now().UTC()
@@ -569,3 +613,78 @@ func (a *App) ProcessAndSaveTextAsEntries(textToProcess string) (int, error) {
 	log.Printf("Finished processing text. Created %d entries.", createdCount)
 	return createdCount, nil
 }
+
+// --- Settings Management ---
+
+// GetSettings returns the current OpenRouter configuration
+func (a *App) GetSettings() OpenRouterConfig {
+	// Load config just in case it hasn't been loaded or might have changed externally
+	// Although typically it's loaded at startup.
+	if err := LoadOpenRouterConfig(); err != nil {
+		log.Printf("Warning: Failed to reload OpenRouter config in GetSettings: %v", err)
+		// Return the potentially stale global config or an empty one if loading failed badly
+	}
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	log.Printf("Returning current settings: API Key Set: %v, Chat Model: %s, Story Model: %s", openRouterConfig.APIKey != "", openRouterConfig.ChatModelID, openRouterConfig.StoryProcessingModelID)
+	return openRouterConfig
+}
+
+// SaveSettings saves the OpenRouter configuration settings
+func (a *App) SaveSettings(config OpenRouterConfig) error {
+	log.Printf("SaveSettings called with received config: %+v", config) // Log received config
+
+	// Update the global variable
+	configMutex.Lock()
+	openRouterConfig = config
+	log.Printf("Global openRouterConfig updated to: %+v", openRouterConfig)
+	configMutex.Unlock() // Log updated global
+
+	// Save the updated global config to the file
+	if err := SaveOpenRouterConfig(); err != nil {
+		log.Printf("Error saving settings: %v", err)
+		return fmt.Errorf("failed to save OpenRouter configuration: %w", err)
+	}
+	log.Println("Settings saved successfully.")
+	return nil
+}
+
+// SaveAPIKeyOnly updates just the API key in the global config and saves it.
+// This is specifically for the simpler save flow from the chat modal's API key input.
+func (a *App) SaveAPIKeyOnly(apiKey string) error {
+	log.Printf("SaveAPIKeyOnly called with key ending: ...%s", getLastNChars(apiKey, 6))
+	if apiKey == "" {
+		log.Println("Warning: Attempting to save an empty API key via SaveAPIKeyOnly.")
+		// Allow saving empty key to clear it if intended
+	}
+	configMutex.Lock()
+	openRouterConfig.APIKey = apiKey // Update only the API key field
+	log.Printf("Global openRouterConfig APIKey field updated. Current full config: %+v", openRouterConfig)
+	configMutex.Unlock()
+
+	if err := SaveOpenRouterConfig(); err != nil {
+		log.Printf("Error saving config after updating API key via SaveAPIKeyOnly: %v", err)
+		return fmt.Errorf("failed to save OpenRouter configuration after API key update: %w", err)
+	}
+	log.Println("Configuration saved successfully via SaveAPIKeyOnly.")
+	return nil
+}
+
+// FetchOpenRouterModelsWithKey fetches available models using a provided API key.
+// This is called directly from the frontend when it knows the key.
+func (a *App) FetchOpenRouterModelsWithKey(apiKey string) ([]OpenRouterModel, error) {
+	log.Println("FetchOpenRouterModelsWithKey called")
+	return FetchOpenRouterModels(apiKey)
+}
+
+// --- Utility Functions ---
+
+// getLastNChars returns the last N characters of a string, or the whole string if shorter.
+func getLastNChars(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+// FetchOpenRouterModelsWithKey fetches models using a provided API key.

@@ -14,8 +14,8 @@ export function DeleteEntry(arg1) {
   return window['go']['main']['App']['DeleteEntry'](arg1);
 }
 
-export function FetchOpenRouterModels() {
-  return window['go']['main']['App']['FetchOpenRouterModels']();
+export function FetchOpenRouterModelsWithKey(arg1) {
+  return window['go']['main']['App']['FetchOpenRouterModelsWithKey'](arg1);
 }
 
 export function GenerateOpenRouterContent(arg1, arg2) {
@@ -28,6 +28,10 @@ export function GetAllEntries() {
 
 export function GetCurrentVaultPath() {
   return window['go']['main']['App']['GetCurrentVaultPath']();
+}
+
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
 }
 
 export function ImportStoryTextAndFile(arg1) {
@@ -58,12 +62,16 @@ export function ReadLibraryFile(arg1) {
   return window['go']['main']['App']['ReadLibraryFile'](arg1);
 }
 
+export function SaveAPIKeyOnly(arg1) {
+  return window['go']['main']['App']['SaveAPIKeyOnly'](arg1);
+}
+
 export function SaveChatLog(arg1, arg2) {
   return window['go']['main']['App']['SaveChatLog'](arg1, arg2);
 }
 
-export function SaveOpenRouterApiKey(arg1) {
-  return window['go']['main']['App']['SaveOpenRouterApiKey'](arg1);
+export function SaveSettings(arg1) {
+  return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
 export function SelectVaultFolder() {

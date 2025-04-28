@@ -36,6 +36,22 @@ export namespace main {
 	        this.updatedAt = source["updatedAt"];
 	    }
 	}
+	export class OpenRouterConfig {
+	    openrouter_api_key: string;
+	    chat_model_id?: string;
+	    story_processing_model_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenRouterConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.openrouter_api_key = source["openrouter_api_key"];
+	        this.chat_model_id = source["chat_model_id"];
+	        this.story_processing_model_id = source["story_processing_model_id"];
+	    }
+	}
 	export class OpenRouterModel {
 	    id: string;
 	    name: string;

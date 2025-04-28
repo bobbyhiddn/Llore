@@ -14,15 +14,21 @@ import (
 
 type OpenRouterConfig struct {
 	APIKey string `json:"openrouter_api_key"`
+	ChatModelID string `json:"chat_model_id,omitempty"`
+	StoryProcessingModelID string `json:"story_processing_model_id,omitempty"`
 }
 
 type OpenRouterCache struct {
-	PromptCache map[string]string `json:"prompt_cache"`
+	PromptCache  map[string]string                `json:"prompt_cache"`
+	ChatHistory map[string][]map[string]string   `json:"chat_history"`
 	mutex       sync.Mutex        `json:"-"`
 }
 
-var openRouterConfig OpenRouterConfig
-var openRouterCache OpenRouterCache
+var (
+	openRouterConfig OpenRouterConfig
+	openRouterCache OpenRouterCache
+	configMutex sync.RWMutex
+)
 
 // getConfigPath returns the absolute path to the config file (~/.llore/config.json)
 func getConfigPath() (string, error) {
@@ -66,11 +72,14 @@ func LoadOpenRouterConfig() error {
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
+	configMutex.Lock()
 	if err := decoder.Decode(&openRouterConfig); err != nil {
+		configMutex.Unlock()
 		log.Printf("Error decoding config file '%s': %v", configPath, err)
 		return fmt.Errorf("failed to decode config file: %w", err)
 	}
 	log.Printf("Successfully loaded config from %s", configPath)
+	configMutex.Unlock()
 	return nil
 }
 
@@ -78,30 +87,24 @@ func LoadOpenRouterConfig() error {
 func SaveOpenRouterConfig() error {
 	configPath, err := getConfigPath()
 	if err != nil {
-		return err // Return error if we can't determine path
+		return fmt.Errorf("could not get config path: %w", err)
 	}
 
-	log.Printf("Attempting to save config to: %s", configPath)
+	log.Printf("Attempting to save config to path: %s", configPath)
 
-	// Ensure the directory exists
-	configDir := filepath.Dir(configPath)
-	if err := os.MkdirAll(configDir, 0750); err != nil {
-		return fmt.Errorf("failed to ensure config directory exists: %w", err)
-	}
-
-	file, err := os.Create(configPath) // Create or truncate the file
+	configMutex.RLock()
+	data, err := json.MarshalIndent(openRouterConfig, "", "  ")
+	configMutex.RUnlock()
 	if err != nil {
-		return fmt.Errorf("failed to create/open config file for writing: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ") // Pretty print
-	if err := encoder.Encode(openRouterConfig); err != nil {
-		return fmt.Errorf("failed to encode config to file: %w", err)
+		return fmt.Errorf("could not marshal config: %w", err)
 	}
 
-	log.Printf("Successfully saved config to %s", configPath)
+	err = os.WriteFile(configPath, data, 0750)
+	if err != nil {
+		log.Printf("Error writing config file '%s': %v", configPath, err)
+		return fmt.Errorf("could not write config file %s: %w", configPath, err)
+	}
+	log.Printf("Successfully wrote config file: %s", configPath)
 	return nil
 }
 
@@ -110,6 +113,7 @@ func LoadOpenRouterCache() error {
 	file, err := os.Open("openrouter_cache.json")
 	if err != nil {
 		openRouterCache.PromptCache = make(map[string]string)
+		openRouterCache.ChatHistory = make(map[string][]map[string]string)
 		return nil
 	}
 	defer file.Close()
@@ -128,9 +132,12 @@ func SaveOpenRouterCache() error {
 	defer file.Close()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	dataToSave := make(map[string]string)
-	for k, v := range openRouterCache.PromptCache {
-		dataToSave[k] = v
+	dataToSave := struct {
+		PromptCache  map[string]string                `json:"prompt_cache"`
+		ChatHistory map[string][]map[string]string   `json:"chat_history"`
+	}{
+		PromptCache:  openRouterCache.PromptCache,
+		ChatHistory: openRouterCache.ChatHistory,
 	}
 	return encoder.Encode(dataToSave)
 }
@@ -140,31 +147,63 @@ func GetOpenRouterCompletion(prompt, model string) (string, error) {
 	if openRouterCache.PromptCache == nil {
 		openRouterCache.PromptCache = make(map[string]string)
 	}
+	if openRouterCache.ChatHistory == nil {
+		openRouterCache.ChatHistory = make(map[string][]map[string]string)
+	}
 	cacheKey := model + "::" + prompt
 	if cached, ok := openRouterCache.PromptCache[cacheKey]; ok {
 		return cached, nil
 	}
-	if openRouterConfig.APIKey == "" {
-		return "", fmt.Errorf("OpenRouter API key not loaded")
+	configMutex.RLock()
+	apiKey := openRouterConfig.APIKey
+	configMutex.RUnlock()
+	if apiKey == "" {
+		return "", fmt.Errorf("OpenRouter API key not set")
 	}
 
-	// Prepare request
+	// Get chat history from cache
+	chatHistory := make([]map[string]string, 0)
+	if chatHistoryKey := fmt.Sprintf("chat_history_%s", model); openRouterCache.ChatHistory != nil {
+		if history, ok := openRouterCache.ChatHistory[chatHistoryKey]; ok {
+			chatHistory = history
+		}
+	} else {
+		openRouterCache.ChatHistory = make(map[string][]map[string]string)
+	}
+
+	// Add current message
+	chatHistory = append(chatHistory, map[string]string{
+		"role":    "user",
+		"content": prompt,
+	})
+
+	// Keep only last 10 messages
+	if len(chatHistory) > 10 {
+		chatHistory = chatHistory[len(chatHistory)-10:]
+	}
+
+	// Save updated history
+	openRouterCache.ChatHistory[fmt.Sprintf("chat_history_%s", model)] = chatHistory
+	_ = SaveOpenRouterCache()
+
+	// Create request body with chat history
 	reqBody := map[string]interface{}{
-		"model":   model,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+		"model":    model,
+		"messages": chatHistory,
 	}
-	jsonBody, err := json.Marshal(reqBody)
+	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+openRouterConfig.APIKey)
+	configMutex.RLock()
+	authKey := openRouterConfig.APIKey
+	configMutex.RUnlock()
+	req.Header.Set("Authorization", "Bearer "+authKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -190,6 +229,22 @@ func GetOpenRouterCompletion(prompt, model string) (string, error) {
 		return "", fmt.Errorf("No choices returned from OpenRouter")
 	}
 	output := result.Choices[0].Message.Content
+
+	// Add assistant's response to chat history
+	if chatHistoryKey := fmt.Sprintf("chat_history_%s", model); openRouterCache.ChatHistory != nil {
+		if history, ok := openRouterCache.ChatHistory[chatHistoryKey]; ok {
+			history = append(history, map[string]string{
+				"role":    "assistant",
+				"content": output,
+			})
+			// Keep only last 10 messages
+			if len(history) > 10 {
+				history = history[len(history)-10:]
+			}
+			openRouterCache.ChatHistory[chatHistoryKey] = history
+		}
+	}
+
 	// Save to cache
 	openRouterCache.PromptCache[cacheKey] = output
 	_ = SaveOpenRouterCache()

@@ -16,20 +16,17 @@ type OpenRouterModelsResponse struct {
 	Data []OpenRouterModel `json:"data"`
 }
 
-// FetchOpenRouterModels fetches available models from OpenRouter API
-func (a *App) FetchOpenRouterModels() ([]OpenRouterModel, error) {
-	if err := LoadOpenRouterConfig(); err != nil {
-		return nil, fmt.Errorf("failed to load OpenRouter config: %w", err)
-	}
-	if openRouterConfig.APIKey == "" {
-		return nil, fmt.Errorf("OpenRouter API key not loaded")
+// FetchOpenRouterModels fetches available models from OpenRouter API using the provided key.
+func FetchOpenRouterModels(apiKey string) ([]OpenRouterModel, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("API key not provided to FetchOpenRouterModels")
 	}
 
 	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+openRouterConfig.APIKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
