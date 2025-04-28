@@ -70,6 +70,10 @@ export function SaveChatLog(arg1, arg2) {
   return window['go']['main']['App']['SaveChatLog'](arg1, arg2);
 }
 
+export function SaveLibraryFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveLibraryFile'](arg1, arg2);
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }

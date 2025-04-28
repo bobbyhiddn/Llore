@@ -1,6 +1,9 @@
 package main
 
 import (
+	"Llore/internal/database"
+	"Llore/internal/llm"
+	"Llore/internal/vault"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,23 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// CodexCodexEntry represents an entry in the codex database.
-// Timestamps are stored as strings for easier frontend handling.
-type CodexCodexEntry struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
 // GetAllEntries retrieves all codex entries from the SQLite database
-func (a *App) GetAllEntries() ([]CodexEntry, error) {
+func (a *App) GetAllEntries() ([]database.CodexEntry, error) {
 	if a.db == nil {
 		return nil, fmt.Errorf("database is not initialized")
 	}
@@ -35,9 +25,9 @@ func (a *App) GetAllEntries() ([]CodexEntry, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var entries []CodexEntry
+	var entries []database.CodexEntry
 	for rows.Next() {
-		var e CodexEntry
+		var e database.CodexEntry
 		if err := rows.Scan(&e.ID, &e.Name, &e.Type, &e.Content, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -47,29 +37,29 @@ func (a *App) GetAllEntries() ([]CodexEntry, error) {
 }
 
 // CreateEntry creates a new codex entry in the SQLite database
-func (a *App) CreateEntry(name, entryType, content string) (CodexEntry, error) {
+func (a *App) CreateEntry(name, entryType, content string) (database.CodexEntry, error) {
 	if a.db == nil {
-		return CodexEntry{}, fmt.Errorf("database is not initialized")
+		return database.CodexEntry{}, fmt.Errorf("database is not initialized")
 	}
-	id, err := DBInsertEntry(a.db, name, entryType, content)
+	id, err := database.DBInsertEntry(a.db, name, entryType, content)
 	if err != nil {
-		return CodexEntry{}, err
+		return database.CodexEntry{}, err
 	}
 	// Fetch the created entry
 	row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE id = ?", id)
-	var entry CodexEntry
+	var entry database.CodexEntry
 	if err := row.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
-		return CodexEntry{}, err
+		return database.CodexEntry{}, err
 	}
 	return entry, nil
 }
 
 // UpdateEntry updates an existing codex entry in the SQLite database
-func (a *App) UpdateEntry(entry CodexEntry) error {
+func (a *App) UpdateEntry(entry database.CodexEntry) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	return DBUpdateEntry(a.db, entry)
+	return database.DBUpdateEntry(a.db, entry)
 }
 
 // DeleteEntry deletes a codex entry by ID using SQLite
@@ -77,7 +67,7 @@ func (a *App) DeleteEntry(id int64) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	return DBDeleteEntry(a.db, id)
+	return database.DBDeleteEntry(a.db, id)
 }
 
 // GetCurrentVaultPath returns the path of the currently loaded vault
@@ -99,53 +89,12 @@ type App struct {
 
 // SelectVaultFolder opens a dialog for the user to select an existing vault folder
 func (a *App) SelectVaultFolder() (string, error) {
-	selection, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select Lore Vault Folder",
-	})
-	if err != nil {
-		log.Printf("Error opening directory dialog: %v", err)
-		return "", fmt.Errorf("failed to open directory dialog: %w", err)
-	}
-	log.Printf("Vault folder selected: %s", selection)
-	return selection, nil
+	return vault.SelectVaultFolder(a.ctx)
 }
 
 // CreateNewVault creates a new vault folder with the required structure
 func (a *App) CreateNewVault(vaultName string) (string, error) {
-	// First, let the user select where to create the vault
-	selection, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Choose Location for New Lore Vault",
-	})
-	if err != nil {
-		log.Printf("Error opening directory dialog: %v", err)
-		return "", fmt.Errorf("failed to open directory dialog: %w", err)
-	}
-
-	if vaultName == "" {
-		vaultName = "LoreVault"
-	}
-	// Create the vault directory structure
-	vaultPath := filepath.Join(selection, vaultName)
-	subdirs := []string{
-		filepath.Join(vaultPath, "Library"),
-		filepath.Join(vaultPath, "Codex"),
-		filepath.Join(vaultPath, "Chat"),
-	}
-
-	// Create the main vault directory
-	if err := os.MkdirAll(vaultPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to create vault directory: %w", err)
-	}
-
-	// Create subdirectories
-	for _, dir := range subdirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create subdirectory %s: %w", dir, err)
-		}
-	}
-
-	log.Printf("Created new vault at: %s", vaultPath)
-	return vaultPath, nil
+	return vault.CreateNewVault(a.ctx, vaultName)
 }
 
 // SwitchVault switches to a different vault folder
@@ -170,13 +119,13 @@ func (a *App) SwitchVault(path string) error {
 
 	// Close previous DB connection if open
 	if a.db != nil {
-		DBClose(a.db)
+		database.DBClose(a.db)
 		a.db = nil
 	}
 
 	// Initialize SQLite DB for this vault (store under Codex folder)
 	codexDBPath := filepath.Join(path, "Codex", "codex_data.db")
-	dbConn, err := DBInitialize(codexDBPath)
+	dbConn, err := database.DBInitialize(codexDBPath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize codex database: %w", err)
 	}
@@ -231,7 +180,7 @@ func (a *App) refreshLibraryFiles() error {
 }
 
 // ImportStoryTextAndFile saves story text to a file and processes it for codex entries
-func (a *App) ImportStoryTextAndFile(text string) ([]CodexEntry, error) {
+func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error) {
 	if a.db == nil {
 		return nil, fmt.Errorf("no vault is currently loaded")
 	}
@@ -271,15 +220,15 @@ func (a *App) ImportStoryTextAndFile(text string) ([]CodexEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to process story into codex entries: %w", err)
 	}
-	created := make([]CodexEntry, 0, len(entries))
+	created := make([]database.CodexEntry, 0, len(entries))
 	for _, entry := range entries {
 		// First try to find if an entry with this name exists
 		var existingId int64
 		err := a.db.QueryRow("SELECT id FROM codex_entries WHERE name = ?", entry.Name).Scan(&existingId)
-		
+
 		if err == nil {
 			// Entry exists, update it
-			updatedEntry := CodexEntry{
+			updatedEntry := database.CodexEntry{
 				ID:        existingId,
 				Name:      entry.Name,
 				Type:      entry.Type,
@@ -319,6 +268,36 @@ func (a *App) ReadLibraryFile(filename string) (string, error) {
 	}
 
 	return string(content), nil
+}
+
+// SaveLibraryFile writes content to a specified file in the vault's Library folder
+func (a *App) SaveLibraryFile(filename string, content string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+
+	// Basic validation to prevent path traversal
+	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
+		return fmt.Errorf("invalid library filename")
+	}
+
+	filePath := filepath.Join(a.dbPath, "Library", filename)
+
+	// Check if the file exists before writing
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		log.Printf("Warning: Attempting to save to non-existent file: %s", filePath)
+		// Decide if we should allow creating new files this way or return an error
+		// For now, let's allow it, mirroring os.WriteFile behavior
+	}
+
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		log.Printf("Error writing file %s: %v", filePath, err)
+		return fmt.Errorf("failed to write library file %s: %w", filename, err)
+	}
+
+	log.Printf("Successfully saved library file: %s", filePath)
+	return nil
 }
 
 // --- Chat Log Management ---
@@ -422,12 +401,12 @@ func (a *App) startup(ctx context.Context) {
 	log.Println("Llore application starting up...")
 
 	// Load OpenRouter config (which now reads from ~/.llore/config.json)
-	if err := LoadOpenRouterConfig(); err != nil {
+	if err := llm.LoadOpenRouterConfig(); err != nil {
 		// Log warning but don't necessarily fail startup, user might add key later
 		log.Printf("Warning: Failed to load OpenRouter configuration: %v. API key might be missing.", err)
 	}
 	// Load OpenRouter cache (from local dir)
-	if err := LoadOpenRouterCache(); err != nil {
+	if err := llm.LoadOpenRouterCache(); err != nil {
 		log.Printf("Warning: Failed to load OpenRouter cache: %v", err)
 	}
 
@@ -440,7 +419,7 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 // ProcessStory sends a prompt to the LLM and processes the structured response.
-func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
+func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 	// Construct a simplified prompt asking for JSON output
 	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
 
@@ -448,9 +427,7 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 
 	// --- Model Selection ---
 	// Get the model ID from config, with a fallback
-	configMutex.RLock()
-	processingModel := openRouterConfig.StoryProcessingModelID
-	configMutex.RUnlock()
+	processingModel := llm.GetConfig().StoryProcessingModelID
 	if processingModel == "" {
 		log.Println("Warning: StoryProcessingModelID not set in config, using default 'anthropic/claude-3.5-sonnet'")
 		processingModel = "anthropic/claude-3.5-sonnet" // Fallback model
@@ -495,7 +472,7 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
 		now := time.Now().UTC()
-		fallbackCodexEntry := CodexEntry{
+		fallbackEntry := database.CodexEntry{
 			ID:        time.Now().UnixNano(),
 			Name:      "Generated CodexEntry (Unstructured)", // Provide a default name
 			Type:      "Generated",                           // Provide a default type
@@ -503,27 +480,27 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
 		}
-		return []CodexEntry{fallbackCodexEntry}, nil // Return as a slice
+		return []database.CodexEntry{fallbackEntry}, nil // Return as a slice
 	}
 
 	// Process the structured entries
 	now := time.Now().UTC()
-	var createdEntries []CodexEntry
-	for _, llmCodexEntry := range llmEntries {
-		if llmCodexEntry.Name == "" {
+	var createdEntries []database.CodexEntry
+	for _, llmEntry := range llmEntries {
+		if llmEntry.Name == "" {
 			log.Println("Warning: Skipping entry with empty name from LLM response.")
 			continue
 		}
-		createdCodexEntry := CodexEntry{
+		createdEntry := database.CodexEntry{
 			ID:        time.Now().UnixNano(),
-			Name:      llmCodexEntry.Name,
-			Type:      llmCodexEntry.Type,
-			Content:   llmCodexEntry.Content,
+			Name:      llmEntry.Name,
+			Type:      llmEntry.Type,
+			Content:   llmEntry.Content,
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
 		}
 
-		createdEntries = append(createdEntries, createdCodexEntry)
+		createdEntries = append(createdEntries, createdEntry)
 	}
 
 	return createdEntries, nil
@@ -531,13 +508,13 @@ func (a *App) ProcessStory(storyText string) ([]CodexEntry, error) {
 
 // GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
 func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
-	if err := LoadOpenRouterConfig(); err != nil { // Ensure config is loaded (or attempt reload)
+	if err := llm.LoadOpenRouterConfig(); err != nil { // Ensure config is loaded (or attempt reload)
 		return "", fmt.Errorf("failed to load OpenRouter configuration: %w", err)
 	}
-	if err := LoadOpenRouterCache(); err != nil {
+	if err := llm.LoadOpenRouterCache(); err != nil {
 		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
 	}
-	return GetOpenRouterCompletion(prompt, model)
+	return llm.GetOpenRouterCompletion(prompt, model)
 }
 
 // ProcessAndSaveTextAsEntries takes text, processes it via LLM to extract structured
@@ -587,26 +564,49 @@ func (a *App) ProcessAndSaveTextAsEntries(textToProcess string) (int, error) {
 
 	for _, entryData := range llmEntries {
 		// Basic validation
-		if entryData.Name == "" || entryData.Type == "" {
-			log.Printf("Skipping entry with missing name or type: %+v", entryData)
+		if entryData.Name == "" {
+			log.Printf("Skipping entry with missing name: %+v", entryData)
 			continue
 		}
+		if entryData.Type == "" {
+			log.Printf("Warning: Entry '%s' has missing type, defaulting to 'Concept'", entryData.Name)
+			entryData.Type = "Concept" // Default type if missing
+		}
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		_, err := a.db.ExecContext(a.ctx,
-			"INSERT INTO entries (name, type, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-			entryData.Name,
-			entryData.Type,
-			entryData.Content,
-			now,
-			now,
-		)
-		if err != nil {
-			log.Printf("Error saving extracted entry '%s' to database: %v", entryData.Name, err)
-			// Continue trying to save other entries
-		} else {
-			log.Printf("Successfully saved extracted entry: %s (%s)", entryData.Name, entryData.Type)
+		// Check if entry exists
+		var existingId int64
+		err := a.db.QueryRow("SELECT id FROM codex_entries WHERE name = ?", entryData.Name).Scan(&existingId)
+
+		if err == nil {
+			// Entry exists, update it
+			updatedEntry := database.CodexEntry{
+				ID:      existingId,
+				Name:    entryData.Name,
+				Type:    entryData.Type,
+				Content: entryData.Content,
+				// CreatedAt is not updated
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			err = a.UpdateEntry(updatedEntry) // Use the existing UpdateEntry method
+			if err != nil {
+				log.Printf("Warning: Failed to update existing codex entry '%s' in ProcessAndSave: %v", entryData.Name, err)
+				continue // Skip this entry on update failure
+			}
+			log.Printf("Successfully updated extracted entry: %s (%s)", entryData.Name, entryData.Type)
+			createdCount++ // Count updates as well for success metric
+		} else if err == sql.ErrNoRows {
+			// Entry doesn't exist, create new
+			newEntry, err := a.CreateEntry(entryData.Name, entryData.Type, entryData.Content) // Use the existing CreateEntry method
+			if err != nil {
+				log.Printf("Warning: Failed to insert new codex entry '%s' in ProcessAndSave: %v", entryData.Name, err)
+				continue // Skip this entry on insert failure
+			}
+			log.Printf("Successfully saved extracted entry: %s (%s)", newEntry.Name, newEntry.Type)
 			createdCount++
+		} else {
+			// Other database error during check
+			log.Printf("Error checking for existing entry '%s' in ProcessAndSave: %v", entryData.Name, err)
+			continue // Skip this entry on check failure
 		}
 	}
 
@@ -617,31 +617,30 @@ func (a *App) ProcessAndSaveTextAsEntries(textToProcess string) (int, error) {
 // --- Settings Management ---
 
 // GetSettings returns the current OpenRouter configuration
-func (a *App) GetSettings() OpenRouterConfig {
+func (a *App) GetSettings() llm.OpenRouterConfig {
 	// Load config just in case it hasn't been loaded or might have changed externally
 	// Although typically it's loaded at startup.
-	if err := LoadOpenRouterConfig(); err != nil {
+	if err := llm.LoadOpenRouterConfig(); err != nil {
 		log.Printf("Warning: Failed to reload OpenRouter config in GetSettings: %v", err)
 		// Return the potentially stale global config or an empty one if loading failed badly
 	}
-	configMutex.RLock()
-	defer configMutex.RUnlock()
-	log.Printf("Returning current settings: API Key Set: %v, Chat Model: %s, Story Model: %s", openRouterConfig.APIKey != "", openRouterConfig.ChatModelID, openRouterConfig.StoryProcessingModelID)
-	return openRouterConfig
+	//  is now in llm package, so we don't need to lock here
+	config := llm.GetConfig()
+	log.Printf("Returning current settings: API Key Set: %v, Chat Model: %s, Story Model: %s", config.APIKey != "", config.ChatModelID, config.StoryProcessingModelID)
+	return config
 }
 
 // SaveSettings saves the OpenRouter configuration settings
-func (a *App) SaveSettings(config OpenRouterConfig) error {
+func (a *App) SaveSettings(config llm.OpenRouterConfig) error {
 	log.Printf("SaveSettings called with received config: %+v", config) // Log received config
 
 	// Update the global variable
-	configMutex.Lock()
-	openRouterConfig = config
-	log.Printf("Global openRouterConfig updated to: %+v", openRouterConfig)
-	configMutex.Unlock() // Log updated global
+	llm.SetConfig(config)
+	log.Printf("Global openRouterConfig updated to: %+v", config)
+	//  is now in llm package, so we don't need to unlock here
 
 	// Save the updated global config to the file
-	if err := SaveOpenRouterConfig(); err != nil {
+	if err := llm.SaveOpenRouterConfig(); err != nil {
 		log.Printf("Error saving settings: %v", err)
 		return fmt.Errorf("failed to save OpenRouter configuration: %w", err)
 	}
@@ -657,12 +656,12 @@ func (a *App) SaveAPIKeyOnly(apiKey string) error {
 		log.Println("Warning: Attempting to save an empty API key via SaveAPIKeyOnly.")
 		// Allow saving empty key to clear it if intended
 	}
-	configMutex.Lock()
-	openRouterConfig.APIKey = apiKey // Update only the API key field
-	log.Printf("Global openRouterConfig APIKey field updated. Current full config: %+v", openRouterConfig)
-	configMutex.Unlock()
+	cfg := llm.GetConfig()
+	cfg.APIKey = apiKey // Update only the API key field
+	llm.SetConfig(cfg)
+	log.Printf("Global openRouterConfig APIKey field updated. Current full config: %+v", cfg)
 
-	if err := SaveOpenRouterConfig(); err != nil {
+	if err := llm.SaveOpenRouterConfig(); err != nil {
 		log.Printf("Error saving config after updating API key via SaveAPIKeyOnly: %v", err)
 		return fmt.Errorf("failed to save OpenRouter configuration after API key update: %w", err)
 	}
@@ -670,11 +669,11 @@ func (a *App) SaveAPIKeyOnly(apiKey string) error {
 	return nil
 }
 
-// FetchOpenRouterModelsWithKey fetches available models using a provided API key.
+// Fetchllm.OpenRouterModelsWithKey fetches available models using a provided API key.
 // This is called directly from the frontend when it knows the key.
-func (a *App) FetchOpenRouterModelsWithKey(apiKey string) ([]OpenRouterModel, error) {
+func (a *App) FetchOpenRouterModelsWithKey(apiKey string) ([]llm.OpenRouterModel, error) {
 	log.Println("FetchOpenRouterModelsWithKey called")
-	return FetchOpenRouterModels(apiKey)
+	return llm.FetchOpenRouterModels(apiKey)
 }
 
 // --- Utility Functions ---
@@ -687,4 +686,4 @@ func getLastNChars(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// FetchOpenRouterModelsWithKey fetches models using a provided API key.
+// Fetchllm.OpenRouterModelsWithKey fetches models using a provided API key.

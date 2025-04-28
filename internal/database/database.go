@@ -1,4 +1,5 @@
-package main
+// Package database provides functions for managing codex entries in SQLite.
+package database
 
 import (
 	"database/sql"

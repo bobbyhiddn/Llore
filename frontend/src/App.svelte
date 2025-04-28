@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, afterUpdate } from 'svelte';
+  import { database, llm } from '@wailsjs/go/models'; // Import namespaces
+  import LibraryFileViewer from './LibraryFileViewer.svelte';
   import {
     GetAllEntries,
     CreateEntry,
@@ -13,6 +15,7 @@
     ListLibraryFiles,
     ImportStoryTextAndFile,
     ReadLibraryFile,
+    SaveLibraryFile,
     ProcessStory,
     ProcessAndSaveTextAsEntries,
     ListChatLogs,
@@ -31,7 +34,7 @@
   let apiKeyErrorMsg = '';
 
   // --- Model Selector State ---
-  let modelList: OpenRouterModel[] = [];
+  let modelList: llm.OpenRouterModel[] = []; // Use llm.OpenRouterModel
   let selectedModel: string = '';
   let isModelListLoading = false;
   let modelListError = '';
@@ -50,7 +53,7 @@
     modelListError = '';
     try {
       // Call the backend function that accepts the key
-      const fetchedModels: OpenRouterModel[] = await FetchOpenRouterModelsWithKey(openrouterApiKey);
+      const fetchedModels: llm.OpenRouterModel[] = await FetchOpenRouterModelsWithKey(openrouterApiKey); // Use llm.OpenRouterModel
       modelList = fetchedModels || [];
       selectedModel = modelList.length > 0 ? modelList[0].id : ''; // Default to first model if list loaded
       console.log(`Fetched ${modelList.length} models.`);
@@ -91,10 +94,11 @@
   }
 
   // State Variables
-  let entries: Entry[] = [];
-  let currentEntry: Entry | null = null;
+  let entries: database.CodexEntry[] = []; // Use database.CodexEntry
+  // Initialize with default values matching the type, not null
+  let currentEntry: database.CodexEntry = { id: 0, name: '', type: '', content: '', createdAt: '', updatedAt: '' };
   let isLoading = false;
-  let isEditing = false;
+  let isEditing = false; // This will control if we show "Edit" or "Create"
   let isGenerating = false;
   let errorMsg = '';
   let initialErrorMsg = ''; 
@@ -116,13 +120,19 @@
   let vaultIsReady = false;
   let currentVaultPath: string | null = null;
 
+  // Library viewer state
+  let showLibraryViewer = false;
+  let viewingFilename = '';
+  let viewingFileContent = '';
+
   // Mode ('codex', 'story', 'library', 'chat', 'settings', or null for choice screen)
   let mode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | null = null; 
 
   // Library State (Files)
-  let libraryFiles: string[] = []; 
+  let libraryFiles: string[] = [];
   let isLibraryLoading = false;
 
+ 
   // Story Processing State
   let storyText = '';
   let isProcessingStory = false;
@@ -150,15 +160,21 @@
   // Story import feedback
   let showImportModal = false;
   let createdEntriesCount = 0;
-  let processedEntries: Entry[] = []; 
+  let processedEntries: database.CodexEntry[] = []; // Use database.CodexEntry
 
   // Helper: Refresh Library Files 
   async function refreshLibraryFiles() {
-    if (!vaultIsReady) return;
+    console.log('refreshLibraryFiles called, vault status:', { vaultIsReady, currentVaultPath });
+    if (!vaultIsReady) {
+      console.log('No vault ready, returning early');
+      return;
+    }
     isLibraryLoading = true;
     errorMsg = ''; 
     try {
+      console.log('Calling ListLibraryFiles...');
       libraryFiles = (await ListLibraryFiles()) || []; 
+      console.log('Library files loaded:', libraryFiles);
     } catch (err) {
       console.error("Error loading library files:", err);
       errorMsg = `Error loading library: ${err}`;
@@ -247,7 +263,7 @@
       // --- Context Injection Logic (Modified) ---
       let currentPrompt = prompt; // Use a local var for the potentially modified prompt
       if (!chatContextInjected) {
-        let codexEntries: Entry[] = await GetAllEntries();
+        let codexEntries: database.CodexEntry[] = await GetAllEntries(); // Use database.CodexEntry
         let contextString = '';
         if (codexEntries && codexEntries.length > 0) {
           contextString = codexEntries.map(e => `Name: ${e.name}\nType: ${e.type}\nContent: ${e.content}`)
@@ -286,7 +302,7 @@
   // Helper: Save AI chat turn to codex
   async function saveChatToCodex(text: string) { 
     try {
-      const potentialEntries: Entry[] = await ProcessStory(text);
+      const potentialEntries: database.CodexEntry[] = await ProcessStory(text); // Use database.CodexEntry
       console.log(`ProcessStory returned ${potentialEntries ? potentialEntries.length : 0} potential entries`);
       
       if (!potentialEntries || potentialEntries.length === 0) {
@@ -344,7 +360,8 @@
     }
     resetForm();
     isEditing = false;
-    currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
+    // Reset to default values matching the type
+    currentEntry = { id: 0, name: '', type: '', content: '', createdAt: '', updatedAt: '' };
     await loadModelList();
     await loadSettings();
   });
@@ -362,10 +379,10 @@
       isLoading = false;
     }
   }
-
-  function handleEntrySelect(entry: Entry) {
+ 
+  function handleEntrySelect(entry: database.CodexEntry) { // Use database.CodexEntry
     if (!entry) return;
-    currentEntry = JSON.parse(JSON.stringify(entry)); 
+    currentEntry = JSON.parse(JSON.stringify(entry));
     isEditing = true; 
     errorMsg = ''; 
   }
@@ -392,9 +409,9 @@
       try {
         console.log("Attempting to update entry:", currentEntry);
         // Ensure all required fields are present for the Go struct
-        const updatePayload: Entry = { ...currentEntry } as Entry;
-        await UpdateEntry(updatePayload); 
-        alert('Entry updated successfully!'); 
+        const updatePayload: database.CodexEntry = { ...currentEntry } as database.CodexEntry; // Use database.CodexEntry
+        await UpdateEntry(updatePayload);
+        alert('Entry updated successfully!');
         const updatedId = currentEntry.id; 
         await loadEntries(); 
         const updatedEntryInList = entries.find(e => e.id === updatedId);
@@ -466,10 +483,11 @@
       isLoading = false;
     }
   }
-
+ 
   function resetForm() {
-      currentEntry = { id: null, name: '', type: '', content: '', createdAt: null, updatedAt: null };
-      isEditing = false; 
+      // Reset to default values matching the type
+      currentEntry = { id: 0, name: '', type: '', content: '', createdAt: '', updatedAt: '' };
+      isEditing = false;
       errorMsg = '';
   }
 
@@ -517,11 +535,11 @@
 
     isProcessingStory = true;
     processStoryErrorMsg = '';
-    processedEntries = []; 
+    processedEntries = [];
     try {
-      const newEntriesResult: Entry[] = await ImportStoryTextAndFile(storyText);
+      const newEntriesResult: database.CodexEntry[] = await ImportStoryTextAndFile(storyText); // Use database.CodexEntry
       
-      processedEntries = newEntriesResult || []; 
+      processedEntries = newEntriesResult || [];
       createdEntriesCount = processedEntries.length; 
       
       await loadEntries(); 
@@ -536,27 +554,66 @@
     }
   }
 
-  // Function to potentially view library file content
+  // Function to open the library file viewer
   async function viewLibraryFileContent(filename: string) {
-    if (!vaultIsReady) return;
-    alert(`Viewing file (Not Implemented): ${filename}\nNeed ReadLibraryFile Go function.`);
-    // try {
-    //   const content = await ReadLibraryFile(filename);
-    //   // Display content in a modal or dedicated view
-    //   console.log(`Content of ${filename}:\n`, content);
-    //   alert(`Content of ${filename}:\n${content.substring(0, 200)}...`);
-    // } catch (err) {
-    //   errorMsg = `Failed to read library file ${filename}: ${err}`;
-    // }
+    console.log(`Viewing library file: ${filename}`);
+    if (!vaultIsReady) {
+      errorMsg = 'No vault is currently loaded';
+      return;
+    }
+
+    isLoading = true;
+    errorMsg = '';
+    try {
+      console.log("Calling ReadLibraryFile...");
+      const content = await ReadLibraryFile(filename);
+      console.log("ReadLibraryFile successful, content length:", content?.length);
+      viewingFilename = filename;
+      viewingFileContent = content;
+      showLibraryViewer = true;
+      console.log("Set showLibraryViewer to true");
+    } catch (err) {
+      console.error(`Error reading library file ${filename}:`, err);
+      errorMsg = `Error reading file: ${err}`;
+      alert(errorMsg);
+    } finally {
+      isLoading = false;
+      console.log(`viewLibraryFileContent finished. showLibraryViewer: ${showLibraryViewer}`);
+    }
+  }
+
+  // Function to save library file content
+  async function handleSaveLibraryFile(filename: string, content: string) {
+    console.log(`Saving library file: ${filename}`);
+    if (!vaultIsReady) {
+      errorMsg = 'No vault is currently loaded';
+      return;
+    }
+    isLoading = true;
+    errorMsg = '';
+    try {
+      await SaveLibraryFile(filename, content);
+      console.log(`Successfully saved ${filename}`);
+      showLibraryViewer = false; // Close viewer on success
+    } catch (err) {
+      console.error('Error saving library file:', err);
+      errorMsg = `Failed to save file ${filename}: ${err}`;
+      alert(errorMsg);
+    } finally {
+      isLoading = false;
+    }
   }
 
   // Renamed from fetchCurrentDBPath
   async function fetchCurrentVaultPath() {
+    console.log('fetchCurrentVaultPath called');
     try {
       currentVaultPath = await GetCurrentVaultPath();
-      vaultIsReady = !!currentVaultPath; 
+      console.log('Current vault path:', currentVaultPath);
+      vaultIsReady = !!currentVaultPath;
+      console.log('Vault ready status:', vaultIsReady);
     } catch (err) {
-      console.warn("Could not get current vault path:", err); 
+      console.warn("Could not get current vault path:", err);
       currentVaultPath = null;
       vaultIsReady = false;
     }
@@ -574,7 +631,7 @@
       if (newVaultPath) {
         await SwitchVault(newVaultPath);
         vaultIsReady = true;
-        await updateCurrentVaultPath();
+        await fetchCurrentVaultPath();
         await loadEntries();
         refreshLibraryFiles();
         vaultErrorMsg = '';
@@ -594,7 +651,7 @@
       if (selectedPath) {
         await SwitchVault(selectedPath); 
         vaultIsReady = true;
-        await updateCurrentVaultPath();
+        await fetchCurrentVaultPath();
         await loadEntries();
         refreshLibraryFiles();
         vaultErrorMsg = '';
@@ -607,14 +664,6 @@
     }
   }
 
-  // Renamed from updateCurrentDBPath
-  async function updateCurrentVaultPath() {
-    try {
-      currentVaultPath = await GetCurrentVaultPath();
-    } catch (err) {
-      currentVaultPath = "Error loading path";
-    }
-  }
 
   // Global error handler
   function handleError(message: string | Event, source?: string, lineno?: number, colno?: number, error?: Error) {
@@ -625,7 +674,7 @@
   window.onerror = handleError;
 
   // Handler for keyboard navigation in entry list
-  function createKeyDownHandler(entry: Entry) {
+  function createKeyDownHandler(entry: database.CodexEntry) { // Use database.CodexEntry
     return (event: KeyboardEvent) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault(); // Prevent scrolling on Space
@@ -750,6 +799,7 @@
         await loadEntries();
       } else if (newMode === 'library') {
         console.log('Handling mode: library');
+        console.log('Vault status:', { vaultIsReady, currentVaultPath });
         await refreshLibraryFiles();
       } else if (newMode === 'chat') {
         console.log('Resetting chat state for selection...'); // Log chat branch
@@ -785,9 +835,14 @@
       return timestamp; // Return original if formatting fails
     }
   }
-
+ 
+  // Simple function for debugging button click
+  function logButtonClick(filename: string) {
+    console.log('logButtonClick called for:', filename);
+  }
+ 
 </script>
-
+ 
 {#if !vaultIsReady} <!-- Vault is NOT ready, show initial screen FIRST -->
   <div class="initial-prompt">
     <h1>Welcome to Llore</h1>
@@ -849,10 +904,51 @@
       </aside>
 
       <section class="main-content">
-        {#if isEditing}
-          <h2>Edit Entry: {currentEntry.name}</h2>
+        {#if currentEntry} <!-- Add null check -->
+          {#if isEditing && currentEntry.id !== 0} <!-- Check ID for editing existing -->
+            <h2>Edit Entry: {currentEntry.name}</h2>
+          {:else}
+            <h2>Create New Entry</h2>
+          {/if}
+ 
+          <form on:submit|preventDefault={handleSaveEntry}>
+            <div class="form-group">
+              <label for="entry-name">Name:</label>
+              <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
+            </div>
+            <div class="form-group">
+              <label for="entry-type">Type:</label>
+              <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
+            </div>
+            <div class="form-group">
+              <label for="entry-content">Content:</label>
+              <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
+            </div>
+            
+            {#if currentEntry.id !== 0} <!-- Check ID instead of just existence -->
+              <div class="timestamps">
+                <small>Created: {formatDate(currentEntry.createdAt)} | Updated: {formatDate(currentEntry.updatedAt)}</small>
+              </div>
+            {/if}
+ 
+            <div class="button-group">
+              <button type="submit" disabled={isLoading}>{isEditing && currentEntry.id !== 0 ? 'Update Entry' : 'Create Entry'}</button>
+              
+              {#if isEditing && currentEntry.id !== 0} <!-- Check ID for delete button -->
+                <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
+              {/if}
+ 
+              <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
+                {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
+              </button>
+            </div>
+          </form>
+ 
+          {#if errorMsg}
+            <p class="error-message">{errorMsg}</p>
+          {/if}
         {:else}
-          <h2>Create New Entry</h2> 
+           <p>Select an entry from the list or click "+ New Entry".</p> <!-- Placeholder if currentEntry is null -->
         {/if}
 
         <form on:submit|preventDefault={handleSaveEntry}>
@@ -918,34 +1014,27 @@
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section>
     <h2>Library</h2>
-    <button on:click={refreshLibraryFiles} disabled={isLibraryLoading}>
-      {#if isLibraryLoading}Loading...{:else}Refresh Library{/if}
+    <button on:click={() => refreshLibraryFiles()} disabled={isLibraryLoading}>
+      Refresh Library
     </button>
-
     {#if isLibraryLoading}
       <p>Loading library files...</p>
+    {:else if errorMsg}
+      <p class="error-message">{errorMsg}</p>
     {:else}
-      <!-- Not loading -->
-      {#if errorMsg}
-        <p class="error-message">{errorMsg}</p>
+      {#if libraryFiles.length === 0}
+        <p>No files in library.</p>
       {:else}
-        <!-- Not loading and no error -->
-        {#if libraryFiles.length === 0}
-          <p>No files found in the vault's Library folder.</p>
-        {:else}
-          <!-- Not loading, no error, and files exist -->
-          <ul>
-            {#each libraryFiles as filename (filename)}
-              <li>
-                {filename}
-                <button on:click={() => viewLibraryFileContent(filename)} style="margin-left: 10px; font-size: 0.8em;">View</button>
-              </li>
-            {/each}
-          </ul>
-        {/if} <!-- End check file list -->
-      {/if} <!-- End check error -->
-    {/if} <!-- End check loading -->
-
+        <ul>
+          {#each libraryFiles as filename}
+            <li>
+              {filename}
+              <button on:click={() => viewLibraryFileContent(filename)}>View/Edit</button>
+            </li>
+          {/each}
+        </ul>
+      {/if} <!-- End check file list -->
+    {/if} <!-- End check error -->
   </section>
 {:else if mode === 'chat'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
@@ -1057,6 +1146,15 @@
     </form>
   </section>
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
+
+{#if showLibraryViewer}
+  <LibraryFileViewer 
+    filename={viewingFilename} 
+    initialContent={viewingFileContent} 
+    on:close={() => showLibraryViewer = false} 
+    on:save={(event) => handleSaveLibraryFile(event.detail.filename, event.detail.content)}
+  />
+{/if}
 
 {#if showSaveChatModal}
   <div class="modal-backdrop">

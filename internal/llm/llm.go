@@ -1,4 +1,5 @@
-package main
+// Package llm provides OpenRouter LLM integration and configuration management.
+package llm
 
 import (
 	"bytes"
@@ -13,21 +14,21 @@ import (
 )
 
 type OpenRouterConfig struct {
-	APIKey string `json:"openrouter_api_key"`
-	ChatModelID string `json:"chat_model_id,omitempty"`
+	APIKey                 string `json:"openrouter_api_key"`
+	ChatModelID            string `json:"chat_model_id,omitempty"`
 	StoryProcessingModelID string `json:"story_processing_model_id,omitempty"`
 }
 
 type OpenRouterCache struct {
-	PromptCache  map[string]string                `json:"prompt_cache"`
-	ChatHistory map[string][]map[string]string   `json:"chat_history"`
-	mutex       sync.Mutex        `json:"-"`
+	PromptCache map[string]string              `json:"prompt_cache"`
+	ChatHistory map[string][]map[string]string `json:"chat_history"`
+	mutex       sync.Mutex                     `json:"-"`
 }
 
 var (
 	openRouterConfig OpenRouterConfig
-	openRouterCache OpenRouterCache
-	configMutex sync.RWMutex
+	openRouterCache  OpenRouterCache
+	configMutex      sync.RWMutex
 )
 
 // getConfigPath returns the absolute path to the config file (~/.llore/config.json)
@@ -45,16 +46,15 @@ func LoadOpenRouterConfig() error {
 	configPath, err := getConfigPath()
 	if err != nil {
 		log.Printf("Error getting config path: %v", err)
-		return err // Return error if we can't determine path
+		return err
 	}
 
 	log.Printf("Attempting to load config from: %s", configPath)
 
 	// Ensure the directory exists
 	configDir := filepath.Dir(configPath)
-	if err := os.MkdirAll(configDir, 0750); err != nil { // Use 0750 for permissions
+	if err := os.MkdirAll(configDir, 0750); err != nil {
 		log.Printf("Error creating config directory '%s': %v", configDir, err)
-		// If we can't create the dir, we likely can't read/write the file either
 		return fmt.Errorf("failed to ensure config directory exists: %w", err)
 	}
 
@@ -62,12 +62,11 @@ func LoadOpenRouterConfig() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Printf("Config file '%s' does not exist. Using default empty config.", configPath)
-			// File doesn't exist, initialize with default empty config
 			openRouterConfig = OpenRouterConfig{}
-			return nil // Not an error if file doesn't exist yet
+			return nil
 		}
 		log.Printf("Error opening config file '%s': %v", configPath, err)
-		return fmt.Errorf("failed to open config file: %w", err) // Other error opening file
+		return fmt.Errorf("failed to open config file: %w", err)
 	}
 	defer file.Close()
 
@@ -133,10 +132,10 @@ func SaveOpenRouterCache() error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	dataToSave := struct {
-		PromptCache  map[string]string                `json:"prompt_cache"`
-		ChatHistory map[string][]map[string]string   `json:"chat_history"`
+		PromptCache map[string]string              `json:"prompt_cache"`
+		ChatHistory map[string][]map[string]string `json:"chat_history"`
 	}{
-		PromptCache:  openRouterCache.PromptCache,
+		PromptCache: openRouterCache.PromptCache,
 		ChatHistory: openRouterCache.ChatHistory,
 	}
 	return encoder.Encode(dataToSave)
@@ -249,4 +248,56 @@ func GetOpenRouterCompletion(prompt, model string) (string, error) {
 	openRouterCache.PromptCache[cacheKey] = output
 	_ = SaveOpenRouterCache()
 	return output, nil
+}
+
+// OpenRouter model definitions and model-fetching logic
+
+type OpenRouterModel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type OpenRouterModelsResponse struct {
+	Data []OpenRouterModel `json:"data"`
+}
+
+// FetchOpenRouterModels fetches available models from OpenRouter API using the provided key.
+func FetchOpenRouterModels(apiKey string) ([]OpenRouterModel, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("API key not provided to FetchOpenRouterModels")
+	}
+
+	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, fmt.Errorf("OpenRouter API error: %s", string(body))
+	}
+	var result OpenRouterModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
+
+// GetConfig returns a copy of the current OpenRouterConfig.
+func GetConfig() OpenRouterConfig {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return openRouterConfig
+}
+
+// SetConfig sets the OpenRouterConfig.
+func SetConfig(cfg OpenRouterConfig) {
+	configMutex.Lock()
+	openRouterConfig = cfg
+	configMutex.Unlock()
 }
