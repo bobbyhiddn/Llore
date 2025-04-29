@@ -9,5 +9,12 @@
   "author": {
     "name": "Micah Longmire",
     "email": "mlmicahlongmire@gmail.com"
+  },
+  "info": {
+    "productName": "Llore",
+    "comments": "Lore Management System",
+    "companyName": "Llore",
+    "copyright": "© 2025 Llore",
+    "icon": ["build/windows/icon.ico"]
   }
 }

@@ -2,6 +2,7 @@
   import { onMount, afterUpdate } from 'svelte';
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import LibraryFileViewer from './LibraryFileViewer.svelte';
+  import logo from './assets/images/logo.png';
   import {
     GetAllEntries,
     CreateEntry,
@@ -30,8 +31,10 @@
   // --- OpenRouter API Key UI State ---
   let showApiKeyModal = false;
   let openrouterApiKey = '';
-  let apiKeySaveMsg = '';
+  let selectedChatModel = '';
+  let showApiKey = false;
   let apiKeyErrorMsg = '';
+  let apiKeySaveMsg = '';
 
   // --- Model Selector State ---
   let modelList: llm.OpenRouterModel[] = []; // Use llm.OpenRouterModel
@@ -845,7 +848,8 @@
  
 {#if !vaultIsReady} <!-- Vault is NOT ready, show initial screen FIRST -->
   <div class="initial-prompt">
-    <h1>Welcome to Llore</h1>
+    <img src={logo} alt="Llore Logo" class="logo logo-large" />
+    <h2>Select or Create a Vault</h2>
     <p>Load an existing Lore Vault or create a new one.</p>
     {#if initialErrorMsg}
       <p class="error-message">{initialErrorMsg}</p>
@@ -859,139 +863,128 @@
   </div>
 {:else if mode === null} <!-- Vault IS ready, but no mode selected -->
   <!-- Mode Choice Screen -->
-  <div class="mode-choice">
-    <h2>Choose a mode</h2>
-    <button on:click={() => setMode('codex')}>Codex</button>
-    <button on:click={() => setMode('story')}>Story Import</button>
-    <button on:click={() => setMode('library')}>Library</button>
-    <button on:click={() => setMode('chat')}>Lore Chat</button>
-    <button on:click={() => setMode('settings')}>Settings</button>
+  <div class="mode-select">
+    <div class="scroll-stave-top"></div> <!-- Top Stave -->
+    <div class="scroll-container">
+      <img src={logo} alt="Llore Logo" class="logo" />
+      <h1>Choose a mode</h1>
+      <div class="mode-buttons">
+        <button 
+          on:click={() => setMode('codex')}
+          class="mode-button"
+        >
+          <span class="title">Codex</span>
+          <span class="description">Manage your world's knowledge</span>
+        </button>
+        <button 
+          on:click={() => setMode('story')}
+          class="mode-button"
+        >
+          <span class="title">Story Import</span>
+          <span class="description">Analyze and extract lore</span>
+        </button>
+        <button 
+          on:click={() => setMode('library')}
+          class="mode-button"
+        >
+          <span class="title">Library</span>
+          <span class="description">Organize your story files</span>
+        </button>
+        <button 
+          on:click={() => setMode('chat')}
+          class="mode-button"
+        >
+          <span class="title">Lore Chat</span>
+          <span class="description">Explore your world with AI</span>
+        </button>
+        <button 
+          on:click={() => setMode('settings')}
+          class="mode-button"
+        >
+          <span class="title">Settings</span>
+          <span class="description">Configure your experience</span>
+        </button>
+      </div>
+    </div>
+    <div class="scroll-stave-bottom"></div> <!-- Bottom Stave -->
   </div>
 {:else if mode === 'codex'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
 
-  <main>
-    <h1>Llore Codex</h1>
-
-    <div class="db-path-display">
-      Current Vault: {currentVaultPath || 'None loaded'}
+  <div class="codex-view">
+    <div class="entries-list">
+      <button class="new-entry-btn" on:click={prepareNewEntry}>
+        + New Entry
+      </button>
+      {#if entries.length === 0}
+        <p class="empty-state">No entries yet. Create your first one!</p>
+      {:else}
+        {#each entries as entry (entry.id)}
+          <button
+            class="entry-item"
+            class:active={currentEntry && currentEntry.id === entry.id}
+            on:click={() => handleEntrySelect(entry)}
+          >
+            {entry.name} ({entry.type})
+          </button>
+        {/each}
+      {/if}
     </div>
 
-    <div class="layout-container">
-      <aside class="sidebar">
-        <h2>Entries</h2>
-        <button on:click={prepareNewEntry} disabled={isLoading}>+ New Entry</button> 
-        {#if isLoading && entries.length === 0}
-          <p>Loading entries...</p>
-        {:else if entries.length === 0}
-          <p>No entries found.</p>
-        {/if}
-        <ul>
-          {#each entries as entry (entry.id)}
-            <li class:selected={currentEntry?.id === entry.id}>
-              <div 
-                class="entry-item-button"
-                role="button"
-                tabindex="0"
-                on:click={() => handleEntrySelect(entry)} 
-                on:keydown={createKeyDownHandler(entry)}
-              >
-                {entry.name || '(Unnamed)'} ({entry.type || 'Untyped'})
-              </div>
-            </li>
-          {/each}
-        </ul>
-      </aside>
-
-      <section class="main-content">
-        {#if currentEntry} <!-- Add null check -->
-          {#if isEditing && currentEntry.id !== 0} <!-- Check ID for editing existing -->
-            <h2>Edit Entry: {currentEntry.name}</h2>
-          {:else}
-            <h2>Create New Entry</h2>
-          {/if}
- 
-          <form on:submit|preventDefault={handleSaveEntry}>
-            <div class="form-group">
-              <label for="entry-name">Name:</label>
-              <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
-            </div>
-            <div class="form-group">
-              <label for="entry-type">Type:</label>
-              <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
-            </div>
-            <div class="form-group">
-              <label for="entry-content">Content:</label>
-              <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
-            </div>
-            
-            {#if currentEntry.id !== 0} <!-- Check ID instead of just existence -->
-              <div class="timestamps">
-                <small>Created: {formatDate(currentEntry.createdAt)} | Updated: {formatDate(currentEntry.updatedAt)}</small>
-              </div>
-            {/if}
- 
-            <div class="button-group">
-              <button type="submit" disabled={isLoading}>{isEditing && currentEntry.id !== 0 ? 'Update Entry' : 'Create Entry'}</button>
-              
-              {#if isEditing && currentEntry.id !== 0} <!-- Check ID for delete button -->
-                <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
-              {/if}
- 
-              <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
-                {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
-              </button>
-            </div>
-          </form>
- 
-          {#if errorMsg}
-            <p class="error-message">{errorMsg}</p>
-          {/if}
-        {:else}
-           <p>Select an entry from the list or click "+ New Entry".</p> <!-- Placeholder if currentEntry is null -->
-        {/if}
-
+    <div class="codex-entry">
+      {#if currentEntry}
         <form on:submit|preventDefault={handleSaveEntry}>
-          <div class="form-group">
-            <label for="entry-name">Name:</label>
-            <input id="entry-name" type="text" bind:value={currentEntry.name} required disabled={isLoading}>
-          </div>
-          <div class="form-group">
-            <label for="entry-type">Type:</label>
-            <input id="entry-type" type="text" bind:value={currentEntry.type} disabled={isLoading}>
-          </div>
-          <div class="form-group">
-            <label for="entry-content">Content:</label>
-            <textarea id="entry-content" rows="10" bind:value={currentEntry.content} disabled={isLoading || isGenerating}></textarea>
-          </div>
-          
-          {#if currentEntry.id} 
-            <div class="timestamps">
-              <small>Created: {formatDate(currentEntry.createdAt)} | Updated: {formatDate(currentEntry.updatedAt)}</small>
+          <h2>Edit Entry: {currentEntry.name}</h2>
+          <div class="codex-entry-content">
+            <div class="codex-entry-field">
+              <label for="name">Name:</label>
+              <input
+                type="text"
+                id="name"
+                bind:value={currentEntry.name}
+                placeholder="Entry name"
+              />
             </div>
-          {/if}
+
+            <div class="codex-entry-field">
+              <label for="type">Type:</label>
+              <input
+                type="text"
+                id="type"
+                bind:value={currentEntry.type}
+                placeholder="Entry type"
+              />
+            </div>
+
+            <div class="codex-entry-field">
+              <label for="content">Content:</label>
+              <textarea
+                id="content"
+                bind:value={currentEntry.content}
+                placeholder="Entry content"
+              />
+            </div>
+          </div>
 
           <div class="button-group">
-            <button type="submit" disabled={isLoading}>{isEditing ? 'Update Entry' : 'Create Entry'}</button> 
-            
-            {#if isEditing} 
-              <button type="button" on:click={handleDeleteEntry} disabled={isLoading || !currentEntry.id} class="danger">Delete Entry</button>
-            {/if}
-
-            <button type="button" on:click={handleGenerateContent} disabled={isLoading || isGenerating || !currentEntry.name}>
+            <button type="submit" class="save-btn">Save Changes</button>
+            <button type="button" class="delete-btn" on:click={handleDeleteEntry}>Delete Entry</button>
+            <button type="button" class="generate-btn" on:click={handleGenerateContent} disabled={isGenerating}>
               {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
             </button>
           </div>
+
+          {#if errorMsg}
+            <p class="error-message">{errorMsg}</p>
+          {/if}
         </form>
-
-        {#if errorMsg}
-          <p class="error-message">{errorMsg}</p>
-        {/if}
-      </section>
-
-    </div> 
-
-  </main>
+      {:else}
+        <div class="empty-state">
+          <p>Select an entry to edit or create a new one</p>
+        </div>
+      {/if}
+    </div>
+  </div>
 {:else if mode === 'story'} 
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section class="story-processor">
@@ -1038,28 +1031,29 @@
   </section>
 {:else if mode === 'chat'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
-  {#if showChatSelection}
-    <section class="chat-log-selection">
-      <h2>Select a Chat Log</h2>
-      <button on:click={startNewChat}>Start New Chat</button>
-      {#if isLoadingChatLogs}
-        <p>Loading chat logs...</p>
-      {:else if chatLogError}
-        <p class="error-message">{chatLogError}</p>
-      {:else}
-        <ul>
-          {#each availableChatLogs as filename (filename)}
-            <li>
-              <button on:click={() => loadSelectedChat(filename)}>{filename}</button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-  {:else}
-    <section class="lore-chat">
-      <h2>Lore Chat</h2>
-      <div class="chat-settings-row">
+  <div class="chat-container">
+    {#if showChatSelection}
+      <section class="chat-log-selection">
+        <h2>Select a Chat Log</h2>
+        <button on:click={startNewChat}>Start New Chat</button>
+        {#if isLoadingChatLogs}
+          <p>Loading chat logs...</p>
+        {:else if chatLogError}
+          <p class="error-message">{chatLogError}</p>
+        {:else}
+          <ul>
+            {#each availableChatLogs as filename (filename)}
+              <li>
+                <button on:click={() => loadSelectedChat(filename)}>{filename}</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {:else}
+      <section class="lore-chat">
+        <h2>Lore Chat</h2>
+        <div class="chat-settings-row">
         <label for="model-select">Model:</label>
         {#if isModelListLoading}
           <span>Loading models...</span>
@@ -1097,16 +1091,44 @@
       {#if chatError}
         <p class="error-message">{chatError}</p>
       {/if}
-    </section>
-  {/if}
+      </section>
+    {/if}
+  </div>
 {:else if mode === 'settings'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section class="settings">
     <h2>Settings</h2>
-    <form on:submit|preventDefault={saveSettings}>
+    <div class="settings-container">
       <div class="form-group">
-        <label for="api-key">OpenRouter API Key:</label>
-        <input id="api-key" type="text" bind:value={openrouterApiKey} placeholder="sk-..." required disabled={isLoading}>
+        <label for="apiKey">OpenRouter API Key:</label>
+        <div class="api-key-input">
+          {#if showApiKey}
+            <input
+              type="text"
+              id="apiKey"
+              bind:value={openrouterApiKey}
+              placeholder="Enter your OpenRouter API key"
+            />
+          {:else}
+            <input
+              type="password"
+              id="apiKey"
+              bind:value={openrouterApiKey}
+              placeholder="Enter your OpenRouter API key"
+            />
+          {/if}
+          <button 
+            class="toggle-visibility" 
+            on:click={() => showApiKey = !showApiKey}
+            title={showApiKey ? "Hide API Key" : "Show API Key"}
+          >
+            {#if showApiKey}
+              👁️
+            {:else}
+              👁️‍🗨️
+            {/if}
+          </button>
+        </div>
       </div>
       <div class="form-group">
         <label for="chat-model-select">Chat Model:</label>
@@ -1143,7 +1165,7 @@
       {#if settingsErrorMsg}
         <p class="error-message">{settingsErrorMsg}</p>
       {/if}
-    </form>
+    </div>
   </section>
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
 
@@ -1213,179 +1235,702 @@
 {/if}
 
 <style>
-  /* ... existing styles ... */
-  .layout-container {
-    display: flex;
-    gap: 1rem; 
-  }
-  .sidebar {
-    flex: 0 0 250px; 
-    border-right: 1px solid #ccc;
-    padding-right: 1rem;
-    height: calc(100vh - 150px); 
-    overflow-y: auto;
-  }
-  .sidebar ul {
-    list-style: none;
-    padding: 0;
+  /* Reset and Base Styles */
+  :global(body) {
     margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #e0e0e0;
+    font-size: 16px;
+    line-height: 1.6;
+    height: 100vh;
+    overflow: hidden;
   }
-  .sidebar li {
-    padding: 0; 
-    cursor: default; 
-    border-bottom: 1px solid #eee;
-  }
-  .sidebar li.selected .entry-item-button {
-    background-color: #e0e0ff; 
-    font-weight: bold;
-  }
-  .entry-item-button {
-    display: block; 
-    padding: 0.5rem; 
-    cursor: pointer;
-    transition: background-color 0.2s;
-    outline: none; 
-  }
-  .entry-item-button:hover {
-    background-color: #f0f0f0;
-  }
-  .entry-item-button:focus {
-    outline: 2px solid blue; 
-    outline-offset: -2px; 
-    background-color: #e8e8ff; 
-  }
-  .main-content {
-    flex: 1; 
-  }
-  .story-processor {
-    flex: 0 0 300px; 
+
+  :global(#app) {
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
-  .story-processor textarea {
-    flex-grow: 1;
-    margin-bottom: 0.5rem;
-  }
-  .form-group {
-    margin-bottom: 1rem;
-  }
-  label {
-    display: block;
-    margin-bottom: 0.25rem;
-  }
-  input[type="text"],
-  textarea {
-    width: 100%;
-    padding: 0.5rem;
+
+  :global(*) {
     box-sizing: border-box;
   }
-  textarea {
-    resize: vertical;
+
+  /* Variables */
+  :root {
+    --accent-silver: #c0c0c0;
+    --accent-gradient: linear-gradient(135deg, #6d5ed9, #8a7ef9);
+    --accent-primary: #6d5ed9;
+    --accent-secondary: #8a7ef9;
+    --bg-primary: rgba(26, 26, 46, 0.95);
+    --bg-secondary: rgba(22, 33, 62, 0.95);
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --error-color: #ff4757;
+    --success-color: #2ed573;
   }
-  .button-group button {
-    margin-right: 0.5rem;
-  }
-  .button-group button.danger {
-    background-color: #dc3545;
-    color: white;
-  }
-  .timestamps {
-      font-size: 0.8em;
-      color: #666;
-      margin-top: 0.5rem;
-  }
-  .lore-chat {
-    max-width: 600px;
+
+  /* Layout Container */
+  .layout-container {
+    display: flex;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    max-width: 1400px;
     margin: 0 auto;
+    height: calc(100vh - 4rem);
   }
-  .chat-window {
-    border: 1px solid #ccc;
-    background: #fafaff;
+
+  /* Sidebar */
+  .entries-list {
+    width: 300px;
+    background: var(--bg-secondary);
+    border-radius: 12px;
     padding: 1rem;
-    min-height: 200px;
-    max-height: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     overflow-y: auto;
-    margin-bottom: 1rem;
+    max-height: 100%;
   }
-  .chat-user {
-    text-align: right;
-    margin-bottom: 0.5rem;
-  }
-  .chat-ai {
+
+  .entry-item-button {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    border-radius: 8px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.3s ease;
     text-align: left;
-    margin-bottom: 0.5rem;
   }
-  .chat-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 1em;
-    margin-bottom: 1em;
+
+  .entry-item-button:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-1px);
   }
-  .chat-form {
+
+  /* Main Content */
+  .main-content {
+    flex: 1;
     display: flex;
+    flex-direction: column;
+    height: calc(100vh - 4rem);
+    overflow: hidden;
+    padding: 1rem;
+  }
+
+  .codex-view {
+    display: flex;
+    gap: 2rem;
+    flex: 1;
+    overflow: hidden;
+    background: var(--bg-primary);
+    border-radius: 12px;
+    padding: 1rem;
+    height: calc(100vh - 6rem);
+  }
+
+  .entries-list {
+    width: 300px;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow-y: auto;
+  }
+
+  .codex-entry {
+    flex: 1;
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow-y: auto;
+  }
+
+  .codex-entry form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .codex-entry-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .codex-entry-field {
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
   }
 
-  /* Modal styles */
+  .codex-entry-field label {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .codex-entry-field input,
+  .codex-entry-field textarea {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.75rem;
+    color: var(--text-primary);
+    font-size: 1rem;
+  }
+
+  .codex-entry-field textarea {
+    min-height: 200px;
+    resize: vertical;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .save-btn,
+  .delete-btn,
+  .generate-btn {
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+  }
+
+  .save-btn {
+    background: var(--accent-primary);
+    color: white;
+  }
+
+  .delete-btn {
+    background: var(--error-color);
+    color: white;
+  }
+
+  .generate-btn {
+    background: var(--accent-secondary);
+    color: white;
+  }
+
+  .generate-btn:hover {
+    background: var(--accent-secondary-hover);
+  }
+
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .new-entry-btn {
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    padding: 0.75rem;
+    border-radius: 6px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    margin-bottom: 1rem;
+    width: 100%;
+  }
+
+  .new-entry-btn:hover {
+    background: var(--accent-primary-hover);
+    transform: translateY(-1px);
+  }
+
+  .entry-item {
+    width: 100%;
+    text-align: left;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--text-primary);
+    transition: all 0.3s ease;
+  }
+
+  .entry-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .entry-item.active {
+    background: var(--accent-primary);
+    color: white;
+  }
+
+  .codex-entry {
+    flex: 1;
+    padding: 1.5rem;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow: hidden;
+  }
+
+  .codex-entry-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+  }
+
+  .codex-entry-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .codex-entry-field label {
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .codex-entry-field input,
+  .codex-entry-field textarea {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--text-primary);
+  }
+
+  .codex-entry-field textarea {
+    flex: 1;
+    min-height: 200px;
+    resize: none;
+  }
+
+  /* Forms */
+  .form-group {
+    margin-bottom: 1.5rem;
+  }
+
+  label {
+    display: block;
+    color: var(--accent-silver);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+
+  input[type="text"],
+  .form-group input {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    transition: border-color 0.3s ease;
+  }
+
+  .api-key-input {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .api-key-input input {
+    padding-right: 3rem;
+  }
+
+  .toggle-visibility {
+    position: absolute;
+    right: 0.75rem;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    font-size: 1.25rem;
+    transition: color 0.3s ease;
+  }
+
+  .toggle-visibility:hover {
+    color: var(--text-primary);
+  }
+
+  input[type="text"]:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(109, 94, 217, 0.3);
+  }
+
+  textarea {
+    resize: vertical;
+    min-height: 150px;
+  }
+
+  /* Buttons */
+  button {
+    padding: 0.75rem 1.5rem;
+    background: var(--accent-gradient);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(109, 94, 217, 0.2);
+  }
+
+  button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(109, 94, 217, 0.3);
+  }
+
+  button:active {
+    transform: translateY(0);
+  }
+
+  button:disabled {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .mode-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    width: 100%;
+    max-width: 300px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .mode-buttons button {
+    width: 100%;
+    font-size: 1.1rem;
+    padding: 1rem;
+  }
+
+  .logo {
+    width: 200px;
+    height: auto;
+    margin-bottom: 2rem;
+  }
+
+  .logo-large {
+    width: 300px;
+    margin-bottom: 3rem;
+  }
+
+  /* Chat Interface */
+  .chat-window {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 1.5rem;
+    height: 60vh;
+    overflow-y: auto;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .message {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border-radius: 12px;
+    max-width: 80%;
+  }
+
+  .chat-user {
+    background: var(--accent-gradient);
+    color: white;
+    margin-left: auto;
+    border-bottom-right-radius: 4px;
+  }
+
+  .chat-ai {
+    background: var(--bg-primary);
+    margin-right: auto;
+    border-bottom-left-radius: 4px;
+  }
+
+  /* Modal */
   .modal-backdrop {
     position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.4);
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    overflow-y: auto;
+    padding: 2rem;
   }
+
   .modal-content {
-    background: white;
-    color: #222;
-    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border-radius: 12px;
     padding: 2rem;
-    min-width: 300px;
-    text-align: center;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+    width: 100%;
+    max-width: 600px;
+    margin: auto;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 15px rgba(253, 246, 227, 0.1) inset;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    position: relative;
   }
 
-  /* Vault Selection Screen */
-  .initial-prompt {
-    max-width: 500px;
-    margin: 5rem auto;
+  .modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.5rem;
+    cursor: pointer;
+    transition: color 0.3s ease;
+  }
+
+  .modal-close:hover {
+    color: var(--text-primary);
+  }
+
+  /* Initial Prompt */
+  .settings-container {
+    max-width: 800px;
+    margin: 0 auto;
     padding: 2rem;
-    text-align: center;
-    background: #f9f9f9;
-    border-radius: 8px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    height: 100%;
+    overflow-y: auto;
   }
 
-  .initial-prompt h1 {
-    margin-bottom: 1rem;
+  .settings-section {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
-  .initial-prompt p {
-    margin-bottom: 1.5rem;
-    color: #555;
-  }
-
-  /* Adjusted styles for clarity */
-  .db-path-display {
-    margin-bottom: 1rem;
-    padding: 0.5rem;
-    background-color: #eee;
-    border-radius: 4px;
-    font-size: 0.9em;
-    color: #333;
-  }
-
-  /* Make sure library list items are distinct */
-  .library-section ul li {
-    padding: 0.5rem;
-    border-bottom: 1px solid #eee;
-    display: flex; 
-    justify-content: space-between; 
+  /* Mode Selection Screen */
+  .mode-select {
+    display: flex;
+    flex-direction: column;
     align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 3rem 2rem;
+    background: var(--bg-primary); /* Keep overall background dark */
+    position: relative; /* Needed for absolute positioning of staves */
   }
 
-  .library-section ul li:last-child {
-    border-bottom: none;
+  .scroll-container {
+    background: #fdf6e3; /* Parchment-like color */
+    padding: 3rem 2.5rem;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 15px rgba(253, 246, 227, 0.1) inset;
+    max-width: 500px;
+    width: 90%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    border: 1px solid rgba(0,0,0,0.1);
+    position: relative; /* Keep relative for content */
+    z-index: 5; /* Ensure parchment is behind staves */
+  }
+
+  .scroll-container .logo {
+    width: 200px; /* Doubled from 100px */
+    height: auto;
+    margin-bottom: 0.5rem;
+    animation: float 6s ease-in-out infinite;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.2));
+  }
+
+  @keyframes float {
+    0% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+    100% {
+      transform: translateY(0);
+    }
+  }
+
+  .scroll-container h1 {
+    color: #584c3a; /* Darker brown text */
+    font-family: 'Georgia', serif; /* More classic font */
+    font-size: 2.2rem;
+    margin: 0;
+    text-align: center;
+    opacity: 0.9;
+  }
+
+  .mode-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    width: 100%;
+    max-width: 300px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .mode-button {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    font-size: 1.1rem;
+    text-align: left;
+    background: transparent; /* Make background transparent */
+    border: 1px solid #a0937d; /* Defined parchment border */
+    border-radius: 8px;
+    color: #65594a; /* Brownish text */
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    position: relative;
+    overflow: hidden;
+    font-family: 'Georgia', serif; /* Match title font */
+  }
+
+  .mode-button .title {
+    font-weight: 600; /* Slightly bolder */
+    color: #584c3a; /* Darker brown */
+    z-index: 1;
+  }
+
+  .mode-button .description {
+    font-size: 0.85rem;
+    color: #8a7a66; /* Lighter brown */
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s ease;
+    z-index: 1;
+  }
+
+  .mode-button:hover {
+    background: rgba(88, 76, 58, 0.05); /* Subtle hover background */
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(88, 76, 58, 0.15); /* Brownish shadow */
+    border-color: #584c3a; /* Darker border on hover */
+  }
+
+  .mode-button:hover .description {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Back Button */
+  .back-btn {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.5rem;
+    cursor: pointer;
+    transition: color 0.3s ease;
+  }
+
+  .back-btn:hover {
+    color: var(--text-primary);
+  }
+
+  /* Utilities */
+  .error-message {
+    color: var(--error-color);
+    background: rgba(255, 71, 87, 0.1);
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-top: 1rem;
+    border: 1px solid rgba(255, 71, 87, 0.2);
+  }
+
+  .success-message {
+    color: var(--success-color);
+    background: rgba(46, 213, 115, 0.1);
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-top: 1rem;
+    border: 1px solid rgba(46, 213, 115, 0.2);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--accent-primary);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-secondary);
+  }
+
+  /* Staves */
+  .scroll-stave-top,
+  .scroll-stave-bottom {
+    position: relative; /* Position relative to mode-select center */
+    width: 90%; /* Match scroll-container width */
+    max-width: 500px; /* Match scroll-container max-width */
+    height: 30px; /* Height of the stave */
+    background: linear-gradient(to right, #8B4513, #A0522D, #8B4513); /* Wood-like gradient */
+    border-radius: 15px; /* Rounded ends */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+    z-index: 10; /* Ensure staves are above the parchment visually */
+    border: 1px solid #5c2e11;
+  }
+
+  .scroll-stave-top {
+    margin-bottom: -15px; /* Overlap slightly with parchment top */
+  }
+
+  .scroll-stave-bottom {
+    margin-top: -15px; /* Overlap slightly with parchment bottom */
   }
 </style>
