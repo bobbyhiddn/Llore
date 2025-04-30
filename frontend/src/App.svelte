@@ -3,6 +3,8 @@
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import LibraryFileViewer from './LibraryFileViewer.svelte';
   import logo from './assets/images/logo.png';
+  import { Marked } from 'marked'; // Import Marked class
+  const marked = new Marked(); // Create synchronous instance
   import {
     GetAllEntries,
     CreateEntry,
@@ -128,8 +130,8 @@
   let viewingFilename = '';
   let viewingFileContent = '';
 
-  // Mode ('codex', 'story', 'library', 'chat', 'settings', or null for choice screen)
-  let mode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | null = null; 
+  // Mode ('codex', 'story', 'library', 'chat', 'settings', 'write', or null for choice screen)
+  let mode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | 'write' | null = null; 
 
   // Library State (Files)
   let libraryFiles: string[] = [];
@@ -164,6 +166,43 @@
   let showImportModal = false;
   let createdEntriesCount = 0;
   let processedEntries: database.CodexEntry[] = []; // Use database.CodexEntry
+
+  // --- Write Mode State ---
+  let writeContent: string = ''; // Content of the writing area
+  let renderedWriteHtml = ''; // Initialize as empty string
+  let renderedWriteHtmlPromise: Promise<string> | null = null; // For handling async markdown // Rendered HTML from writeContent
+  // Placeholder states for chat and tools within write mode
+  let writeChatMessages: { sender: 'user' | 'ai', text: string }[] = [];
+  let writeChatInput: string = '';
+  let isWriteChatLoading: boolean = false;
+  let writeChatError: string = ''; // Add error state for write chat
+  let writeChatDisplayElement: HTMLDivElement; // For auto-scrolling
+  let markdownTextareaElement: HTMLTextAreaElement; // Reference to the editor textarea
+
+  // Save state for Write mode
+  let showWriteSaveModal: boolean = false;
+  let writeFilename: string = '';
+  let writeSaveError: string = '';
+  let writeSaveSuccess: string = '';
+
+  $: if (mode === 'write' && writeContent !== undefined) {
+    try {
+      // Handle markdown parsing asynchronously
+      renderedWriteHtmlPromise = Promise.resolve(marked.parse(writeContent))
+        .then(html => {
+          renderedWriteHtml = html;
+          return html;
+        })
+        .catch(err => {
+          console.error("Markdown rendering error:", err);
+          renderedWriteHtml = writeContent;
+          return writeContent;
+        });
+    } catch (err) {
+      console.error("Immediate markdown error:", err);
+      renderedWriteHtml = writeContent;
+    }
+  }
 
   // Helper: Refresh Library Files 
   async function refreshLibraryFiles() {
@@ -789,7 +828,7 @@
     }
   }
 
-  async function setMode(newMode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | null) {
+  async function setMode(newMode: 'codex' | 'story' | 'library' | 'chat' | 'settings' | 'write' | null) {
     console.log(`setMode called with: ${newMode}, current mode: ${mode}`); // Log entry
     if (newMode !== mode) { // Only run if mode changes
       console.log(`Mode changing from ${mode} to ${newMode}`); // Log change
@@ -819,6 +858,9 @@
       } else if (newMode === 'settings') {
         console.log('Handling mode: settings');
         await loadSettings();
+      } else if (newMode === 'write') { // Add handler for write mode
+        console.log('Handling mode: write');
+        // Add any specific setup for write mode here later
       } else if (newMode === null) {
         console.log('Handling mode: null (Vault selection)');
       }
@@ -844,6 +886,140 @@
     console.log('logButtonClick called for:', filename);
   }
  
+  // Auto-scroll chat display
+  afterUpdate(() => {
+    if (chatDisplayElement) {
+      chatDisplayElement.scrollTop = chatDisplayElement.scrollHeight;
+    }
+    // Add similar logic for writeChatDisplayElement if needed
+    if (writeChatDisplayElement) {
+       writeChatDisplayElement.scrollTop = writeChatDisplayElement.scrollHeight; 
+    }
+  });
+
+  // --- Write Mode Chat Function ---
+  async function handleSendWriteChat() {
+    if (!writeChatInput.trim() || isWriteChatLoading) return;
+
+    const userMessage = writeChatInput.trim();
+    writeChatMessages = [...writeChatMessages, { sender: 'user', text: userMessage }];
+    writeChatInput = '';
+    isWriteChatLoading = true;
+    writeChatError = '';
+
+    // Construct the prompt with context
+    let prompt = `System: You are an AI assistant helping a user write. Here is their current draft:\n\n---\n${writeContent}\n---\n\nChat History:\n`;
+    writeChatMessages.slice(-5).forEach(msg => { // Limit history slightly
+      prompt += `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}\n`;
+    });
+    // Ensure the latest user message (which triggered this) is included if not already in slice
+    if (!writeChatMessages.slice(-5).some(m => m.sender === 'user' && m.text === userMessage)){
+         prompt += `User: ${userMessage}\n`;
+    }
+    prompt += "AI:"; // Prompt the AI for its turn
+
+    try {
+      // Use the globally selected chat model from settings
+      const modelToUse = chatModelId || 'anthropic/claude-3-haiku-20240307'; // Use state variable or fallback
+      console.log(`Write Chat using model: ${modelToUse}`);
+
+      const aiReply = await GenerateOpenRouterContent(prompt, modelToUse);
+      writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply }];
+
+    } catch (err) {
+      writeChatError = `AI error: ${err}`;
+      // Optionally add the error as a system message to the chat?
+      // writeChatMessages = [...writeChatMessages, { sender: 'ai', text: `Sorry, I encountered an error: ${err}` }];
+      console.error("Write Chat Error:", err);
+    } finally {
+      isWriteChatLoading = false;
+    }
+  }
+
+  // --- Write Mode Save Function ---
+  async function handleSaveWriteContent() {
+    if (!writeFilename.trim()) {
+      writeSaveError = 'Filename cannot be empty.';
+      return;
+    }
+    let filenameToSave = writeFilename.trim();
+    if (!filenameToSave.toLowerCase().endsWith('.md')) {
+      filenameToSave += '.md';
+    }
+
+    // Reset messages
+    writeSaveError = '';
+    writeSaveSuccess = '';
+    isLoading = true; // Use existing loading state
+
+    try {
+      await SaveLibraryFile(filenameToSave, writeContent);
+      writeSaveSuccess = `File '${filenameToSave}' saved successfully!`;
+      showWriteSaveModal = false; // Close modal on success
+      writeFilename = ''; // Clear filename input for next save
+    } catch (err) {
+      writeSaveError = `Failed to save file: ${err}`;
+      console.error("Save Write Content Error:", err);
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  // --- Write Mode Formatting Tools Function ---
+  function applyMarkdownFormat(formatType: 'bold' | 'italic' | 'h1' | 'h2') {
+    if (!markdownTextareaElement) return;
+
+    const start = markdownTextareaElement.selectionStart;
+    const end = markdownTextareaElement.selectionEnd;
+    const selectedText = writeContent.substring(start, end);
+    let prefix = '';
+    let suffix = '';
+
+    switch (formatType) {
+      case 'bold':
+        prefix = '**';
+        suffix = '**';
+        break;
+      case 'italic':
+        prefix = '*';
+        suffix = '*';
+        break;
+      case 'h1':
+      case 'h2':
+        // Apply headings to the start of the line
+        const lineStart = writeContent.lastIndexOf('\n', start - 1) + 1;
+        prefix = (formatType === 'h1' ? '# ' : '## ');
+        // Insert prefix at the beginning of the line
+        writeContent = writeContent.substring(0, lineStart) + prefix + writeContent.substring(lineStart);
+        // Adjust selection points after adding prefix
+        markdownTextareaElement.selectionStart = start + prefix.length;
+        markdownTextareaElement.selectionEnd = end + prefix.length;
+        // Focus after update
+        markdownTextareaElement.focus();
+        return; // Early return for headings as they modify outside selection
+    }
+
+    // Apply prefix/suffix for bold/italic
+    const newText = writeContent.substring(0, start) + prefix + selectedText + suffix + writeContent.substring(end);
+    writeContent = newText;
+
+    // Restore selection/cursor position after update (might need adjustment)
+    // Use timeout to ensure DOM updates before setting selection
+    setTimeout(() => {
+        if (!markdownTextareaElement) return;
+        if (selectedText) {
+          // If text was selected, select the newly formatted text
+          markdownTextareaElement.selectionStart = start + prefix.length;
+          markdownTextareaElement.selectionEnd = end + prefix.length;
+        } else {
+          // If no text was selected, place cursor between prefix and suffix
+          markdownTextareaElement.selectionStart = start + prefix.length;
+          markdownTextareaElement.selectionEnd = start + prefix.length;
+        }
+         markdownTextareaElement.focus();
+    }, 0);
+
+  }
 </script>
  
 {#if !vaultIsReady} <!-- Vault is NOT ready, show initial screen FIRST -->
@@ -866,8 +1042,7 @@
   <div class="mode-select">
     <div class="scroll-stave-top"></div> <!-- Top Stave -->
     <div class="scroll-container">
-      <img src={logo} alt="Llore Logo" class="logo" />
-      <h1>Choose a mode</h1>
+      <img src={logo} alt="Llore Logo" class="logo" style="margin-bottom: 1.5rem;" />
       <div class="mode-buttons">
         <button 
           on:click={() => setMode('codex')}
@@ -903,6 +1078,13 @@
         >
           <span class="title">Settings</span>
           <span class="description">Configure your experience</span>
+        </button>
+        <button 
+          on:click={() => setMode('write')}
+          class="mode-button"
+        >
+          <span class="title">Write</span>
+          <span class="description">Compose stories & articles</span>
         </button>
       </div>
     </div>
@@ -1051,46 +1233,46 @@
         {/if}
       </section>
     {:else}
-      <section class="lore-chat">
+      <section class="lore-chat chat-view-container">
         <h2>Lore Chat</h2>
         <div class="chat-settings-row">
-        <label for="model-select">Model:</label>
-        {#if isModelListLoading}
-          <span>Loading models...</span>
-        {:else if modelListError}
-          <span style="color:red">{modelListError}</span>
-        {:else}
-          <select id="model-select" bind:value={selectedModel}>
-            {#each modelList as model (model.id)}
-              <option value={model.id}>{model.name}</option>
-            {/each}
-          </select>
+          <label for="model-select">Model:</label>
+          {#if isModelListLoading}
+            <span>Loading models...</span>
+          {:else if modelListError}
+            <span style="color:red">{modelListError}</span>
+          {:else}
+            <select id="model-select" bind:value={selectedModel}>
+              {#each modelList as model (model.id)}
+                <option value={model.id}>{model.name}</option>
+              {/each}
+            </select>
+          {/if}
+          <button on:click={openApiKeyModal} style="margin-left: 1em;">Set API Key</button>
+          {#if !currentChatLogFilename && chatMessages.length > 0}
+            <button on:click={promptToSaveChat} style="margin-left: 1em;">Save Chat As...</button>
+          {/if}
+        </div>
+        <div class="chat-display chat-messages-area" bind:this={chatDisplayElement}>
+          {#each chatMessages as message}
+            <div class="message {message.sender}">
+              <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
+              {#if message.sender === 'ai'}
+                <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
+              {/if}
+            </div>
+          {/each}
+          {#if isChatLoading}
+            <div class="chat-ai"><em>AI is thinking...</em></div>
+          {/if}
+        </div>
+        <form on:submit|preventDefault={sendChat} class="chat-form">
+          <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
+          <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
+        </form>
+        {#if chatError}
+          <p class="error-message">{chatError}</p>
         {/if}
-        <button on:click={openApiKeyModal} style="margin-left: 1em;">Set API Key</button>
-        {#if !currentChatLogFilename && chatMessages.length > 0}
-          <button on:click={promptToSaveChat} style="margin-left: 1em;">Save Chat As...</button>
-        {/if}
-      </div>
-      <div class="chat-display" bind:this={chatDisplayElement}>
-        {#each chatMessages as message}
-          <div class="message {message.sender}">
-            <strong>{message.sender === 'user' ? 'You' : 'AI'}:</strong> {message.text}
-            {#if message.sender === 'ai'}
-              <button on:click={() => saveChatToCodex(message.text)}>Save to Codex</button>
-            {/if}
-          </div>
-        {/each}
-        {#if isChatLoading}
-          <div class="chat-ai"><em>AI is thinking...</em></div>
-        {/if}
-      </div>
-      <form on:submit|preventDefault={sendChat} class="chat-form">
-        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading}>
-        <button type="submit" disabled={isChatLoading || !chatInput.trim()}>Send</button>
-      </form>
-      {#if chatError}
-        <p class="error-message">{chatError}</p>
-      {/if}
       </section>
     {/if}
   </div>
@@ -1167,7 +1349,76 @@
       {/if}
     </div>
   </section>
+{:else if mode === 'write'}
+  <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
+  <div class="write-view-container">
+    <!-- Left Panel (Top: Chat, Bottom: Tools) -->
+    <div class="write-left-panel">
+      <div class="write-chat-panel">
+        <h3>Contextual Chat</h3>
+        <div class="chat-messages-area" bind:this={writeChatDisplayElement} style="height: 200px; overflow-y: auto; border: 1px solid #ccc; margin-bottom: 10px;">
+          <!-- Chat messages will go here -->
+          {#each writeChatMessages as msg (msg.sender + msg.text + Math.random())} <!-- Basic key for reactivity -->
+            <div class="message {msg.sender}">{msg.sender === 'user' ? 'You' : 'AI'}: {msg.text}</div>
+          {/each}
+          {#if isWriteChatLoading}<div class="message loading">AI Thinking...</div>{/if}
+        </div>
+        <form on:submit|preventDefault={handleSendWriteChat} class="write-chat-form">
+          <input type="text" bind:value={writeChatInput} placeholder="Ask AI..." disabled={isWriteChatLoading} />
+          <button type="submit" disabled={isWriteChatLoading || !writeChatInput.trim()}>Send</button>
+        </form>
+        {#if writeChatError}
+          <p class="error-message">{writeChatError}</p>
+        {/if}
+      </div>
+      <div class="write-tools-panel">
+        <h3>Formatting Tools</h3>
+        <div class="button-group">
+           <button on:click={() => applyMarkdownFormat('bold')}>B</button> 
+           <button on:click={() => applyMarkdownFormat('italic')}>I</button> 
+           <button on:click={() => applyMarkdownFormat('h1')}>H1</button> 
+           <button on:click={() => applyMarkdownFormat('h2')}>H2</button> 
+           <!-- Add more buttons later -->
+        </div>
+         <button class="save-btn" style="margin-top: 1rem;" on:click={() => { showWriteSaveModal = true; writeSaveError = ''; writeSaveSuccess = ''; }}>Save to Library</button> 
+      </div>
+    </div>
+
+    <!-- Right Panel (Editor + Preview) -->
+    <div class="write-right-panel">
+       <textarea 
+         class="markdown-input"
+         bind:value={writeContent}
+         bind:this={markdownTextareaElement} 
+         placeholder="Start writing your masterpiece (Markdown supported)..."
+       ></textarea>
+       <div class="markdown-preview-container">
+          <h3>Preview</h3>
+          <div class="markdown-preview">{@html renderedWriteHtml}</div>
+       </div>
+    </div>
+  </div>
 {/if} <!-- This NOW closes the entire chain starting with #if !vaultIsReady -->
+
+{#if showWriteSaveModal}
+  <div class="modal-backdrop">
+    <div class="modal save-write-modal">
+      <h3>Save Written Content</h3>
+      <label for="write-filename">Filename:</label>
+      <input id="write-filename" type="text" bind:value={writeFilename} placeholder="e.g., chapter-one.md">
+      {#if writeSaveError}
+        <p class="error-message">{writeSaveError}</p>
+      {/if}
+      {#if writeSaveSuccess}
+        <p style="color: green;">{writeSaveSuccess}</p>
+      {/if}
+      <div class="modal-buttons">
+        <button on:click={handleSaveWriteContent} disabled={isLoading || !writeFilename.trim()}>Save</button>
+        <button on:click={() => { showWriteSaveModal = false; writeSaveSuccess = ''; }} disabled={isLoading}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if showLibraryViewer}
   <LibraryFileViewer 
@@ -1244,14 +1495,14 @@
     font-size: 16px;
     line-height: 1.6;
     height: 100vh;
-    overflow: hidden;
+    overflow: hidden; /* Re-add to prevent body scroll */
   }
 
   :global(#app) {
-    height: 100vh;
+    height: 100%; /* Use percentage height instead of viewport height */
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    /* overflow: hidden; */ /* Removed to allow child scrolling */
   }
 
   :global(*) {
@@ -1388,6 +1639,7 @@
   }
 
   .codex-entry-field textarea {
+    flex: 1;
     min-height: 200px;
     resize: vertical;
   }
@@ -1622,12 +1874,12 @@
   }
 
   .mode-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    margin-top: 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
     width: 100%;
-    max-width: 300px;
+    max-width: 500px;
+    margin-top: 0;
     margin-left: auto;
     margin-right: auto;
   }
@@ -1639,9 +1891,9 @@
   }
 
   .logo {
-    width: 200px;
+    width: 150px;
     height: auto;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
   }
 
   .logo-large {
@@ -1649,6 +1901,39 @@
     margin-bottom: 3rem;
   }
 
+/* Chat View Layout */
+  .chat-view-container {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 4rem); /* Adjust based on header/footer height if any */
+    overflow: hidden; /* Prevent whole section from scrolling */
+    padding: 1rem; /* Add some padding */
+  }
+
+  .chat-settings-row {
+    flex-shrink: 0; /* Prevent settings row from shrinking */
+    margin-bottom: 1rem;
+  }
+
+  .chat-messages-area {
+    flex: 1; /* Allow message area to grow and shrink */
+    overflow-y: auto; /* Enable vertical scrolling */
+    padding: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    background: rgba(0,0,0,0.1);
+  }
+
+  .chat-form {
+    flex-shrink: 0; /* Prevent form from shrinking */
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .chat-form input {
+    flex-grow: 1; /* Allow input to take available space */
+  }
   /* Chat Interface */
   .chat-window {
     background: var(--bg-secondary);
@@ -1747,20 +2032,24 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 3rem 2rem;
+    justify-content: center; /* Center the scroll container vertically */
+    height: 100%; /* Fill parent #app */
+    width: 100%; /* Ensure it respects parent width */
+    padding: 1rem 2rem; /* Add some overall padding */
     background: var(--bg-primary); /* Keep overall background dark */
     position: relative; /* Needed for absolute positioning of staves */
+    /* Removed flex: 1, min-height: 0, overflow-y: auto */
   }
 
   .scroll-container {
     background: #fdf6e3; /* Parchment-like color */
-    padding: 3rem 2.5rem;
+    padding: 2rem 2.5rem;
     border-radius: 15px;
+    overflow-y: auto; /* Make the inner container scroll */
+    max-height: calc(100% - 80px); /* Limit height (adjust 80px as needed for staves/padding) */
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 15px rgba(253, 246, 227, 0.1) inset;
-    max-width: 500px;
-    width: 90%;
+    /* Use clamp for responsive width: min 90%, preferred 60vw, max 800px */
+    width: clamp(90%, 60vw, 800px);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1771,9 +2060,9 @@
   }
 
   .scroll-container .logo {
-    width: 200px; /* Doubled from 100px */
+    width: 150px; /* Reduced from 200px */
     height: auto;
-    margin-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
     animation: float 6s ease-in-out infinite;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,0.2));
   }
@@ -1790,35 +2079,27 @@
     }
   }
 
-  .scroll-container h1 {
-    color: #584c3a; /* Darker brown text */
-    font-family: 'Georgia', serif; /* More classic font */
-    font-size: 2.2rem;
-    margin: 0;
-    text-align: center;
-    opacity: 0.9;
-  }
-
   .mode-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    margin-top: 1.5rem;
+    /* Use Grid for responsive button layout */
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
     width: 100%;
-    max-width: 300px;
+    max-width: 500px;
+    margin-top: 0;
     margin-left: auto;
     margin-right: auto;
   }
 
   .mode-button {
-    width: 100%;
-    padding: 1rem 1.5rem;
-    font-size: 1.1rem;
+    /* Removed width: 100% - Grid handles sizing */
+    padding: 0.4rem 1.2rem;
+    font-size: 0.9rem;
     text-align: left;
-    background: transparent; /* Make background transparent */
-    border: 1px solid #a0937d; /* Defined parchment border */
+    background: #f5eeda;
+    border: 1px solid #a0937d;
     border-radius: 8px;
-    color: #65594a; /* Brownish text */
+    color: #65594a;
     cursor: pointer;
     transition: all 0.3s ease;
     display: flex;
@@ -1826,18 +2107,19 @@
     gap: 0.2rem;
     position: relative;
     overflow: hidden;
-    font-family: 'Georgia', serif; /* Match title font */
+    font-family: 'Georgia', serif;
   }
 
   .mode-button .title {
-    font-weight: 600; /* Slightly bolder */
-    color: #584c3a; /* Darker brown */
+    font-weight: 600;
+    color: #584c3a;
     z-index: 1;
+    font-size: 1rem;
   }
 
   .mode-button .description {
     font-size: 0.85rem;
-    color: #8a7a66; /* Lighter brown */
+    color: #8a7a66;
     opacity: 0;
     transform: translateY(10px);
     transition: all 0.3s ease;
@@ -1845,10 +2127,10 @@
   }
 
   .mode-button:hover {
-    background: rgba(88, 76, 58, 0.05); /* Subtle hover background */
+    background: rgba(88, 76, 58, 0.05);
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(88, 76, 58, 0.15); /* Brownish shadow */
-    border-color: #584c3a; /* Darker border on hover */
+    box-shadow: 0 4px 12px rgba(88, 76, 58, 0.15);
+    border-color: #584c3a;
   }
 
   .mode-button:hover .description {
@@ -1915,22 +2197,138 @@
   /* Staves */
   .scroll-stave-top,
   .scroll-stave-bottom {
-    position: relative; /* Position relative to mode-select center */
-    width: 90%; /* Match scroll-container width */
-    max-width: 500px; /* Match scroll-container max-width */
-    height: 30px; /* Height of the stave */
-    background: linear-gradient(to right, #8B4513, #A0522D, #8B4513); /* Wood-like gradient */
-    border-radius: 15px; /* Rounded ends */
+    position: relative;
+    width: 100%;
+    max-width: 800px;
+    height: 30px;
+    background: linear-gradient(to right, #8B4513, #A0522D, #8B4513);
+    border-radius: 15px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
-    z-index: 10; /* Ensure staves are above the parchment visually */
+    z-index: 10;
     border: 1px solid #5c2e11;
   }
 
   .scroll-stave-top {
-    margin-bottom: -15px; /* Overlap slightly with parchment top */
   }
 
   .scroll-stave-bottom {
-    margin-top: -15px; /* Overlap slightly with parchment bottom */
+  }
+  /* Add styles for Write Mode Layout */
+  .write-view-container {
+    display: flex;
+    gap: 1rem;
+    height: calc(100vh - 6rem); /* Adjust height as needed */
+    padding: 1rem;
+  }
+
+  .write-left-panel {
+    display: flex;
+    flex-direction: column;
+    width: 35%; /* Adjust width */
+    gap: 1rem;
+  }
+
+  .write-chat-panel,
+  .write-tools-panel {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .write-chat-panel {
+    flex-grow: 1; /* Allow chat to take more space */
+  }
+
+  .write-right-panel {
+    display: flex;
+    flex-direction: column; /* Stack editor and preview */
+    width: 65%; /* Adjust width */
+    gap: 1rem;
+  }
+
+  .markdown-input {
+    flex-grow: 1; /* Take available space */
+    min-height: 200px; /* Minimum height */
+    resize: vertical;
+    font-family: monospace;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5rem;
+    border-radius: 4px;
+  }
+
+  .markdown-preview-container {
+    flex-grow: 1; /* Take available space */
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .markdown-preview h1,
+  .markdown-preview h2,
+  .markdown-preview h3 {
+    margin-top: 1em;
+    margin-bottom: 0.5em;
+    color: var(--text-primary);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 0.3em;
+  }
+
+  .markdown-preview p {
+    margin-bottom: 1em;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  .markdown-preview strong {
+    font-weight: bold;
+  }
+
+  .markdown-preview em {
+    font-style: italic;
+  }
+
+  .markdown-preview ul,
+  .markdown-preview ol {
+    margin-left: 2em;
+    margin-bottom: 1em;
+  }
+
+  .markdown-preview code {
+    background-color: rgba(255, 255, 255, 0.1);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: monospace;
+  }
+
+  .markdown-preview pre {
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 1em;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .markdown-preview pre code {
+    background-color: transparent;
+    padding: 0;
+  }
+  /* Style for loading message */
+  .message.loading {
+    font-style: italic;
+    color: var(--text-secondary);
+  }
+
+  .write-chat-form {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .write-chat-form input {
+    flex-grow: 1;
   }
 </style>
