@@ -162,10 +162,19 @@
   let newChatFilename = '';
   let saveChatError = '';
 
-  // Story import feedback
+  // Story import state
   let showImportModal = false;
   let createdEntriesCount = 0;
   let processedEntries: database.CodexEntry[] = []; // Use database.CodexEntry
+  let isDraggingFile = false;
+  let importError = '';
+  let importedFileName = '';
+  let importedContent = '';
+  let isProcessingImport = false;
+  let existingEntries: database.CodexEntry[] = [];
+  let showExistingEntriesModal = false;
+  let processStorySuccessMsg = '';
+
 
   // --- Write Mode State ---
   let writeContent: string = ''; // Content of the writing area
@@ -342,6 +351,106 @@
   }
 
   // Helper: Save AI chat turn to codex
+  // Handle file drop for story import
+  function handleFileDrop(event: DragEvent) {
+    event.preventDefault();
+    isDraggingFile = false;
+    importError = '';
+    
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    
+    const file = files[0];
+    if (!file.name.match(/\.(txt|md)$/i)) {
+      importError = 'Please drop a .txt or .md file';
+      return;
+    }
+    
+    importedFileName = file.name;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        importedContent = content;
+        showImportModal = true;
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Handle manual file selection
+  async function handleFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    
+    const file = input.files[0];
+    if (!file.name.match(/\.(txt|md)$/i)) {
+      importError = 'Please select a .txt or .md file';
+      return;
+    }
+    
+    importedFileName = file.name;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        importedContent = content;
+        showImportModal = true;
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Process the imported story
+  async function processImportedStory(forceReimport = false) {
+    if (!importedContent) return;
+    
+    isProcessingImport = true;
+    importError = '';
+    processStorySuccessMsg = '';
+    
+    try {
+      // Process the story for codex entries and save to library
+      const entries = await ImportStoryTextAndFile(importedContent);
+      
+      // Check if any entries already exist
+      const existing = entries.filter(e => e.id !== 0);
+      const newEntries = entries.filter(e => e.id === 0);
+      
+      if (existing.length > 0 && !forceReimport) {
+        // Show confirmation dialog
+        existingEntries = existing;
+        showExistingEntriesModal = true;
+        isProcessingImport = false;
+        return;
+      }
+      
+      processedEntries = entries;
+      createdEntriesCount = newEntries.length;
+      showImportModal = false;
+      importedContent = '';
+      importedFileName = '';
+      showExistingEntriesModal = false;
+      
+      // Show feedback
+      if (entries.length > 0) {
+        if (existing.length > 0) {
+          processStorySuccessMsg = `Story Processed\n${existing.length} entries were updated and ${newEntries.length} new entries were created:`;
+        } else {
+          processStorySuccessMsg = `Story Processed\n${entries.length} new codex entries were created:`;
+        }
+        processedEntries = entries;
+      } else {
+        processStorySuccessMsg = 'No codex entries could be extracted from the story.';
+      }
+    } catch (err) {
+      importError = `Failed to process story: ${err}`;
+      console.error('Story import error:', err);
+    } finally {
+      isProcessingImport = false;
+    }
+  }
+
   async function saveChatToCodex(text: string) { 
     try {
       const potentialEntries: database.CodexEntry[] = await ProcessStory(text); // Use database.CodexEntry
@@ -1171,20 +1280,89 @@
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section class="story-processor">
     <h2>Import New Story</h2>
-    <p>Paste story text below. It will be saved as a new file in the vault's Library and processed for codex entries.</p>
-    <textarea 
-      bind:value={storyText} 
-      rows="15" 
-      placeholder="Paste your story text here..."
-      disabled={isProcessingStory}
-    ></textarea>
-    <button on:click={handleImportStory} disabled={isProcessingStory || !storyText.trim()}>
-      {#if isProcessingStory}Processing...{:else}Import Story & Add Entries{/if}
-    </button>
-    {#if processStoryErrorMsg}
-      <p class="error-message">{processStoryErrorMsg}</p>
-    {/if}
+    <p>Paste story text or drag & drop a file below. Files will be saved to the Library and processed for codex entries.</p>
+    
+    <!-- Text Input -->
+    <div class="text-input-section">
+      <div class="text-input-container">
+        <textarea 
+          bind:value={storyText} 
+          class="story-input"
+          placeholder="Paste your story text here..."
+          disabled={isProcessingStory || isProcessingImport}
+        ></textarea>
+      </div>
+    </div>
+
+    <!-- Drop Zone and Import Button -->
+    <div class="drop-zone-section">
+      <div class="drop-zone-container">
+        <div class="drop-zone {isDraggingFile ? 'dragging' : ''}"
+          role="button"
+          tabindex="0"
+          aria-label="Drop zone for importing story files"
+          on:dragenter={(e) => { e.preventDefault(); isDraggingFile = true; }}
+          on:dragover={(e) => { e.preventDefault(); isDraggingFile = true; }}
+          on:dragleave={() => isDraggingFile = false}
+          on:drop={handleFileDrop}
+          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') document.getElementById('file-input')?.click(); }}
+        >
+          <span class="icon">📚</span>
+          <span class="label">Drop Story File Here</span>
+          <span class="description">or</span>
+          <input
+            type="file"
+            accept=".txt,.md"
+            on:change={handleFileSelect}
+            style="display: none"
+            id="file-input"
+          />
+          <button class="browse-btn" on:click={() => document.getElementById('file-input')?.click()}>
+            Browse Files
+          </button>
+          {#if importError}
+            <p class="error-message">{importError}</p>
+          {/if}
+        </div>
+        <button 
+          class="import-btn"
+          on:click={handleImportStory} 
+          disabled={isProcessingStory || isProcessingImport || !storyText.trim()}
+        >
+          {#if isProcessingStory}Processing...{:else}Import Story & Add Entries{/if}
+        </button>
+        {#if processStoryErrorMsg}
+          <p class="error-message">{processStoryErrorMsg}</p>
+        {/if}
+      </div>
+    </div>
   </section>
+
+  <!-- Import Preview Modal -->
+  {#if showImportModal}
+    <div class="modal-backdrop">
+      <div class="modal import-modal">
+        <h3>Import Story</h3>
+        <div class="import-preview">
+          <p class="filename">File: {importedFileName}</p>
+          <div class="content-preview">
+            {importedContent.slice(0, 500)}{importedContent.length > 500 ? '...' : ''}
+          </div>
+        </div>
+        {#if importError}
+          <p class="error-message">{importError}</p>
+        {/if}
+        <div class="modal-actions">
+          <button on:click={processImportedStory} disabled={isProcessingImport}>
+            {isProcessingImport ? 'Processing...' : 'Process Story'}
+          </button>
+          <button on:click={() => { showImportModal = false; importError = ''; }} disabled={isProcessingImport}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 {:else if mode === 'library'}
   <button class="back-btn" on:click={() => setMode(null)}>← Back to Mode Choice</button>
   <section>
@@ -1467,6 +1645,9 @@
   <div class="modal-backdrop">
     <div class="modal-content">
       <h3>Story Processed</h3>
+      {#if existingEntries && existingEntries.length > 0}
+        <p class="notice-message">Note: This story has already been processed before.</p>
+      {/if}
       {#if createdEntriesCount > 0}
         <p>{createdEntriesCount} new codex entr{createdEntriesCount === 1 ? 'y was' : 'ies were'} created:</p>
         <ul>
@@ -1478,8 +1659,40 @@
         <p>No new entries were created from the story.</p>
       {/if}
       <div class="modal-actions">
-        <button on:click={() => closeImportModal(false)}>OK</button>
+        <button on:click={() => { showImportModal = false; }}>OK</button>
         <button on:click={() => closeImportModal(true)}>Go to Codex</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showExistingEntriesModal}
+  <div class="modal-backdrop">
+    <div class="modal-content">
+      <h3>Existing Entries Found</h3>
+      <p>The following entries already exist from this story:</p>
+      <div class="existing-entries-list">
+        {#each existingEntries as entry}
+          <div class="existing-entry">
+            <strong>{entry.name}</strong> ({entry.type})
+            <p class="entry-preview">{entry.content.substring(0, 100)}{entry.content.length > 100 ? '...' : ''}</p>
+          </div>
+        {/each}
+      </div>
+      <p>Would you like to update these entries?</p>
+      <div class="modal-actions">
+        <button on:click={() => { showExistingEntriesModal = false; importedContent = ''; importedFileName = ''; }}>Cancel</button>
+        <button 
+          class="primary"
+          on:click={() => processImportedStory(true)}
+          disabled={isProcessingImport}
+        >
+          {#if isProcessingImport}
+            Processing...
+          {:else}
+            Update Entries
+          {/if}
+        </button>
       </div>
     </div>
   </div>
@@ -2155,6 +2368,199 @@
     color: var(--text-primary);
   }
 
+  /* Story Import Styles */
+  .story-processor {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    height: calc(100vh - 6rem);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .text-input-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .text-input-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    height: 100%;
+  }
+
+  .story-input {
+    flex: 1;
+    min-height: 200px;
+    resize: none;
+    font-family: monospace;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 1rem;
+    border-radius: 4px;
+    line-height: 1.5;
+  }
+
+  .drop-zone-section {
+    margin-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .drop-zone-container {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .drop-zone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border: 2px dashed var(--accent-primary);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    transition: all 0.3s ease;
+    cursor: pointer;
+    text-align: center;
+    min-height: 100px;
+  }
+
+  .drop-zone.dragging {
+    border-color: var(--accent-secondary);
+    background: rgba(var(--accent-primary-rgb), 0.1);
+    transform: scale(1.02);
+  }
+
+  .drop-zone .icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .drop-zone .label {
+    font-size: 1.1rem;
+    font-weight: bold;
+    margin-bottom: 0.25rem;
+  }
+
+  .drop-zone .description {
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+  }
+
+  .browse-btn {
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    font-size: 0.9rem;
+  }
+
+  .browse-btn:hover {
+    background: var(--accent-secondary);
+  }
+
+
+
+  .section-label {
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+  }
+
+  .import-btn {
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    font-size: 1rem;
+    white-space: nowrap;
+    height: 100%;
+    min-height: 100px;
+    display: flex;
+    align-items: center;
+  }
+
+  .import-btn:hover:not(:disabled) {
+    background: var(--accent-secondary);
+  }
+
+  .import-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .import-modal {
+    max-width: 600px;
+  }
+
+  .existing-entries-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 1rem 0;
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+  }
+
+  .existing-entry {
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .existing-entry:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .entry-preview {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .import-preview {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: var(--bg-primary);
+    border-radius: 4px;
+  }
+
+  .import-preview .filename {
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+    color: var(--accent-primary);
+  }
+
+  .content-preview {
+    font-family: monospace;
+    white-space: pre-wrap;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
   /* Utilities */
   .error-message {
     color: var(--error-color);
@@ -2172,6 +2578,16 @@
     border-radius: 8px;
     margin-top: 1rem;
     border: 1px solid rgba(46, 213, 115, 0.2);
+  }
+  
+  .notice-message {
+    color: #f39c12;
+    background: rgba(243, 156, 18, 0.1);
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(243, 156, 18, 0.2);
+    font-weight: 500;
   }
 
   /* Scrollbar */
