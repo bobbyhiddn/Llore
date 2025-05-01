@@ -917,6 +917,4 @@
     background: var(--accent-secondary);
   }
 
-  /* Add any styles needed for #app-container layout if necessary */
-
 </style>
