@@ -20,6 +20,6 @@
       "@wailsjs/*": ["wailsjs/*"]
     }
   },
-  "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.ts", "src/**/*.svelte"],
+  "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.ts", "src/**/*.svelte", "wailsjs/**/*.js", "wailsjs/**/*.ts"],
   "references": [{ "path": "./tsconfig.node.json" }] // Assumes you might have one for Vite config
 }
