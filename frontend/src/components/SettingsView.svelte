@@ -32,7 +32,7 @@
     }
   });
 
-  $: if (initialApiKey !== openrouterApiKey && !isLoading) openrouterApiKey = initialApiKey;
+  // $: if (initialApiKey !== openrouterApiKey && !isLoading) openrouterApiKey = initialApiKey;
   $: if (initialChatModelId !== chatModelId) chatModelId = initialChatModelId;
   $: if (initialStoryProcessingModelId !== storyProcessingModelId) storyProcessingModelId = initialStoryProcessingModelId;
 
@@ -94,6 +94,7 @@
               bind:value={openrouterApiKey}
               on:change={handleApiKeyChange}
               placeholder="Enter your OpenRouter API key (e.g., sk-...)"
+              autofocus
             />
           {:else}
             <input
@@ -102,6 +103,7 @@
               bind:value={openrouterApiKey}
               on:change={handleApiKeyChange}
               placeholder="Enter your OpenRouter API key"
+              autofocus
             />
           {/if}
           <button
