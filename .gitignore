@@ -29,3 +29,7 @@
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Ignore all package-lock.json files
+package-lock.json
+
