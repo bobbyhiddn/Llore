@@ -132,7 +132,13 @@ func (a *App) SwitchVault(path string) error {
 	a.db = dbConn
 	a.dbPath = path
 
-	// Load initial data
+	// Initialize LLM package with the new vault path (this will load the cache)
+	if err := llm.Init(path); err != nil {
+		// Log warning but don't fail the vault switch entirely, cache might just be missing/corrupt
+		log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
+	}
+
+	// Load initial library data
 	if err := a.refreshLibraryFiles(); err != nil {
 		log.Printf("Warning: Failed to load library files: %v", err)
 	}
@@ -151,6 +157,7 @@ func (a *App) ListLibraryFiles() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Library directory: %w", err)
 	}
+
 	files := make([]string, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -320,7 +327,8 @@ func (a *App) ListChatLogs() ([]string, error) {
 
 	logs := make([]string, 0)
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+		// Only include files that end with .json AND are NOT the cache file
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "openrouter_cache.json" {
 			logs = append(logs, entry.Name())
 		}
 	}
@@ -405,10 +413,10 @@ func (a *App) startup(ctx context.Context) {
 		// Log warning but don't necessarily fail startup, user might add key later
 		log.Printf("Warning: Failed to load OpenRouter configuration: %v. API key might be missing.", err)
 	}
-	// Load OpenRouter cache (from local dir)
-	if err := llm.LoadOpenRouterCache(); err != nil {
-		log.Printf("Warning: Failed to load OpenRouter cache: %v", err)
-	}
+	// REMOVED: Load OpenRouter cache - This will be handled by llm.Init called during SwitchVault
+	// if err := llm.LoadOpenRouterCache(); err != nil {
+	// 	log.Printf("Warning: Failed to load OpenRouter cache: %v", err)
+	// }
 
 	log.Println("App startup complete.")
 }
