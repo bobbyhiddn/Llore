@@ -1,7 +1,9 @@
 package main
 
 import (
+	ragcontext "Llore/internal/context" // Added for RAG context building (aliased)
 	"Llore/internal/database"
+	"Llore/internal/embeddings" // Added for RAG embeddings
 	"Llore/internal/llm"
 	"Llore/internal/vault"
 	"context"
@@ -43,14 +45,46 @@ func (a *App) CreateEntry(name, entryType, content string) (database.CodexEntry,
 	}
 	id, err := database.DBInsertEntry(a.db, name, entryType, content)
 	if err != nil {
-		return database.CodexEntry{}, err
+		return database.CodexEntry{}, fmt.Errorf("failed to insert entry: %w", err)
 	}
-	// Fetch the created entry
+
+	// Fetch the created entry to return it
 	row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE id = ?", id)
 	var entry database.CodexEntry
 	if err := row.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
-		return database.CodexEntry{}, err
+		// Log the error but don't necessarily fail the whole operation if fetching fails,
+		// as the entry *was* created. The embedding step might still work if ID is valid.
+		log.Printf("Warning: Failed to fetch newly created entry (ID: %d) after insert: %v", id, err)
+		// We might need to construct a partial entry struct here if needed later
+		entry.ID = id // Ensure ID is set for embedding step
+		entry.Name = name
+		entry.Type = entryType
+		entry.Content = content
+		// Timestamps will be missing
 	}
+
+	// --- Generate embedding for new entry ---
+	if a.embeddingService != nil && entry.ID != 0 {
+		go func(entryToEmbed database.CodexEntry) { // Run in background
+			text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+				entryToEmbed.Name, entryToEmbed.Type, entryToEmbed.Content)
+			embedding, err := a.embeddingService.CreateEmbedding(text)
+			if err != nil {
+				log.Printf("Warning: Failed to create embedding for new entry %d: %v", entryToEmbed.ID, err)
+			} else {
+				if err := a.embeddingService.SaveEmbedding(entryToEmbed.ID, embedding); err != nil {
+					log.Printf("Warning: Failed to save embedding for new entry %d: %v", entryToEmbed.ID, err)
+				} else {
+					log.Printf("Successfully generated and saved embedding for new entry %d", entryToEmbed.ID)
+				}
+			}
+		}(entry) // Pass entry by value to goroutine
+	} else {
+		log.Printf("Skipping embedding generation for new entry %d (service nil: %v, ID zero: %v)",
+			entry.ID, a.embeddingService == nil, entry.ID == 0)
+	}
+	// --- End embedding generation ---
+
 	return entry, nil
 }
 
@@ -59,7 +93,34 @@ func (a *App) UpdateEntry(entry database.CodexEntry) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	return database.DBUpdateEntry(a.db, entry)
+	err := database.DBUpdateEntry(a.db, entry)
+	if err != nil {
+		return err // Return early if DB update failed
+	}
+
+	// --- Update embedding for the entry ---
+	if a.embeddingService != nil && entry.ID != 0 {
+		go func(entryToEmbed database.CodexEntry) { // Run in background
+			text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+				entryToEmbed.Name, entryToEmbed.Type, entryToEmbed.Content)
+			embedding, err := a.embeddingService.CreateEmbedding(text)
+			if err != nil {
+				log.Printf("Warning: Failed to create embedding for updated entry %d: %v", entryToEmbed.ID, err)
+			} else {
+				if err := a.embeddingService.SaveEmbedding(entryToEmbed.ID, embedding); err != nil {
+					log.Printf("Warning: Failed to save embedding for updated entry %d: %v", entryToEmbed.ID, err)
+				} else {
+					log.Printf("Successfully generated and saved embedding for updated entry %d", entryToEmbed.ID)
+				}
+			}
+		}(entry) // Pass entry by value
+	} else {
+		log.Printf("Skipping embedding update for entry %d (service nil: %v, ID zero: %v)",
+			entry.ID, a.embeddingService == nil, entry.ID == 0)
+	}
+	// --- End embedding update ---
+
+	return nil // Return nil if DB update succeeded (embedding happens in background)
 }
 
 // DeleteEntry deletes a codex entry by ID using SQLite
@@ -80,9 +141,14 @@ func (a *App) GetCurrentVaultPath() string {
 
 // App struct holds application state
 type App struct {
-	ctx    context.Context
-	db     *sql.DB // Database connection handle
-	dbPath string  // Current database path
+	ctx              context.Context
+	db               *sql.DB // Database connection handle
+	dbPath           string  // Current database path
+	geminiApiKey     string  // Store Gemini API key for embeddings
+	embeddingService *embeddings.EmbeddingService
+	contextBuilder   *ragcontext.ContextBuilder // Use alias
+	promptBuilder    *llm.PromptBuilder
+	// TODO: Add mutex if concurrent access to these services becomes an issue
 }
 
 // --- Vault Management ---
@@ -131,6 +197,57 @@ func (a *App) SwitchVault(path string) error {
 	}
 	a.db = dbConn
 	a.dbPath = path
+
+	// --- Ensure embeddings table exists ---
+	_, err = a.db.Exec(`CREATE TABLE IF NOT EXISTS codex_embeddings (
+	       id INTEGER PRIMARY KEY AUTOINCREMENT,
+	       codex_entry_id INTEGER NOT NULL UNIQUE, -- Ensure one embedding per entry
+	       embedding BLOB NOT NULL,
+	       vector_version TEXT NOT NULL,
+	       created_at TEXT NOT NULL,
+	       updated_at TEXT NOT NULL,
+	       FOREIGN KEY(codex_entry_id) REFERENCES codex_entries(id) ON DELETE CASCADE
+	   )`)
+	if err != nil {
+		// Log warning but don't fail the vault switch
+		log.Printf("Warning: Failed to create or verify embeddings table: %v", err)
+	}
+	_, err = a.db.Exec(`CREATE INDEX IF NOT EXISTS idx_embeddings_entry_id ON codex_embeddings(codex_entry_id);`)
+	if err != nil {
+		log.Printf("Warning: Failed to create index on embeddings table: %v", err)
+	}
+	// --- End embeddings table check ---
+
+	// --- Initialize Embedding and Context Services ---
+	config := llm.GetConfig() // Assumes config includes GeminiApiKey now
+	a.geminiApiKey = config.GeminiApiKey
+	if a.geminiApiKey == "" {
+		log.Println("Warning: Gemini API Key is not set in config. Embedding features will be disabled.")
+		a.embeddingService = nil
+		a.contextBuilder = nil
+		a.promptBuilder = nil
+	} else {
+		a.embeddingService = embeddings.NewEmbeddingService(a.db, a.geminiApiKey)
+		a.contextBuilder = ragcontext.NewContextBuilder(a.embeddingService) // Use alias
+		a.promptBuilder = llm.NewPromptBuilder(a.contextBuilder)
+
+		// Pre-load existing embeddings into cache in the background
+		go func() {
+			if err := a.embeddingService.LoadEmbeddingsIntoCache(); err != nil {
+				log.Printf("Warning: Failed to pre-load embeddings into cache: %v", err)
+			}
+		}()
+
+		// Process missing embeddings in background
+		go func() {
+			// Add a small delay to allow cache loading to potentially start first
+			time.Sleep(2 * time.Second)
+			if err := a.GenerateMissingEmbeddings(); err != nil {
+				log.Printf("Warning: Failed to generate missing embeddings in background: %v", err)
+			}
+		}()
+	}
+	// --- End Service Initialization ---
 
 	// Initialize LLM package with the new vault path (this will load the cache)
 	if err := llm.Init(path); err != nil {
@@ -523,6 +640,107 @@ func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
 		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
 	}
 	return llm.GetOpenRouterCompletion(prompt, model)
+}
+
+// GenerateMissingEmbeddings ensures all entries have embeddings
+func (a *App) GenerateMissingEmbeddings() error {
+	if a.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if a.embeddingService == nil {
+		log.Println("Skipping GenerateMissingEmbeddings: Embedding service not initialized (likely missing API key).")
+		return nil // Not an error, just skipping
+	}
+
+	log.Println("Starting background check for missing embeddings...")
+
+	// Find entries without embeddings
+	rows, err := a.db.Query(`
+        SELECT e.id, e.name, e.type, e.content
+        FROM codex_entries e
+        LEFT JOIN codex_embeddings em ON e.id = em.codex_entry_id
+        WHERE em.id IS NULL
+    `)
+	if err != nil {
+		return fmt.Errorf("failed to query entries missing embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var processedCount int
+	var entriesToProcess []database.CodexEntry // Collect entries first
+
+	for rows.Next() {
+		var entry database.CodexEntry
+		if err := rows.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content); err != nil {
+			log.Printf("Warning: Failed to scan entry during missing embedding check: %v", err)
+			continue
+		}
+		entriesToProcess = append(entriesToProcess, entry)
+	}
+	if err = rows.Err(); err != nil {
+		log.Printf("Warning: Error iterating rows for missing embeddings: %v", err)
+		// Continue processing the entries found so far
+	}
+
+	if len(entriesToProcess) == 0 {
+		log.Println("No missing embeddings found.")
+		return nil
+	}
+
+	log.Printf("Found %d entries missing embeddings. Processing...", len(entriesToProcess))
+
+	// Process entries sequentially to avoid overwhelming the API
+	for _, entry := range entriesToProcess {
+		// Create text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+
+		// Generate embedding
+		embedding, err := a.embeddingService.CreateEmbedding(text)
+		if err != nil {
+			log.Printf("Warning: Failed to create embedding for entry %d ('%s'): %v", entry.ID, entry.Name, err)
+			// Consider adding a delay or backoff here if API errors are frequent
+			time.Sleep(1 * time.Second) // Simple delay
+			continue                    // Skip this entry
+		}
+
+		// Save embedding
+		if err := a.embeddingService.SaveEmbedding(entry.ID, embedding); err != nil {
+			log.Printf("Warning: Failed to save embedding for entry %d ('%s'): %v", entry.ID, entry.Name, err)
+			continue // Skip this entry
+		}
+
+		processedCount++
+		log.Printf("Generated embedding for entry %d ('%s') (%d/%d)", entry.ID, entry.Name, processedCount, len(entriesToProcess))
+		time.Sleep(500 * time.Millisecond) // Add a small delay between API calls
+	}
+
+	log.Printf("Finished generating missing embeddings. Processed %d entries.", processedCount)
+	return nil
+}
+
+// GetAIResponseWithContext gets AI response using the RAG pipeline
+func (a *App) GetAIResponseWithContext(query string, model string) (string, error) {
+	if a.promptBuilder == nil {
+		log.Println("Warning: GetAIResponseWithContext called but prompt builder not initialized. Falling back to simple generation.")
+		// Fallback to non-contextual response if RAG isn't set up
+		return a.GenerateOpenRouterContent(query, model)
+		// Alternatively, return an error:
+		// return "", fmt.Errorf("RAG system (prompt builder) not initialized, likely missing Gemini API key")
+	}
+
+	log.Printf("Building prompt with context for query: %s", query)
+	// Build prompt with context
+	prompt, err := a.promptBuilder.BuildPromptWithContext(query)
+	if err != nil {
+		log.Printf("Error building prompt with context: %v. Falling back to simple prompt.", err)
+		// Fallback to simple prompt if context building fails
+		prompt = query // Or use llm.BuildSimplePrompt if you have a standard system message
+	}
+
+	// Get OpenRouter completion with the potentially context-enhanced prompt
+	log.Printf("Sending context-aware prompt (length: %d) to model: %s", len(prompt), model)
+	return a.GenerateOpenRouterContent(prompt, model) // Use existing method for the API call
 }
 
 // ProcessAndSaveTextAsEntries takes text, processes it via LLM to extract structured

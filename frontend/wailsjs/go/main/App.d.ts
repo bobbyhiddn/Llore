@@ -12,7 +12,11 @@ export function DeleteEntry(arg1:number):Promise<void>;
 
 export function FetchOpenRouterModelsWithKey(arg1:string):Promise<Array<llm.OpenRouterModel>>;
 
+export function GenerateMissingEmbeddings():Promise<void>;
+
 export function GenerateOpenRouterContent(arg1:string,arg2:string):Promise<string>;
+
+export function GetAIResponseWithContext(arg1:string,arg2:string):Promise<string>;
 
 export function GetAllEntries():Promise<Array<database.CodexEntry>>;
 

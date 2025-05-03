@@ -18,8 +18,16 @@ export function FetchOpenRouterModelsWithKey(arg1) {
   return window['go']['main']['App']['FetchOpenRouterModelsWithKey'](arg1);
 }
 
+export function GenerateMissingEmbeddings() {
+  return window['go']['main']['App']['GenerateMissingEmbeddings']();
+}
+
 export function GenerateOpenRouterContent(arg1, arg2) {
   return window['go']['main']['App']['GenerateOpenRouterContent'](arg1, arg2);
+}
+
+export function GetAIResponseWithContext(arg1, arg2) {
+  return window['go']['main']['App']['GetAIResponseWithContext'](arg1, arg2);
 }
 
 export function GetAllEntries() {

@@ -31,6 +31,7 @@ export namespace llm {
 	    openrouter_api_key: string;
 	    chat_model_id?: string;
 	    story_processing_model_id?: string;
+	    gemini_api_key?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpenRouterConfig(source);
@@ -41,6 +42,7 @@ export namespace llm {
 	        this.openrouter_api_key = source["openrouter_api_key"];
 	        this.chat_model_id = source["chat_model_id"];
 	        this.story_processing_model_id = source["story_processing_model_id"];
+	        this.gemini_api_key = source["gemini_api_key"];
 	    }
 	}
 	export class OpenRouterModel {

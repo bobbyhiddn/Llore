@@ -2,7 +2,8 @@
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import {
-    GenerateOpenRouterContent,
+    GenerateOpenRouterContent, // Keep for potential fallback or other uses
+    GetAIResponseWithContext, // Added for RAG chat
     ListChatLogs,
     LoadChatLog,
     SaveChatLog,
@@ -26,8 +27,8 @@
   let chatError = '';
   let chatDisplayElement: HTMLDivElement;
   let chatMessages: { sender: 'user' | 'ai', text: string }[] = [];
-  let chatContextInjected = false; // Track if codex context has been added
-
+  // Removed: let chatContextInjected = false; // Context is now handled by backend
+ 
   // Chat Log Selection State
   let showChatSelection = true; // Start by showing selection
   let availableChatLogs: string[] = [];
@@ -111,7 +112,7 @@
   function startNewChat() {
     chatMessages = [];
     currentChatLogFilename = null; // Indicate it's a new, unsaved chat
-    chatContextInjected = false;
+    // Removed: chatContextInjected = false;
     showChatSelection = false; // Hide selection UI
     chatError = '';
     chatLogError = ''; // Clear log errors too
@@ -128,9 +129,9 @@
       // Ensure the loaded data structure matches { sender: string, text: string }
       chatMessages = loadedMessages.map(msg => ({ sender: msg.sender as ('user' | 'ai'), text: msg.text }));
       currentChatLogFilename = filename;
-      chatContextInjected = true; // Assume context was injected when log was saved
-    } catch (err) {
-      chatError = `Error loading chat log '${filename}': ${err}`;
+      // Removed: chatContextInjected = true; // Context handling moved to backend
+         } catch (err) {
+           chatError = `Error loading chat log '${filename}': ${err}`;
       chatMessages = [];
       currentChatLogFilename = null;
     } finally {
@@ -164,37 +165,15 @@
     chatInput = '';
 
     try {
-      // --- Context Injection Logic ---
-      let promptToSend = userPrompt;
-      if (!chatContextInjected) {
-        let codexEntries: database.CodexEntry[] = [];
-        try {
-            codexEntries = await GetAllEntries();
-        } catch (err) {
-            console.warn("Could not load codex entries for context:", err);
-            // Proceed without context if loading fails
-        }
-
-        let contextString = '';
-        if (codexEntries && codexEntries.length > 0) {
-          contextString = codexEntries.map(e => `Name: ${e.name}\nType: ${e.type}\nContent: ${e.content}`)
-            .join('\n---\n');
-          // Simple truncation, consider smarter context management later
-          if (contextString.length > 4000) contextString = contextString.slice(0, 4000) + '\n...[Context Truncated]...';
-        }
-        if (contextString) {
-          promptToSend = `Use the following context about my world to answer my questions:\n\n<context>\n${contextString}\n</context>\n\nUser Question: ${userPrompt}`;
-        }
-        chatContextInjected = true; // Mark context as injected for this session
-      }
-
-      // --- Call LLM ---
+      // --- Call LLM with Context (RAG) ---
       const modelToUse = selectedChatModel; // Use the model selected in this view
-      console.log(`Using chat model: ${modelToUse}`);
+      console.log(`Using chat model: ${modelToUse} with context-aware backend.`);
 
-      const aiReply = await GenerateOpenRouterContent(promptToSend, modelToUse);
+      // Use the new backend function which handles context building
+      const aiReply = await GetAIResponseWithContext(userPrompt, modelToUse);
       const newAiMessage = { sender: 'ai' as const, text: aiReply };
       chatMessages = [...chatMessages, newAiMessage];
+      // --- End Call LLM ---
 
       // --- Auto-Save Logic ---
       if (currentChatLogFilename) {
