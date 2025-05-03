@@ -628,7 +628,23 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 		createdEntries = append(createdEntries, createdEntry)
 	}
 
-	return createdEntries, nil
+	// Save entries to database
+	var savedEntries []database.CodexEntry
+	for _, entry := range createdEntries {
+		// Use CreateEntry to save to database and generate embeddings
+		savedEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
+		if err != nil {
+			log.Printf("Warning: Failed to save entry '%s' to database: %v", entry.Name, err)
+			continue
+		}
+		savedEntries = append(savedEntries, savedEntry)
+	}
+
+	if len(savedEntries) == 0 && len(createdEntries) > 0 {
+		return nil, fmt.Errorf("failed to save any entries to database")
+	}
+
+	return savedEntries, nil
 }
 
 // GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.

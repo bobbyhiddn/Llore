@@ -18,7 +18,7 @@
     GenerateOpenRouterContent, SelectVaultFolder, CreateNewVault, SwitchVault,
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
-    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly
+    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
   } from '@wailsjs/go/main/App';
 
   // --- Core App State ---
@@ -442,6 +442,7 @@
       }
   }
 
+
   // --- Library Actions ---
   async function refreshLibraryFiles() {
     if (!vaultIsReady) return;
@@ -851,6 +852,7 @@
    {#if errorMsg}
       <!-- <div class="global-error">{errorMsg}</div> -->
    {/if}
+
 
 </div>
 
