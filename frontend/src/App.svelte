@@ -46,6 +46,19 @@
   let isEditing = false;
   let isGenerating = false; // AI content generation state
   let codexErrorMsg = ''; // Specific errors for CodexView
+  
+  // Add reactivity to track state changes
+  $: if (isLoading !== undefined) {
+    console.log('App.svelte - isLoading changed:', isLoading);
+  }
+  
+  $: if (isEditing !== undefined) {
+    console.log('App.svelte - isEditing changed:', isEditing);
+  }
+  
+  $: if (currentEntry !== undefined) {
+    console.log('App.svelte - currentEntry changed:', currentEntry?.id);
+  }
 
   // --- Library State ---
   let libraryFiles: string[] = [];
@@ -367,78 +380,150 @@
 
   async function handleSaveEntry(event: CustomEvent<{ entryData: database.CodexEntry, isEditing: boolean }>) {
     const { entryData, isEditing: wasEditing } = event.detail;
+    console.log(`handleSaveEntry called. WasEditing: ${wasEditing}`);
+    
+    // Important: Create local copies of state to avoid reactivity issues
+    let tempCurrentEntry = currentEntry;
+    let tempIsEditing = isEditing;
+    
+    // Set loading state
     isLoading = true;
+    console.log(`isLoading set to true`);
     codexErrorMsg = '';
+    
     try {
       if (wasEditing) {
-        console.log("Attempting to update entry:", entryData);
+        console.log("Attempting to update entry:", entryData.id);
         await UpdateEntry(entryData); // Assumes entryData includes the ID
+        console.log("UpdateEntry returned successfully for:", entryData.id);
         alert('Entry updated successfully!'); // Simple feedback for now
-        await loadEntries(); // Refresh list
-        // Reselect the updated entry
-        currentEntry = entries.find(e => e.id === entryData.id) || null;
-        isEditing = !!currentEntry; // Stay in edit mode if found
+        
+        // Refresh entries list
+        await loadEntries(); 
+        console.log("loadEntries after update completed.");
+        
+        // Find the updated entry in the refreshed list
+        const updatedEntry = entries.find(e => e.id === entryData.id) || null;
+        console.log("Found updated entry:", updatedEntry?.id);
+        
+        // Update state in a specific order
+        tempCurrentEntry = updatedEntry;
+        tempIsEditing = !!updatedEntry;
       } else {
-        console.log("Attempting to create entry:", entryData);
+        console.log("Attempting to create entry:", entryData.name);
         const newEntry = await CreateEntry(entryData.name, entryData.type, entryData.content);
+        console.log("CreateEntry returned successfully. New ID:", newEntry.id);
         alert(`Entry '${newEntry.name}' created successfully!`);
-        await loadEntries(); // Refresh list
-        // Select the newly created entry
-        currentEntry = entries.find(e => e.id === newEntry.id) || null;
-        isEditing = !!currentEntry; // Switch to edit mode
+        
+        // Refresh entries list
+        await loadEntries();
+        console.log("loadEntries after create completed.");
+        
+        // Find the newly created entry in the refreshed list
+        const createdEntry = entries.find(e => e.id === newEntry.id) || null;
+        console.log("Found created entry:", createdEntry?.id);
+        
+        // Update state in a specific order
+        tempCurrentEntry = createdEntry;
+        tempIsEditing = !!createdEntry;
       }
     } catch (err) {
-      console.error(`Error ${wasEditing ? 'updating' : 'creating'} entry:`, err);
+      console.error(`Error in handleSaveEntry (${wasEditing ? 'update' : 'create'})`, err);
       codexErrorMsg = `Failed to ${wasEditing ? 'update' : 'create'} entry: ${err}`;
       // Keep currentEntry and isEditing as they were before the failed attempt
     } finally {
+      // Apply state changes after all operations are complete
+      console.log("Setting final state values");
+      currentEntry = tempCurrentEntry;
+      isEditing = tempIsEditing;
+      
+      // IMPORTANT: Reset loading state last
       isLoading = false;
+      console.log(`Final state: isLoading=${isLoading}, isEditing=${isEditing}, currentEntry=${currentEntry?.id}`);
     }
   }
 
   async function handleDeleteEntry(event: CustomEvent<number>) {
     const entryId = event.detail;
+    console.log(`handleDeleteEntry called for ID: ${entryId}`);
+    
+    // Important: Create local copies of state to avoid reactivity issues
+    let tempCurrentEntry = currentEntry;
+    let tempIsEditing = isEditing;
+    
+    // Set loading state
     isLoading = true;
+    console.log(`isLoading set to true in handleDeleteEntry`);
     codexErrorMsg = '';
+    
     try {
       await DeleteEntry(entryId);
+      console.log("DeleteEntry returned successfully for:", entryId);
       alert('Entry deleted successfully!');
-      currentEntry = null; // Deselect
-      isEditing = false;
-      await loadEntries(); // Refresh list
+      
+      // Reset entry selection state
+      tempCurrentEntry = null;
+      tempIsEditing = false;
+      
+      // Refresh entries list
+      await loadEntries();
+      console.log("loadEntries after delete completed.");
     } catch (err) {
       console.error("Error deleting entry:", err);
       codexErrorMsg = `Failed to delete entry: ${err}`;
+      // Keep currentEntry and isEditing as they were before the failed attempt
     } finally {
+      // Apply state changes after all operations are complete
+      console.log("Setting final state values in handleDeleteEntry");
+      currentEntry = tempCurrentEntry;
+      isEditing = tempIsEditing;
+      
+      // IMPORTANT: Reset loading state last
       isLoading = false;
+      console.log(`Final state after delete: isLoading=${isLoading}, isEditing=${isEditing}, currentEntry=${currentEntry?.id}`);
     }
   }
 
   async function handleGenerateCodexContent(event: CustomEvent<{ entryData: database.CodexEntry, model: string }>) {
       const { entryData, model } = event.detail;
+      console.log(`handleGenerateCodexContent called for entry: ${entryData.name}`);
+      
+      // Important: Create local copies of state to avoid reactivity issues
+      let tempCurrentEntry = currentEntry;
+      
+      // Set generating state
       isGenerating = true;
+      console.log(`isGenerating set to true`);
       codexErrorMsg = '';
       let generatedContent = '';
 
-      // Construct prompt (similar to original App.svelte)
+      // Construct prompt
       let prompt = `Expand on the following codex entry. Provide more details, background, or connections based on its name, type, and existing content.\n\nName: ${entryData.name}\nType: ${entryData.type}\nContent: ${entryData.content || '(empty)'}`;
 
       try {
           console.log(`Generating content for entry '${entryData.name}' using model ${model}`);
           generatedContent = await GenerateOpenRouterContent(prompt, model);
-          console.log(`Generated content received: ${generatedContent.substring(0, 100)}...`);
-          // Update the current entry state directly - this will flow down to CodexView
-          if (currentEntry && currentEntry.id === entryData.id) { // Ensure we're updating the selected entry
-              currentEntry = { ...currentEntry, content: generatedContent };
+          console.log("Content generation successful");
+
+          // Update the current entry with the generated content
+          if (isEditing && currentEntry && currentEntry.id === entryData.id) {
+              tempCurrentEntry = { ...currentEntry, content: generatedContent };
+              console.log("Updated existing entry with generated content");
           } else if (!isEditing && entryData.id === 0) { // Handle generating for a new entry
-              currentEntry = { ...entryData, content: generatedContent };
+              tempCurrentEntry = { ...entryData, content: generatedContent };
+              console.log("Updated new entry with generated content");
           }
-          // CodexView's local state will update via the reactive `$: currentEntry` block
       } catch (err) {
           console.error("Error generating content:", err);
           codexErrorMsg = `Error generating content: ${err}`;
       } finally {
+          // Apply state changes after all operations are complete
+          console.log("Setting final state values in handleGenerateCodexContent");
+          currentEntry = tempCurrentEntry;
+          
+          // IMPORTANT: Reset generating state last
           isGenerating = false;
+          console.log(`Final state after generate: isGenerating=${isGenerating}, currentEntry=${currentEntry?.id}`);
       }
   }
 
@@ -671,6 +756,30 @@
       console.log(`Write file saved: ${filename}`);
   }
 
+  // Function to manually reset UI state when the debug button is clicked
+  function handleResetState() {
+    console.log("App.svelte: handleResetState called - manually resetting UI state");
+    
+    // Force reset all state variables that might be causing the UI to lock
+    isLoading = false;
+    isGenerating = false;
+    isEditing = false;
+    
+    // Re-fetch entries to ensure we have the latest data
+    loadEntries();
+    
+    // Log the state after reset
+    console.log("State after reset:", { 
+      isLoading, 
+      isGenerating, 
+      isEditing, 
+      currentEntryId: currentEntry?.id 
+    });
+    
+    // Show feedback to the user
+    alert("UI state has been reset. Please try creating or editing an entry now.");
+  }
+  
   // --- Global Error Handling ---
   // Keep simple global handler or rely on specific error states?
   function handleError(message: string | Event, source?: string, lineno?: number, colno?: number, error?: Error) {
@@ -713,55 +822,10 @@
         currentEntry = null;
         isEditing = true;
       }}
-      on:saveentry={async (e) => {
-        try {
-          isLoading = true;
-          const { entryData, isEditing } = e.detail;
-          if (isEditing) {
-            await UpdateEntry(entryData);
-          } else {
-            await CreateEntry(entryData.name, entryData.type, entryData.content);
-          }
-          entries = await GetAllEntries();
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error saving entry: ${err}`;
-        } finally {
-          isLoading = false;
-        }
-      }}
-      on:deleteentry={async (e) => {
-        try {
-          isLoading = true;
-          const id = e.detail;
-          if (typeof id !== 'number' || id <= 0) {
-            throw new Error('Invalid entry ID');
-          }
-          await DeleteEntry(id);
-          entries = await GetAllEntries();
-          currentEntry = null;
-          isEditing = false;
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error deleting entry: ${err}`;
-        } finally {
-          isLoading = false;
-        }
-      }}
-      on:generatecontent={async (e) => {
-        try {
-          isGenerating = true;
-          const { entryData, model } = e.detail;
-          const prompt = `Generate content for a ${entryData.type} named ${entryData.name}`;
-          const generatedContent = await GenerateOpenRouterContent(prompt, model);
-          currentEntry = { ...entryData, content: generatedContent };
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error generating content: ${err}`;
-        } finally {
-          isGenerating = false;
-        }
-      }}
+      on:saveentry={handleSaveEntry}
+      on:deleteentry={handleDeleteEntry}
+      on:generatecontent={handleGenerateCodexContent}
+      on:resetstate={handleResetState}
       on:error={e => codexErrorMsg = e.detail}
     />
   {:else if mode === 'story'}

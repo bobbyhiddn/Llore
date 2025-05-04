@@ -14,8 +14,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Embedding queue system to process embeddings sequentially
+var (
+	// Create a channel for embedding requests
+	embeddingQueue     = make(chan embeddingRequest, 100)
+	embeddingQueueOnce sync.Once
+)
+
+type embeddingRequest struct {
+	entryID int64
+	text    string
+}
 
 // GetAllEntries retrieves all codex entries from the SQLite database
 func (a *App) GetAllEntries() ([]database.CodexEntry, error) {
@@ -52,38 +65,33 @@ func (a *App) CreateEntry(name, entryType, content string) (database.CodexEntry,
 	row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE id = ?", id)
 	var entry database.CodexEntry
 	if err := row.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
-		// Log the error but don't necessarily fail the whole operation if fetching fails,
-		// as the entry *was* created. The embedding step might still work if ID is valid.
 		log.Printf("Warning: Failed to fetch newly created entry (ID: %d) after insert: %v", id, err)
-		// We might need to construct a partial entry struct here if needed later
-		entry.ID = id // Ensure ID is set for embedding step
+		entry.ID = id
 		entry.Name = name
 		entry.Type = entryType
 		entry.Content = content
-		// Timestamps will be missing
 	}
 
-	// --- Generate embedding for new entry ---
+	// Generate embedding for new entry using the queue system
 	if a.embeddingService != nil && entry.ID != 0 {
-		go func(entryToEmbed database.CodexEntry) { // Run in background
-			text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
-				entryToEmbed.Name, entryToEmbed.Type, entryToEmbed.Content)
-			embedding, err := a.embeddingService.CreateEmbedding(text)
-			if err != nil {
-				log.Printf("Warning: Failed to create embedding for new entry %d: %v", entryToEmbed.ID, err)
-			} else {
-				if err := a.embeddingService.SaveEmbedding(entryToEmbed.ID, embedding); err != nil {
-					log.Printf("Warning: Failed to save embedding for new entry %d: %v", entryToEmbed.ID, err)
-				} else {
-					log.Printf("Successfully generated and saved embedding for new entry %d", entryToEmbed.ID)
-				}
-			}
-		}(entry) // Pass entry by value to goroutine
+		// Initialize worker if not already done
+		a.initEmbeddingWorker()
+		
+		// Prepare text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+		
+		// Send to channel with non-blocking behavior
+		select {
+		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
+			log.Printf("Queued embedding generation for entry %d", entry.ID)
+		default:
+			log.Printf("Warning: Embedding queue full, skipping embedding for entry %d", entry.ID)
+		}
 	} else {
 		log.Printf("Skipping embedding generation for new entry %d (service nil: %v, ID zero: %v)",
 			entry.ID, a.embeddingService == nil, entry.ID == 0)
 	}
-	// --- End embedding generation ---
 
 	return entry, nil
 }
@@ -98,29 +106,28 @@ func (a *App) UpdateEntry(entry database.CodexEntry) error {
 		return err // Return early if DB update failed
 	}
 
-	// --- Update embedding for the entry ---
+	// Update embedding for the entry using the queue system
 	if a.embeddingService != nil && entry.ID != 0 {
-		go func(entryToEmbed database.CodexEntry) { // Run in background
-			text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
-				entryToEmbed.Name, entryToEmbed.Type, entryToEmbed.Content)
-			embedding, err := a.embeddingService.CreateEmbedding(text)
-			if err != nil {
-				log.Printf("Warning: Failed to create embedding for updated entry %d: %v", entryToEmbed.ID, err)
-			} else {
-				if err := a.embeddingService.SaveEmbedding(entryToEmbed.ID, embedding); err != nil {
-					log.Printf("Warning: Failed to save embedding for updated entry %d: %v", entryToEmbed.ID, err)
-				} else {
-					log.Printf("Successfully generated and saved embedding for updated entry %d", entryToEmbed.ID)
-				}
-			}
-		}(entry) // Pass entry by value
+		// Initialize worker if not already done
+		a.initEmbeddingWorker()
+		
+		// Prepare text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+		
+		// Send to channel with non-blocking behavior
+		select {
+		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
+			log.Printf("Queued embedding update for entry %d", entry.ID)
+		default:
+			log.Printf("Warning: Embedding queue full, skipping embedding update for entry %d", entry.ID)
+		}
 	} else {
 		log.Printf("Skipping embedding update for entry %d (service nil: %v, ID zero: %v)",
 			entry.ID, a.embeddingService == nil, entry.ID == 0)
 	}
-	// --- End embedding update ---
 
-	return nil // Return nil if DB update succeeded (embedding happens in background)
+	return nil
 }
 
 // DeleteEntry deletes a codex entry by ID using SQLite
@@ -928,4 +935,33 @@ func getLastNChars(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// Fetchllm.OpenRouterModelsWithKey fetches models using a provided API key.
+// initEmbeddingWorker initializes the embedding worker goroutine
+func (a *App) initEmbeddingWorker() {
+	embeddingQueueOnce.Do(func() {
+		go func() {
+			for req := range embeddingQueue {
+				if a.embeddingService == nil {
+					log.Println("Warning: Embedding service not initialized, skipping embedding for entry:", req.entryID)
+					continue
+				}
+				
+				// Create embedding
+				embedding, err := a.embeddingService.CreateEmbedding(req.text)
+				if err != nil {
+					log.Printf("Warning: Failed to create embedding for entry %d: %v", req.entryID, err)
+					continue
+				}
+				
+				// Save embedding (SaveEmbedding now has its own mutex)
+				if err := a.embeddingService.SaveEmbedding(req.entryID, embedding); err != nil {
+					log.Printf("Warning: Failed to save embedding for entry %d: %v", req.entryID, err)
+				} else {
+					log.Printf("Successfully generated and saved embedding for entry %d", req.entryID)
+				}
+				
+				// Add a small delay between operations to reduce contention
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	})
+}

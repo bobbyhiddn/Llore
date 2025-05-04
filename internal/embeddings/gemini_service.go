@@ -26,6 +26,7 @@ type EmbeddingService struct {
 	apiKey     string
 	cache      map[int64][]float32
 	cacheMutex sync.RWMutex
+	dbMutex    sync.Mutex  // Add this new mutex for database operations
 }
 
 // NewEmbeddingService creates a new embedding service
@@ -131,10 +132,14 @@ func (s *EmbeddingService) SaveEmbedding(entryID int64, embedding []float32) err
 		binary.LittleEndian.PutUint32(embeddingBytes[i*4:], math.Float32bits(v))
 	}
 
+	// Lock the database during write operation
+	s.dbMutex.Lock()
+	defer s.dbMutex.Unlock()
+
 	// Use INSERT OR REPLACE to handle both new and existing entries atomically
 	// This relies on the UNIQUE constraint on codex_entry_id.
 	// It keeps the original created_at timestamp if replacing an existing row.
-	_, err := s.db.Exec( // Can use Exec directly for single atomic statement
+	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO codex_embeddings
          (codex_entry_id, embedding, vector_version, created_at, updated_at)
          VALUES (?, ?, ?,

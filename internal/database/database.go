@@ -24,11 +24,18 @@ type CodexEntry struct {
 // Returns the connection handle or an error.
 func DBInitialize(dbPath string) (*sql.DB, error) {
 	log.Printf("Initializing database connection for: %s\n", dbPath)
-	dbConn, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on")
+	
+	// Use better connection parameters for SQLite
+	connString := dbPath + "?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL"
+	
+	dbConn, err := sql.Open("sqlite", connString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database %s: %w", dbPath, err)
 	}
-
+	
+	// Set connection pool parameters
+	dbConn.SetMaxOpenConns(1) // Limit concurrent connections
+	
 	// Check connection
 	err = dbConn.Ping()
 	if err != nil {

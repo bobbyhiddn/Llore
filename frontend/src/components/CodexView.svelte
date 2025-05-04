@@ -12,17 +12,42 @@
   export let selectedModel: string = ''; // Needed for generate content
 
   // Local state for the form binding if needed, or bind directly to prop
-  let localCurrentEntry: database.CodexEntry = { id: 0, name: '', type: '', content: '', createdAt: '', updatedAt: '' };
+  let localName = '';
+  let localType = '';
+  let localContent = '';
+  let localId = 0;
 
-  $: if (currentEntry) {
-      // Deep copy to avoid modifying the prop directly until save
-      localCurrentEntry = JSON.parse(JSON.stringify(currentEntry));
-  } else {
+  // Update local variables when currentEntry changes
+  $: {
+    console.log('CodexView reactive update - currentEntry changed:', currentEntry);
+    console.log('CodexView reactive update - isEditing:', isEditing);
+    console.log('CodexView reactive update - isLoading:', isLoading);
+    console.log('CodexView reactive update - isGenerating:', isGenerating);
+    
+    if (currentEntry) {
+      // Update local variables from currentEntry
+      localName = currentEntry.name || '';
+      localType = currentEntry.type || '';
+      localContent = currentEntry.content || '';
+      localId = currentEntry.id || 0;
+      console.log('CodexView: local variables updated from currentEntry');
+    } else {
       // Reset local state if currentEntry becomes null
-      localCurrentEntry = { id: 0, name: '', type: '', content: '', createdAt: '', updatedAt: '' };
+      localName = '';
+      localType = '';
+      localContent = '';
+      localId = 0;
+      console.log('CodexView: local variables reset to empty state');
+    }
   }
-
+  
   const dispatch = createEventDispatcher();
+  
+  // Function to force reset the editing state
+  function forceResetState() {
+    console.log('Forcing state reset');
+    dispatch('resetstate');
+  }
 
   function handleEntrySelect(entry: database.CodexEntry) {
     dispatch('selectentry', entry);
@@ -30,35 +55,41 @@
 
   function prepareNewEntry() {
     dispatch('newentry');
-    // Optionally focus the name input after dispatch
-    // setTimeout(() => document.getElementById('codex-name-input')?.focus(), 0);
   }
 
   function handleSaveEntry() {
     // Validate local state before dispatching
-    if (!localCurrentEntry.name) {
+    if (!localName) {
         dispatch('error', 'Entry must have a name.');
         return;
     }
-    if (isEditing && (typeof localCurrentEntry.id !== 'number' || localCurrentEntry.id <= 0)) {
-        dispatch('error', 'Cannot update: Invalid entry ID.');
-        return;
-    }
-    dispatch('saveentry', { entryData: localCurrentEntry, isEditing });
+    
+    // Create entry object from local variables
+    const entryData: database.CodexEntry = {
+      id: localId,
+      name: localName,
+      type: localType,
+      content: localContent,
+      createdAt: '',
+      updatedAt: ''
+    };
+    
+    // Dispatch save event
+    dispatch('saveentry', { entryData, isEditing });
   }
 
   function handleDeleteEntry() {
-    if (!localCurrentEntry || typeof localCurrentEntry.id !== 'number' || localCurrentEntry.id <= 0) {
+    if (typeof localId !== 'number' || localId <= 0) {
       dispatch('error', 'No valid entry selected for deletion.');
       return;
     }
-    if (confirm(`Are you sure you want to delete '${localCurrentEntry.name}'?`)) {
-      dispatch('deleteentry', localCurrentEntry.id);
+    if (confirm(`Are you sure you want to delete '${localName}'?`)) {
+      dispatch('deleteentry', localId);
     }
   }
 
-  async function handleGenerateContent() {
-    if (!localCurrentEntry || !localCurrentEntry.name) {
+  function handleGenerateContent() {
+    if (!localName) {
         dispatch('error', 'Please provide a name before generating content.');
         return;
     }
@@ -66,14 +97,37 @@
         dispatch('error', 'Please select an AI model from the settings first.');
         return;
     }
-    // Dispatch event with necessary info for App.svelte to call backend
-    dispatch('generatecontent', { entryData: localCurrentEntry, model: selectedModel });
+    
+    // Create entry object from local variables
+    const entryData: database.CodexEntry = {
+      id: localId,
+      name: localName,
+      type: localType,
+      content: localContent,
+      createdAt: '',
+      updatedAt: ''
+    };
+    
+    // Dispatch generate content event
+    dispatch('generatecontent', { entryData, model: selectedModel });
   }
 
   function goBack() {
     dispatch('back');
   }
 
+  // Handle input changes
+  function handleNameChange(event: Event) {
+    localName = (event.target as HTMLInputElement).value;
+  }
+  
+  function handleTypeChange(event: Event) {
+    localType = (event.target as HTMLInputElement).value;
+  }
+  
+  function handleContentChange(event: Event) {
+    localContent = (event.target as HTMLTextAreaElement).value;
+  }
 </script>
 
 <button class="back-btn" on:click={goBack}>← Back to Mode Choice</button>
@@ -103,14 +157,16 @@
   <div class="codex-entry">
     {#if isEditing || !currentEntry} <!-- Show form for new or editing -->
       <form on:submit|preventDefault={handleSaveEntry}>
-        <h2>{isEditing ? `Edit Entry: ${localCurrentEntry.name}` : 'Create New Entry'}</h2>
+        <h2>{isEditing ? `Edit Entry: ${localName}` : 'Create New Entry'}</h2>
         <div class="codex-entry-content">
+          
           <div class="codex-entry-field">
             <label for="name">Name:</label>
             <input
               type="text"
               id="name"
-              bind:value={localCurrentEntry.name}
+              value={localName}
+              on:input={handleNameChange}
               placeholder="Entry name"
               required
             />
@@ -121,7 +177,8 @@
             <input
               type="text"
               id="type"
-              bind:value={localCurrentEntry.type}
+              value={localType}
+              on:input={handleTypeChange}
               placeholder="Entry type (e.g., Character, Location)"
             />
           </div>
@@ -130,7 +187,8 @@
             <label for="content">Content:</label>
             <textarea
               id="content"
-              bind:value={localCurrentEntry.content}
+              value={localContent}
+              on:input={handleContentChange}
               placeholder="Describe the entry..."
             />
           </div>
@@ -160,6 +218,15 @@
               Delete Entry
             </button>
           {/if}
+          
+          <!-- Debug button to help diagnose the issue -->
+          <button
+            type="button"
+            class="debug-btn"
+            on:click={forceResetState}
+          >
+            Reset UI State
+          </button>
         </div>
 
         {#if errorMsg}
@@ -309,7 +376,13 @@
     background: #0984e3; /* Blue for generate */
     color: white;
   }
-   .generate-btn:hover:not(:disabled) { background: #74b9ff; } /* Lighter blue */
+  .generate-btn:hover:not(:disabled) { background: #74b9ff; } /* Lighter blue */
+
+  .debug-btn {
+    background: #9b59b6; /* Purple for debug */
+    color: white;
+  }
+  .debug-btn:hover:not(:disabled) { background: #8e44ad; } /* Darker purple */
 
   .new-entry-btn {
     background: var(--success-color); /* Green for new */
