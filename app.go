@@ -351,39 +351,28 @@ func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process story into codex entries: %w", err)
 	}
-	created := make([]database.CodexEntry, 0, len(entries))
-	for _, entry := range entries {
-		// First try to find if an entry with this name exists
-		var existingId int64
-		err := a.db.QueryRow("SELECT id FROM codex_entries WHERE name = ?", entry.Name).Scan(&existingId)
 
-		if err == nil {
-			// Entry exists, update it
-			updatedEntry := database.CodexEntry{
-				ID:        existingId,
-				Name:      entry.Name,
-				Type:      entry.Type,
-				Content:   entry.Content,
-				CreatedAt: entry.CreatedAt,
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-			err = a.UpdateEntry(updatedEntry)
-			if err != nil {
-				log.Printf("Warning: Failed to update existing codex entry '%s': %v", entry.Name, err)
-				continue
-			}
-			created = append(created, updatedEntry)
+	// Count how many entries were created vs updated
+	newEntries := 0
+	updatedEntries := 0
+	for _, entry := range entries {
+		// Check if this is a new or updated entry based on created_at and updated_at
+		if entry.CreatedAt == entry.UpdatedAt {
+			newEntries++
 		} else {
-			// Entry doesn't exist, create new
-			newEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
-			if err != nil {
-				log.Printf("Warning: Failed to insert new codex entry '%s': %v", entry.Name, err)
-				continue
-			}
-			created = append(created, newEntry)
+			updatedEntries++
 		}
 	}
-	return created, nil
+
+	// Log summary of the import operation
+	log.Printf("Import complete. Processed %d entries: %d new, %d updated.",
+		len(entries), newEntries, updatedEntries)
+
+	if updatedEntries > 0 {
+		log.Printf("Note: %d entries already existed and were updated with merged content.", updatedEntries)
+	}
+
+	return entries, nil
 }
 
 // ReadLibraryFile reads the content of a file from the vault's Library folder
@@ -617,37 +606,88 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 
 	// Process the structured entries
 	now := time.Now().UTC()
-	var createdEntries []database.CodexEntry
+	var processedEntries []database.CodexEntry
 	for _, llmEntry := range llmEntries {
 		if llmEntry.Name == "" {
 			log.Println("Warning: Skipping entry with empty name from LLM response.")
 			continue
 		}
-		createdEntry := database.CodexEntry{
-			ID:        time.Now().UnixNano(),
-			Name:      llmEntry.Name,
-			Type:      llmEntry.Type,
-			Content:   llmEntry.Content,
-			CreatedAt: now.Format(time.RFC3339),
-			UpdatedAt: now.Format(time.RFC3339),
+		
+		// Check if an entry with this name already exists
+		var existingEntry database.CodexEntry
+		row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE name = ?", llmEntry.Name)
+		err := row.Scan(&existingEntry.ID, &existingEntry.Name, &existingEntry.Type, &existingEntry.Content, &existingEntry.CreatedAt, &existingEntry.UpdatedAt)
+		
+		if err == nil {
+			// Entry exists, merge the content
+			log.Printf("Merging new information into existing entry '%s'", llmEntry.Name)
+			
+			// Keep the existing type if the new one is empty or generic
+			entryType := llmEntry.Type
+			if entryType == "" || entryType == "Generated" {
+				entryType = existingEntry.Type
+			}
+			
+			// Merge the content - add the new content if it contains new information
+			mergedContent := existingEntry.Content
+			if !strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(llmEntry.Content)) {
+				mergedContent = existingEntry.Content + "\n\nAdditional information:\n" + llmEntry.Content
+			}
+			
+			updatedEntry := database.CodexEntry{
+				ID:        existingEntry.ID,
+				Name:      existingEntry.Name,
+				Type:      entryType,
+				Content:   mergedContent,
+				CreatedAt: existingEntry.CreatedAt,
+				UpdatedAt: now.Format(time.RFC3339),
+			}
+			
+			processedEntries = append(processedEntries, updatedEntry)
+		} else {
+			// Create a new entry
+			newEntry := database.CodexEntry{
+				ID:        time.Now().UnixNano(),
+				Name:      llmEntry.Name,
+				Type:      llmEntry.Type,
+				Content:   llmEntry.Content,
+				CreatedAt: now.Format(time.RFC3339),
+				UpdatedAt: now.Format(time.RFC3339),
+			}
+			
+			processedEntries = append(processedEntries, newEntry)
 		}
-
-		createdEntries = append(createdEntries, createdEntry)
 	}
 
 	// Save entries to database
 	var savedEntries []database.CodexEntry
-	for _, entry := range createdEntries {
-		// Use CreateEntry to save to database and generate embeddings
-		savedEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
-		if err != nil {
-			log.Printf("Warning: Failed to save entry '%s' to database: %v", entry.Name, err)
-			continue
+	var updatedCount, createdCount int
+	
+	for _, entry := range processedEntries {
+		if entry.ID > 0 {
+			// This is an existing entry that needs to be updated
+			err := a.UpdateEntry(entry)
+			if err != nil {
+				log.Printf("Warning: Failed to update entry '%s' in database: %v", entry.Name, err)
+				continue
+			}
+			updatedCount++
+			savedEntries = append(savedEntries, entry)
+		} else {
+			// This is a new entry that needs to be created
+			savedEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
+			if err != nil {
+				log.Printf("Warning: Failed to create entry '%s' in database: %v", entry.Name, err)
+				continue
+			}
+			createdCount++
+			savedEntries = append(savedEntries, savedEntry)
 		}
-		savedEntries = append(savedEntries, savedEntry)
 	}
 
-	if len(savedEntries) == 0 && len(createdEntries) > 0 {
+	log.Printf("Story processing complete. Created %d new entries, updated %d existing entries.", createdCount, updatedCount)
+	
+	if len(savedEntries) == 0 && len(processedEntries) > 0 {
 		return nil, fmt.Errorf("failed to save any entries to database")
 	}
 
