@@ -605,12 +605,14 @@
           // We might need a different backend function if we *only* want to process text without saving
           // Assuming ImportStoryTextAndFile is suitable for now, but filename will be missing.
           // Let's use ProcessStory for text-only input for now.
-          resultEntries = await ProcessStory(content); // Use ProcessStory for text area
-          newCount = resultEntries.length; // ProcessStory likely only returns new entries
+          // Assume ProcessStory blocks until embeddings are done and returns ProcessStoryResult
+          if (storyImportViewRef) storyImportViewRef.updateImportStatus('sending'); // Set status
+          const result = await ProcessStory(content); // Expect ProcessStoryResult
 
-          // Update state and notify child
+          // Update state and notify child with the actual result from backend
           if (storyImportViewRef) {
-              storyImportViewRef.showImportSuccess({ entries: resultEntries, newCount: newCount, updatedCount: 0 });
+              // Pass the structured result from the backend
+              storyImportViewRef.showImportSuccess({ newEntries: result.newEntries || [], updatedEntries: result.updatedEntries || [] });
           }
           await loadEntries(); // Refresh codex entries
           // Don't refresh library as text wasn't saved to a file here
@@ -618,66 +620,58 @@
           console.error("Error processing story text:", err);
           storyImportErrorMsg = `Failed to process story text: ${err}`;
           if (storyImportViewRef) {
-              storyImportViewRef.setProcessingError(storyImportErrorMsg, 'story');
+              // Use the specific error function for text area if needed, or the general one
+              // storyImportViewRef.setProcessingError(storyImportErrorMsg, 'story');
+              storyImportViewRef.setImportError(storyImportErrorMsg); // Use the general import error setter
           }
       } finally {
-          isProcessingStory = false;
+          isProcessingStory = false; // Keep separate flag for text area button state
       }
   }
 
-  async function handleProcessImport(event: CustomEvent<{ content: string, filename: string, force: boolean }>) {
-      const { content, filename, force } = event.detail;
-      isProcessingImport = true;
+  async function handleProcessImport(event: CustomEvent<{ content: string }>) { // Remove filename, force from event type
+      const { content } = event.detail; // Remove filename, force
+      // isProcessingImport = true; // Status handles loading state now
       storyImportErrorMsg = '';
       storyImportSuccessMsg = '';
 
+      // Update status via child component ref
+      if (storyImportViewRef) storyImportViewRef.updateImportStatus('sending');
+
       try {
-          // Call backend function that saves the file and processes it
-          // NOTE: This assumes ImportStoryTextAndFile saves the file named 'filename' and returns processed entries.
-          // The 'force' logic needs to be handled before calling or the backend needs adjustment.
-          // For now, we proceed with the frontend check simulation.
-          const resultEntriesFromFile = await ImportStoryTextAndFile(content); // Use the single-argument version
+          // Call ProcessStory, same as text import. Ignore filename/force.
+          // Assume ProcessStory blocks until embeddings are done and returns ProcessStoryResult
+          const result = await ProcessStory(content); // Expect ProcessStoryResult
 
-          // Assuming result structure: { entries: CodexEntry[], existing: CodexEntry[], newCount: number, updatedCount: number } - This needs verification based on actual backend return
-          // Or maybe it throws an error if existing are found without force? Let's refine based on actual backend.
+          // TODO: Ideally, the backend would emit events for 'receiving', 'parsing', 'embedding' etc.
+          // Without backend events, we jump from 'sending' straight to 'complete' or 'error'.
+          // We could potentially call updateImportStatus('embedding') just before showImportSuccess
+          // if we know embeddings are the *very last* step, but it's still an assumption.
+          if (storyImportViewRef) storyImportViewRef.updateImportStatus('embedding'); // Optimistic: Assume embedding is last step before success
 
-          // TEMPORARY: Simulate backend logic for checking existing (backend should ideally handle this)
-          const potentialEntries = await ProcessStory(content); // Simulate processing
-          const currentEntries = await GetAllEntries();
-          const currentNames = new Set(currentEntries.map(e => e.name.toLowerCase()));
-          const foundExisting = potentialEntries.filter(p => currentNames.has(p.name.toLowerCase()));
-
-          if (foundExisting.length > 0 && !force) {
-              // Ask for confirmation via the child component
-              if (storyImportViewRef) {
-                  storyImportViewRef.showExistingConfirmation(foundExisting);
-              }
-              isProcessingImport = false; // Stop loading as we wait for user confirmation
-              return; // Don't proceed further
-          }
-
-          // If forcing or no existing found, proceed (Backend should handle actual creation/update)
-          // For now, just simulate success based on ProcessStory result
-          const processedEntries = potentialEntries; // Use simulated result
-          const newEntriesCount = processedEntries.length; // Simplistic count
-
+          // Call success function with the actual data from the backend
           if (storyImportViewRef) {
-              storyImportViewRef.showImportSuccess({ entries: processedEntries, newCount: newEntriesCount, updatedCount: (force ? foundExisting.length : 0) });
+              // Pass the structured result from the backend
+              storyImportViewRef.showImportSuccess({
+                  newEntries: result.newEntries || [],
+                  updatedEntries: result.updatedEntries || []
+              });
           }
+
           await loadEntries(); // Refresh codex
-          await refreshLibraryFiles(); // Refresh library as file was involved
+          // Don't refresh library, as we didn't explicitly save the file here
+          // await refreshLibraryFiles();
 
       } catch (err) {
           console.error("Error processing story import:", err);
           storyImportErrorMsg = `Failed to process story import: ${err}`;
           if (storyImportViewRef) {
-              storyImportViewRef.setProcessingError(storyImportErrorMsg, 'import');
+              // Use the unified error handler in the child component
+              storyImportViewRef.setImportError(storyImportErrorMsg);
           }
       } finally {
-          // Ensure loading state is reset unless waiting for confirmation
-          if (isProcessingImport) { // Check if it wasn't reset by confirmation logic
-             isProcessingImport = false;
-          }
+          // No need to manage isProcessingImport here, status is handled by child component
+          // isProcessingImport = false;
       }
   }
 
@@ -702,8 +696,11 @@
       isLoading = true; // Use global loading? Or chat loading?
       codexErrorMsg = ''; // Clear codex error specifically
       try {
-          const potentialEntries: database.CodexEntry[] = await ProcessStory(text);
-          if (!potentialEntries || potentialEntries.length === 0) {
+          // ProcessStory now returns ProcessStoryResult
+          const result = await ProcessStory(text);
+          const potentialNewEntries = result.newEntries || []; // Use only new entries for this function's purpose
+
+          if (!potentialNewEntries || potentialNewEntries.length === 0) {
               alert('AI processing did not extract any structured entries from the chat response.');
               isLoading = false;
               return;
@@ -711,7 +708,8 @@
 
           let processedCount = 0;
           let errorMessages = [];
-          for (const entry of potentialEntries) {
+          // Iterate over the potential new entries extracted
+          for (const entry of potentialNewEntries) {
               try {
                   if (!entry.name || !entry.type) {
                       console.warn("Skipping entry with missing name or type:", entry);
@@ -832,15 +830,13 @@
     <StoryImportView
       bind:this={storyImportViewRef}
       bind:isProcessingStory
-      bind:isProcessingImport
-      bind:processStoryErrorMsg={storyImportErrorMsg}
-      bind:importError={storyImportErrorMsg}
       {vaultIsReady}
       on:back={() => setModeAndUpdate(null)}
       on:importstorytext={handleImportStoryText}
       on:processimport={handleProcessImport}
-      on:error={(e) => storyImportErrorMsg = e.detail}
+      on:error={(e) => storyImportViewRef?.setImportError(e.detail)}
       on:importsuccess={handleImportSuccess}
+      on:gotocodex={() => setModeAndUpdate('codex')}
     />
   {:else if mode === 'library'}
     <LibraryView

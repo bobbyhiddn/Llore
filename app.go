@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+// ProcessStoryResult holds the separated lists of new and updated entries.
+type ProcessStoryResult struct {
+	NewEntries     []database.CodexEntry `json:"newEntries"`
+	UpdatedEntries []database.CodexEntry `json:"updatedEntries"`
+}
+
 // Embedding queue system to process embeddings sequentially
 var (
 	// Create a channel for embedding requests
@@ -76,11 +82,11 @@ func (a *App) CreateEntry(name, entryType, content string) (database.CodexEntry,
 	if a.embeddingService != nil && entry.ID != 0 {
 		// Initialize worker if not already done
 		a.initEmbeddingWorker()
-		
+
 		// Prepare text for embedding
 		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
 			entry.Name, entry.Type, entry.Content)
-		
+
 		// Send to channel with non-blocking behavior
 		select {
 		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
@@ -110,11 +116,11 @@ func (a *App) UpdateEntry(entry database.CodexEntry) error {
 	if a.embeddingService != nil && entry.ID != 0 {
 		// Initialize worker if not already done
 		a.initEmbeddingWorker()
-		
+
 		// Prepare text for embedding
 		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
 			entry.Name, entry.Type, entry.Content)
-		
+
 		// Send to channel with non-blocking behavior
 		select {
 		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
@@ -347,32 +353,29 @@ func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error)
 	}
 
 	// Process the story into codex entries
-	entries, err := a.ProcessStory(text)
+	result, err := a.ProcessStory(text) // Now returns ProcessStoryResult
 	if err != nil {
 		return nil, fmt.Errorf("failed to process story into codex entries: %w", err)
 	}
 
-	// Count how many entries were created vs updated
-	newEntries := 0
-	updatedEntries := 0
-	for _, entry := range entries {
-		// Check if this is a new or updated entry based on created_at and updated_at
-		if entry.CreatedAt == entry.UpdatedAt {
-			newEntries++
-		} else {
-			updatedEntries++
-		}
-	}
+	// Use counts from the result struct
+	newCount := len(result.NewEntries)
+	updatedCount := len(result.UpdatedEntries)
+	totalProcessed := newCount + updatedCount
 
 	// Log summary of the import operation
 	log.Printf("Import complete. Processed %d entries: %d new, %d updated.",
-		len(entries), newEntries, updatedEntries)
+		totalProcessed, newCount, updatedCount)
 
-	if updatedEntries > 0 {
-		log.Printf("Note: %d entries already existed and were updated with merged content.", updatedEntries)
+	if updatedCount > 0 {
+		log.Printf("Note: %d entries already existed and were updated with merged content.", updatedCount)
 	}
 
-	return entries, nil
+	// Combine new and updated entries for the return value (as the function signature still expects []database.CodexEntry)
+	// TODO: Consider changing ImportStoryTextAndFile return type to ProcessStoryResult in the future if needed.
+	allEntries := append(result.NewEntries, result.UpdatedEntries...)
+
+	return allEntries, nil
 }
 
 // ReadLibraryFile reads the content of a file from the vault's Library folder
@@ -540,7 +543,7 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 // ProcessStory sends a prompt to the LLM and processes the structured response.
-func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
+func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) { // Changed return type
 	// Construct a simplified prompt asking for JSON output
 	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
 
@@ -559,7 +562,7 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 	llmResponse, err := a.GenerateOpenRouterContent(simplifiedPrompt, processingModel)
 	if err != nil {
 		log.Printf("Error generating content from OpenRouter: %v", err)
-		return nil, fmt.Errorf("failed to get OpenRouter response: %w", err)
+		return ProcessStoryResult{}, fmt.Errorf("failed to get OpenRouter response: %w", err) // Changed return
 	}
 
 	log.Println("Received LLM response, attempting to parse JSON...")
@@ -592,48 +595,43 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 		log.Printf("Warning: LLM response was not a valid JSON array of entries. Error: %v", err)
 		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
-		now := time.Now().UTC()
-		fallbackEntry := database.CodexEntry{
-			ID:        time.Now().UnixNano(),
-			Name:      "Generated CodexEntry (Unstructured)", // Provide a default name
-			Type:      "Generated",                           // Provide a default type
-			Content:   llmResponse,
-			CreatedAt: now.Format(time.RFC3339),
-			UpdatedAt: now.Format(time.RFC3339),
-		}
-		return []database.CodexEntry{fallbackEntry}, nil // Return as a slice
+		// Remove unused fallbackEntry declaration
+		// For now, returning empty result.
+		log.Println("Returning empty result due to LLM response parsing error.")
+		return ProcessStoryResult{}, nil // Changed return
 	}
 
 	// Process the structured entries
 	now := time.Now().UTC()
-	var processedEntries []database.CodexEntry
+	var newEntriesResult []database.CodexEntry     // Initialize new slice
+	var updatedEntriesResult []database.CodexEntry // Initialize updated slice
 	for _, llmEntry := range llmEntries {
 		if llmEntry.Name == "" {
 			log.Println("Warning: Skipping entry with empty name from LLM response.")
 			continue
 		}
-		
+
 		// Check if an entry with this name already exists
 		var existingEntry database.CodexEntry
 		row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE name = ?", llmEntry.Name)
 		err := row.Scan(&existingEntry.ID, &existingEntry.Name, &existingEntry.Type, &existingEntry.Content, &existingEntry.CreatedAt, &existingEntry.UpdatedAt)
-		
+
 		if err == nil {
 			// Entry exists, merge the content
 			log.Printf("Merging new information into existing entry '%s'", llmEntry.Name)
-			
+
 			// Keep the existing type if the new one is empty or generic
 			entryType := llmEntry.Type
 			if entryType == "" || entryType == "Generated" {
 				entryType = existingEntry.Type
 			}
-			
+
 			// Merge the content - add the new content if it contains new information
 			mergedContent := existingEntry.Content
 			if !strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(llmEntry.Content)) {
 				mergedContent = existingEntry.Content + "\n\nAdditional information:\n" + llmEntry.Content
 			}
-			
+
 			updatedEntry := database.CodexEntry{
 				ID:        existingEntry.ID,
 				Name:      existingEntry.Name,
@@ -642,56 +640,32 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 				CreatedAt: existingEntry.CreatedAt,
 				UpdatedAt: now.Format(time.RFC3339),
 			}
-			
-			processedEntries = append(processedEntries, updatedEntry)
-		} else {
-			// Create a new entry
-			newEntry := database.CodexEntry{
-				ID:        time.Now().UnixNano(),
-				Name:      llmEntry.Name,
-				Type:      llmEntry.Type,
-				Content:   llmEntry.Content,
-				CreatedAt: now.Format(time.RFC3339),
-				UpdatedAt: now.Format(time.RFC3339),
+
+			// Update in DB
+			err = a.UpdateEntry(updatedEntry) // Use existing UpdateEntry which queues embedding
+			if err != nil {
+				log.Printf("Warning: Failed to update entry '%s' in database: %v", updatedEntry.Name, err)
+				continue
 			}
-			
-			processedEntries = append(processedEntries, newEntry)
+			updatedEntriesResult = append(updatedEntriesResult, updatedEntry) // Add to updated list
+
+		} else if err == sql.ErrNoRows { // Entry does not exist
+			// Create new entry in DB
+			savedEntry, err := a.CreateEntry(llmEntry.Name, llmEntry.Type, llmEntry.Content) // Use existing CreateEntry which queues embedding
+			if err != nil {
+				log.Printf("Warning: Failed to create entry '%s' in database: %v", llmEntry.Name, err)
+				continue
+			}
+			newEntriesResult = append(newEntriesResult, savedEntry) // Add to new list
+		} else { // Other DB error during check
+			log.Printf("Error checking for existing entry '%s': %v", llmEntry.Name, err)
+			continue
 		}
 	}
 
-	// Save entries to database
-	var savedEntries []database.CodexEntry
-	var updatedCount, createdCount int
-	
-	for _, entry := range processedEntries {
-		if entry.ID > 0 {
-			// This is an existing entry that needs to be updated
-			err := a.UpdateEntry(entry)
-			if err != nil {
-				log.Printf("Warning: Failed to update entry '%s' in database: %v", entry.Name, err)
-				continue
-			}
-			updatedCount++
-			savedEntries = append(savedEntries, entry)
-		} else {
-			// This is a new entry that needs to be created
-			savedEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
-			if err != nil {
-				log.Printf("Warning: Failed to create entry '%s' in database: %v", entry.Name, err)
-				continue
-			}
-			createdCount++
-			savedEntries = append(savedEntries, savedEntry)
-		}
-	}
+	log.Printf("Story processing complete. Created %d new entries, updated %d existing entries.", len(newEntriesResult), len(updatedEntriesResult))
 
-	log.Printf("Story processing complete. Created %d new entries, updated %d existing entries.", createdCount, updatedCount)
-	
-	if len(savedEntries) == 0 && len(processedEntries) > 0 {
-		return nil, fmt.Errorf("failed to save any entries to database")
-	}
-
-	return savedEntries, nil
+	return ProcessStoryResult{NewEntries: newEntriesResult, UpdatedEntries: updatedEntriesResult}, nil // Return the struct
 }
 
 // GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
@@ -984,21 +958,21 @@ func (a *App) initEmbeddingWorker() {
 					log.Println("Warning: Embedding service not initialized, skipping embedding for entry:", req.entryID)
 					continue
 				}
-				
+
 				// Create embedding
 				embedding, err := a.embeddingService.CreateEmbedding(req.text)
 				if err != nil {
 					log.Printf("Warning: Failed to create embedding for entry %d: %v", req.entryID, err)
 					continue
 				}
-				
+
 				// Save embedding (SaveEmbedding now has its own mutex)
 				if err := a.embeddingService.SaveEmbedding(req.entryID, embedding); err != nil {
 					log.Printf("Warning: Failed to save embedding for entry %d: %v", req.entryID, err)
 				} else {
 					log.Printf("Successfully generated and saved embedding for entry %d", req.entryID)
 				}
-				
+
 				// Add a small delay between operations to reduce contention
 				time.Sleep(100 * time.Millisecond)
 			}

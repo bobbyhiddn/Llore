@@ -34,7 +34,7 @@ export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
 
 export function ProcessAndSaveTextAsEntries(arg1:string):Promise<number>;
 
-export function ProcessStory(arg1:string):Promise<Array<database.CodexEntry>>;
+export function ProcessStory(arg1:string):Promise<main.ProcessStoryResult>;
 
 export function ReadLibraryFile(arg1:string):Promise<string>;
 
