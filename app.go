@@ -18,10 +18,11 @@ import (
 	"time"
 )
 
-// ProcessStoryResult holds the separated lists of new and updated entries.
+// ProcessStoryResult holds the separated lists of new, updated, and existing entries.
 type ProcessStoryResult struct {
-	NewEntries     []database.CodexEntry `json:"newEntries"`
-	UpdatedEntries []database.CodexEntry `json:"updatedEntries"`
+	NewEntries      []database.CodexEntry `json:"newEntries"`
+	UpdatedEntries  []database.CodexEntry `json:"updatedEntries"`
+	ExistingEntries []database.CodexEntry `json:"existingEntries"`
 }
 
 // Embedding queue system to process embeddings sequentially

@@ -5,7 +5,7 @@
   import type { Writable } from 'svelte/store'; // For type hinting if needed later
 
   // Type for the status prop of StoryImportStatus (sync with StoryImportStatus.svelte)
-  type ImportStatus = 'idle' | 'sending' | 'receiving' | 'parsing' | 'checking_existing' | 'updating' | 'embedding' | 'complete' | 'error';
+  type ImportStatus = 'idle' | 'sending' | 'receiving' | 'parsing' | 'checking_existing' | 'updating' | 'embedding' | 'library' | 'complete' | 'error';
 
   // Props
   export let isProcessingStory: boolean = false; // Keep for text area processing? Or merge logic? For now, keep separate.

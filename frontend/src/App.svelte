@@ -593,86 +593,74 @@
 
   // --- Story Import Actions ---
   async function handleImportStoryText(event: CustomEvent<{ content: string }>) {
-      const { content } = event.detail;
-      isProcessingStory = true;
-      storyImportErrorMsg = '';
-      storyImportSuccessMsg = '';
-      let resultEntries: database.CodexEntry[] = [];
-      let newCount = 0;
+    const { content } = event.detail;
+    isProcessingStory = true;
 
-      try {
-          // Use ImportStoryTextAndFile which saves the file and processes
-          // We might need a different backend function if we *only* want to process text without saving
-          // Assuming ImportStoryTextAndFile is suitable for now, but filename will be missing.
-          // Let's use ProcessStory for text-only input for now.
-          // Assume ProcessStory blocks until embeddings are done and returns ProcessStoryResult
-          if (storyImportViewRef) storyImportViewRef.updateImportStatus('sending'); // Set status
-          const result = await ProcessStory(content); // Expect ProcessStoryResult
-
-          // Update state and notify child with the actual result from backend
-          if (storyImportViewRef) {
-              // Pass the structured result from the backend
-              storyImportViewRef.showImportSuccess({ newEntries: result.newEntries || [], updatedEntries: result.updatedEntries || [] });
-          }
-          await loadEntries(); // Refresh codex entries
-          // Don't refresh library as text wasn't saved to a file here
-      } catch (err) {
-          console.error("Error processing story text:", err);
-          storyImportErrorMsg = `Failed to process story text: ${err}`;
-          if (storyImportViewRef) {
-              // Use the specific error function for text area if needed, or the general one
-              // storyImportViewRef.setProcessingError(storyImportErrorMsg, 'story');
-              storyImportViewRef.setImportError(storyImportErrorMsg); // Use the general import error setter
-          }
-      } finally {
-          isProcessingStory = false; // Keep separate flag for text area button state
+    try {
+      storyImportViewRef?.updateImportStatus('sending');
+      
+      // Call backend to process story text
+      const result = await ProcessStory(content);
+      
+      if (result.existingEntries && result.existingEntries.length > 0) {
+        // Show confirmation modal for existing entries
+        storyImportViewRef?.showExistingConfirmation(result.existingEntries);
+      } else {
+        // Process directly if no existing entries
+        storyImportViewRef?.updateImportStatus('library', 'Saving story to library...');
+        await ImportStoryTextAndFile(content);
+        storyImportViewRef?.showImportSuccess({
+          newEntries: result.newEntries || [],
+          updatedEntries: result.updatedEntries || []
+        });
       }
+    } catch (error: any) {
+      console.error('Error importing story:', error);
+      storyImportViewRef?.updateImportStatus('error', error.message || 'Failed to import story');
+    } finally {
+      isProcessingStory = false; // Keep separate flag for text area button state
+    }
   }
 
-  async function handleProcessImport(event: CustomEvent<{ content: string }>) { // Remove filename, force from event type
-      const { content } = event.detail; // Remove filename, force
-      // isProcessingImport = true; // Status handles loading state now
-      storyImportErrorMsg = '';
-      storyImportSuccessMsg = '';
+  async function handleProcessImport(event: CustomEvent<{ content: string, force?: boolean }>) {
+    const { content, force } = event.detail;
 
-      // Update status via child component ref
-      if (storyImportViewRef) storyImportViewRef.updateImportStatus('sending');
-
-      try {
-          // Call ProcessStory, same as text import. Ignore filename/force.
-          // Assume ProcessStory blocks until embeddings are done and returns ProcessStoryResult
-          const result = await ProcessStory(content); // Expect ProcessStoryResult
-
-          // TODO: Ideally, the backend would emit events for 'receiving', 'parsing', 'embedding' etc.
-          // Without backend events, we jump from 'sending' straight to 'complete' or 'error'.
-          // We could potentially call updateImportStatus('embedding') just before showImportSuccess
-          // if we know embeddings are the *very last* step, but it's still an assumption.
-          if (storyImportViewRef) storyImportViewRef.updateImportStatus('embedding'); // Optimistic: Assume embedding is last step before success
-
-          // Call success function with the actual data from the backend
-          if (storyImportViewRef) {
-              // Pass the structured result from the backend
-              storyImportViewRef.showImportSuccess({
-                  newEntries: result.newEntries || [],
-                  updatedEntries: result.updatedEntries || []
-              });
-          }
-
-          await loadEntries(); // Refresh codex
-          // Don't refresh library, as we didn't explicitly save the file here
-          // await refreshLibraryFiles();
-
-      } catch (err) {
-          console.error("Error processing story import:", err);
-          storyImportErrorMsg = `Failed to process story import: ${err}`;
-          if (storyImportViewRef) {
-              // Use the unified error handler in the child component
-              storyImportViewRef.setImportError(storyImportErrorMsg);
-          }
-      } finally {
-          // No need to manage isProcessingImport here, status is handled by child component
-          // isProcessingImport = false;
+    try {
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('sending');
       }
+
+      // Call ProcessStory and check for existing entries
+      const result = await ProcessStory(content);
+
+      if (!force && result.existingEntries && result.existingEntries.length > 0) {
+        // Show confirmation modal for existing entries
+        storyImportViewRef?.showExistingConfirmation(result.existingEntries);
+      } else {
+        // Process directly if no existing entries or force update
+        if (storyImportViewRef) {
+          storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
+        }
+
+        // Save to library
+        await ImportStoryTextAndFile(content);
+
+        if (storyImportViewRef) {
+          storyImportViewRef.showImportSuccess({
+            newEntries: result.newEntries || [],
+            updatedEntries: result.updatedEntries || []
+          });
+        }
+
+        // Refresh codex entries
+        await loadEntries();
+      }
+    } catch (error: any) {
+      console.error('Error processing story import:', error);
+      if (storyImportViewRef) {
+        storyImportViewRef.setImportError(error.message || 'Failed to process story import');
+      }
+    }
   }
 
   // --- Event Handlers for Components ---
@@ -692,58 +680,47 @@
 
   // --- Chat Actions ---
   async function handleSaveCodexFromChat(event: CustomEvent<string>) {
-      const text = event.detail;
-      isLoading = true; // Use global loading? Or chat loading?
-      codexErrorMsg = ''; // Clear codex error specifically
-      try {
-          // ProcessStory now returns ProcessStoryResult
-          const result = await ProcessStory(text);
-          const potentialNewEntries = result.newEntries || []; // Use only new entries for this function's purpose
+    const textToSave = event.detail;
+    console.log("App.svelte received savecodex event with text:", textToSave.substring(0, 50) + "...");
 
-          if (!potentialNewEntries || potentialNewEntries.length === 0) {
-              alert('AI processing did not extract any structured entries from the chat response.');
-              isLoading = false;
-              return;
-          }
+    if (!textToSave) {
+        chatViewRef?.setCodexSaveError("Cannot save empty text to Codex.");
+        return;
+    }
 
-          let processedCount = 0;
-          let errorMessages = [];
-          // Iterate over the potential new entries extracted
-          for (const entry of potentialNewEntries) {
-              try {
-                  if (!entry.name || !entry.type) {
-                      console.warn("Skipping entry with missing name or type:", entry);
-                      continue;
-                  }
-                  await CreateEntry(entry.name, entry.type, entry.content);
-                  processedCount++;
-              } catch (entryError) {
-                  console.error(`Error saving entry "${entry.name}":`, entryError);
-                  errorMessages.push(`${entry.name}: ${entryError}`);
-              }
-          }
+    // Use chatViewRef to update status immediately if possible
+    // Note: ProcessStory doesn't have granular progress, so we mainly signal start/end.
+    chatViewRef?.updateCodexSaveStatus('receiving', 'Processing text...'); // Or 'parsing'? Let's use receiving for now.
 
-          let feedback = '';
-          if (processedCount > 0) {
-              feedback += `Processed ${processedCount} entr${processedCount === 1 ? 'y' : 'ies'} from the chat response.`;
-              await loadEntries(); // Refresh codex if successful
-          } else {
-              feedback += 'No entries could be saved to the Codex.';
-          }
-          if (errorMessages.length > 0) {
-              feedback += `\nErrors occurred for: ${errorMessages.join(', ')}`;
-              codexErrorMsg = `Some entries failed to save: ${errorMessages.join(', ')}`; // Show error in codex view?
-          }
-          alert(feedback); // Simple feedback
+    try {
+        // Call ProcessStory - assume it handles creating entries from arbitrary text.
+        // The backend likely uses the default configured model and handles existing entries (force=false equivalent).
+        console.log(`Calling ProcessStory for chat text...`);
+        chatViewRef?.updateCodexSaveStatus('parsing', 'Finding codex entries...');
+        const result = await ProcessStory(textToSave);
+        console.log("ProcessStory result from chat text:", result);
 
-      } catch (err) {
-          console.error("Error processing chat for codex:", err);
-          alert(`Error processing chat for codex: ${err}`); // Show generic error
-          codexErrorMsg = `Error processing chat for codex: ${err}`;
-      } finally {
-          isLoading = false;
-      }
+        // Update ChatView with the result
+        chatViewRef?.setCodexSaveResult(result);
+
+        // Additionally, refresh the main codex list if the codex view might be visible
+        // or just keep it simple and let the user refresh manually if needed.
+        // Consider adding a small delay before potentially refreshing main list
+        // if (mode === 'codex') {
+        //     setTimeout(refreshCodexEntries, 500); // Refresh codex list if in codex mode
+        // }
+
+    } catch (err: any) { // Type the error
+        const error = `Error processing chat text for Codex: ${err.message || String(err)}`;
+        console.error(error);
+        chatViewRef?.setCodexSaveError(error);
+    } finally {
+        // Ensure status isn't left hanging if ProcessStory fails without setting state
+        // This might be redundant if setCodexSaveResult/Error always fire, but safer.
+        // setTimeout(() => { if (chatViewRef?.codexSaveStatus !== 'complete' && chatViewRef?.codexSaveStatus !== 'error') chatViewRef?.updateCodexSaveStatus('idle'); }, 100);
+    }
   }
+
 
   // --- Write Actions ---
   function handleWriteFileSaved(event: CustomEvent<string>) {

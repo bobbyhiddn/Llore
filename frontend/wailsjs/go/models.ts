@@ -81,6 +81,7 @@ export namespace main {
 	export class ProcessStoryResult {
 	    newEntries: database.CodexEntry[];
 	    updatedEntries: database.CodexEntry[];
+	    existingEntries: database.CodexEntry[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ProcessStoryResult(source);
@@ -90,6 +91,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.newEntries = this.convertValues(source["newEntries"], database.CodexEntry);
 	        this.updatedEntries = this.convertValues(source["updatedEntries"], database.CodexEntry);
+	        this.existingEntries = this.convertValues(source["existingEntries"], database.CodexEntry);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
