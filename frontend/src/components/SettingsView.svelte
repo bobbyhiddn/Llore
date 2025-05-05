@@ -78,7 +78,7 @@
       openrouter_api_key: openrouterApiKey,
       chat_model_id: chatModelId,
       story_processing_model_id: storyProcessingModelId,
-      gemini_api_key: geminiApiKey // Add Gemini key to payload
+      gemini_api_key: geminiApiKey
     });
   }
 

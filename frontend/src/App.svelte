@@ -34,6 +34,7 @@
   let openrouterApiKey = '';
   let chatModelId: string = ''; // Default chat model
   let storyProcessingModelId: string = ''; // Default story processing model
+  let geminiApiKey: string = ''; // Gemini API key
   let modelList: llm.OpenRouterModel[] = [];
   let isModelListLoading = false;
   let modelListError = '';
@@ -89,6 +90,7 @@
     openrouter_api_key: string;
     chat_model_id: string;
     story_processing_model_id: string;
+    gemini_api_key: string;
   }
 
   // --- Initialization ---
@@ -253,7 +255,8 @@
       openrouterApiKey = settings.openrouter_api_key || '';
       chatModelId = settings.chat_model_id || '';
       storyProcessingModelId = settings.story_processing_model_id || '';
-      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId });
+      geminiApiKey = settings.gemini_api_key || '';
+      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId, geminiKeySet: !!geminiApiKey });
       // If API key is present, trigger model list load
       if (openrouterApiKey) {
         await loadModelList();
@@ -284,6 +287,7 @@
       openrouterApiKey = settingsToSave.openrouter_api_key;
       chatModelId = settingsToSave.chat_model_id;
       storyProcessingModelId = settingsToSave.story_processing_model_id;
+      geminiApiKey = settingsToSave.gemini_api_key;
       // Reload models if API key might have changed
       if (openrouterApiKey) {
           await loadModelList();
@@ -848,6 +852,7 @@
       initialApiKey={openrouterApiKey}
       initialChatModelId={chatModelId}
       initialStoryProcessingModelId={storyProcessingModelId}
+      initialGeminiApiKey={geminiApiKey}
       bind:modelList
       bind:isModelListLoading
       bind:modelListError
