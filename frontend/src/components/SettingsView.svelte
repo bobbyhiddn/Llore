@@ -32,9 +32,23 @@
     }
   });
 
-  $: if (initialApiKey !== openrouterApiKey && !isLoading) openrouterApiKey = initialApiKey;
-  $: if (initialChatModelId !== chatModelId) chatModelId = initialChatModelId;
-  $: if (initialStoryProcessingModelId !== storyProcessingModelId) storyProcessingModelId = initialStoryProcessingModelId;
+  // $: if (initialApiKey !== openrouterApiKey && !isLoading) openrouterApiKey = initialApiKey;
+  // Only update local model IDs from props if the user hasn't interacted
+  $: if (initialChatModelId !== chatModelId && !userChangedChatModel) chatModelId = initialChatModelId;
+  $: if (initialStoryProcessingModelId !== storyProcessingModelId && !userChangedStoryModel) storyProcessingModelId = initialStoryProcessingModelId;
+
+  let userChangedChatModel = false;
+  let userChangedStoryModel = false;
+
+  function handleChatModelChange(event: Event) {
+    userChangedChatModel = true;
+    chatModelId = (event.target as HTMLSelectElement).value;
+  }
+
+  function handleStoryModelChange(event: Event) {
+    userChangedStoryModel = true;
+    storyProcessingModelId = (event.target as HTMLSelectElement).value;
+  }
 
   function goBack() {
     dispatch('back');
@@ -94,6 +108,7 @@
               bind:value={openrouterApiKey}
               on:change={handleApiKeyChange}
               placeholder="Enter your OpenRouter API key (e.g., sk-...)"
+              autofocus
             />
           {:else}
             <input
@@ -102,6 +117,7 @@
               bind:value={openrouterApiKey}
               on:change={handleApiKeyChange}
               placeholder="Enter your OpenRouter API key"
+              autofocus
             />
           {/if}
           <button
@@ -126,10 +142,26 @@
           <span class="error-inline">{modelListError}</span>
         {:else if modelList.length === 0}
            <span class="info-text">No models found or API key invalid.</span>
+           <select
+             id="chat-model-select"
+             value={chatModelId}
+             on:change={handleChatModelChange}
+             disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+           >
+             <option value="" disabled selected>Select a model</option>
+             {#each modelList as model}
+               <option value={model.id}>{model.name}</option>
+             {/each}
+           </select>
         {:else}
-          <select id="chat-model-select" bind:value={chatModelId} required={!!openrouterApiKey}>
-             <option value="" disabled={!!chatModelId}>-- Select a model --</option>
-            {#each modelList as model (model.id)}
+          <select
+            id="chat-model-select"
+            value={chatModelId}
+            on:change={handleChatModelChange}
+            disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+          >
+            <option value="" disabled selected>Select a model</option>
+            {#each modelList as model}
               <option value={model.id}>{model.name}</option>
             {/each}
           </select>
@@ -147,10 +179,26 @@
           <span class="error-inline">{modelListError}</span>
          {:else if modelList.length === 0}
            <span class="info-text">No models found or API key invalid.</span>
+           <select
+             id="story-processing-model-select"
+             value={storyProcessingModelId}
+             on:change={handleStoryModelChange}
+             disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+           >
+             <option value="" disabled selected>Select a model</option>
+             {#each modelList as model}
+               <option value={model.id}>{model.name}</option>
+             {/each}
+           </select>
         {:else}
-          <select id="story-processing-model-select" bind:value={storyProcessingModelId} required={!!openrouterApiKey}>
-             <option value="" disabled={!!storyProcessingModelId}>-- Select a model --</option>
-            {#each modelList as model (model.id)}
+          <select
+            id="story-processing-model-select"
+            value={storyProcessingModelId}
+            on:change={handleStoryModelChange}
+            disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+          >
+            <option value="" disabled selected>Select a model</option>
+            {#each modelList as model}
               <option value={model.id}>{model.name}</option>
             {/each}
           </select>

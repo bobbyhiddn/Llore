@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // CodexEntry represents an entry in the codex database.
@@ -24,7 +24,7 @@ type CodexEntry struct {
 // Returns the connection handle or an error.
 func DBInitialize(dbPath string) (*sql.DB, error) {
 	log.Printf("Initializing database connection for: %s\n", dbPath)
-	dbConn, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on")
+	dbConn, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database %s: %w", dbPath, err)
 	}

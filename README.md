@@ -92,6 +92,23 @@ Fiction writers often juggle vast amounts of information about their worlds, cha
 ![Screenshot 2](path/to/screenshot2.png)
 -->
 
+## Requirements
+
+- **Go** (>=1.20): [Download Go](https://go.dev/dl/)
+- **Node.js & npm** (for frontend): [Download Node.js](https://nodejs.org/)
+- **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+- **C Compiler (for CGO/go-sqlite3)**:
+    - **Windows:** Install [MinGW-w64](https://www.mingw-w64.org/) or [TDM-GCC](https://jmeubank.github.io/tdm-gcc/)
+    - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
+    - **Linux:** `sudo apt install build-essential`
+
+### Installing MinGW-w64 on Windows
+
+1. Download the latest installer from the [MinGW-w64 website](https://www.mingw-w64.org/downloads/).
+2. Run the installer and follow the prompts (default options are fine).
+3. Add the `bin` directory (e.g., `C:\Program Files\mingw-w64\...\bin`) to your PATH environment variable.
+4. Restart your terminal after installation.
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
@@ -113,9 +130,26 @@ Before you begin, ensure you have the following installed:
     cd llore
     ```
 
-2.  **Install Go dependencies:**
+2.  **Install a C compiler (required for go-sqlite3):**
+    - **Windows:**
+      Download and install MinGW-w64 from [mingw-w64.org](https://www.mingw-w64.org/downloads/), then add its `bin` directory to your PATH.
+      ```powershell
+      # Example: (update path as needed)
+      setx PATH "%PATH%;C:\Program Files\mingw-w64\x86_64-<version>\mingw64\bin"
+      ```
+    - **macOS:**
+      ```sh
+      xcode-select --install
+      ```
+    - **Linux:**
+      ```sh
+      sudo apt install build-essential
+      ```
+
+3.  **Install Go dependencies:**
     ```bash
     go mod tidy
+    go install github.com/wailsapp/wails/v2/cmd/wails@latest
     ```
 
 3.  **Install frontend dependencies:**
@@ -131,15 +165,19 @@ Configuration is done through the `~/.llore` folder under `config.json`.
 
 ## Running Llore
 
+> **Note:** Llore uses [go-sqlite3](https://github.com/mattn/go-sqlite3), which requires CGO to be enabled. Ensure you have a C compiler installed and run builds with `CGO_ENABLED=1` (default on most systems if a C compiler is present).
+
 ### Development Mode
 
 This mode provides hot-reloading for both the Go backend and the frontend.
 
 1.  Navigate to the project root directory (`llore`).
 2.  Run the command:
-    ```bash
+    ```powershell
+    set CGO_ENABLED=1
     wails dev
     ```
+    (On macOS/Linux, use `export CGO_ENABLED=1` instead of `set`.)
 3.  The Llore application window will appear. Changes to Go files or frontend code will trigger automatic rebuilds and reloads.
 
 ### Building for Production
@@ -148,10 +186,27 @@ This compiles Llore into a native, self-contained executable for your platform.
 
 1.  Navigate to the project root directory (`llore`).
 2.  Run the command:
-    ```bash
+    ```powershell
+    set CGO_ENABLED=1
     wails build
     ```
+    (On macOS/Linux, use `export CGO_ENABLED=1` instead of `set`.)
 3.  The executable will be placed in the `build/bin/` directory (e.g., `Llore.exe` on Windows, `Llore` on Linux/macOS).
+
+---
+
+## Troubleshooting
+
+### Error: CGO_ENABLED=0 / go-sqlite3 requires cgo to work
+
+If you see an error like:
+```
+failed to initialize codex database: failed to ping database ...: Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work. This is a stub
+```
+- Make sure you have a C compiler installed (see Requirements above).
+- Always run builds and development with `CGO_ENABLED=1`.
+- On Windows, use `set CGO_ENABLED=1` before `wails dev` or `wails build`.
+- On macOS/Linux, use `export CGO_ENABLED=1`.
 
 ## Basic Usage
 

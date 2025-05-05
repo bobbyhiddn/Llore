@@ -20,6 +20,8 @@
   let processStorySuccessMsg = ''; // Message shown after successful processing (maybe in a toast later)
   let processedEntries: database.CodexEntry[] = []; // Entries created/updated by the last import
   let createdEntriesCount = 0; // Count of *new* entries from last import
+  let showResultFeedback = false; // Show feedback message after import
+  let lastImportWasSuccess = false; // Track if last import was a success
 
   const dispatch = createEventDispatcher();
 
@@ -128,29 +130,26 @@
   export function showImportSuccess(result: { entries: database.CodexEntry[], newCount: number, updatedCount: number }) {
       processedEntries = result.entries;
       createdEntriesCount = result.newCount;
-      if (result.updatedCount > 0) {
-          processStorySuccessMsg = `Story Processed\n${result.updatedCount} entries were updated and ${result.newCount} new entries were created.`;
-      } else if (result.newCount > 0) {
-          processStorySuccessMsg = `Story Processed\n${result.newCount} new codex entries were created.`;
+      showResultFeedback = true;
+      lastImportWasSuccess = true;
+      if (result.entries.length === 0) {
+        processStorySuccessMsg = `No structured entries could be extracted from the import. Check your text formatting or try another model.`;
+      } else if (result.updatedCount > 0) {
+          processStorySuccessMsg = `Imported ${result.newCount} new entr${result.newCount === 1 ? 'y' : 'ies'} and updated ${result.updatedCount} entr${result.updatedCount === 1 ? 'y' : 'ies'}.`;
       } else {
-          processStorySuccessMsg = 'No codex entries could be extracted or updated from the story.';
+          processStorySuccessMsg = `Successfully imported ${result.newCount} entr${result.newCount === 1 ? 'y' : 'ies'}.`;
       }
-      // Reset state after success
-      showImportModal = false;
-      showExistingEntriesModal = false;
-      importedContent = '';
-      importedFileName = '';
-      storyText = ''; // Clear text area too
-      isProcessingImport = false;
-      isProcessingStory = false;
-      // Maybe show a success toast/message briefly instead of relying on modal?
       // For now, we can just log it or rely on App.svelte to show feedback
       console.log(processStorySuccessMsg);
       dispatch('importsuccess', { message: processStorySuccessMsg, entries: processedEntries });
+      // After successful import/update, automatically switch to codex view
+      setTimeout(() => dispatch('gotocodex'), 400); // Small delay for feedback
   }
 
   // Called by App.svelte on error
   export function setProcessingError(message: string, type: 'import' | 'story') {
+      showResultFeedback = true;
+      lastImportWasSuccess = false;
       if (type === 'import') {
           importError = message;
           isProcessingImport = false;
@@ -158,6 +157,10 @@
           processStoryErrorMsg = message;
           isProcessingStory = false;
       }
+      // Optionally, reset modal states
+      showImportModal = false;
+      importedContent = '';
+      importedFileName = '';
   }
 
   function cancelImport() {
@@ -232,6 +235,13 @@
       </button>
       {#if processStoryErrorMsg}
         <p class="error-message">{processStoryErrorMsg}</p>
+      {/if}
+      {#if showResultFeedback && !isProcessingStory && !isProcessingImport}
+        {#if lastImportWasSuccess}
+          <p class="success-message">{processStorySuccessMsg}</p>
+        {:else}
+          <p class="error-message">{importError || processStoryErrorMsg}</p>
+        {/if}
       {/if}
     </div>
   </div>
