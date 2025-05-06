@@ -125,15 +125,31 @@
   }
 
   // --- Write Mode Save Function ---
-  function openSaveModal() {
+  function openSaveModal(saveAs = false) {
       writeSaveError = '';
       writeSaveSuccess = '';
-      // Suggest filename if empty and content exists
-      if (!writeFilename && writeContent.trim()) {
+      
+      if (saveAs) {
+        // For Save As, suggest a new filename based on the current one
+        if (writeFilename) {
+          // Remove extension if present
+          const baseName = writeFilename.replace(/\.[^/.]+$/, '');
+          // Suggest a new filename with "_copy" appended
+          writeFilename = `${baseName}_copy.md`;
+        } else if (writeContent.trim()) {
+          // If no filename but content exists, suggest from first line
+          const firstLine = writeContent.trim().split('\n')[0];
+          writeFilename = firstLine.substring(0, 30).replace(/[^a-z0-9\s]/gi, '').replace(/\s+/g, '-') + '.md';
+        }
+      } else {
+        // Regular save - suggest filename if empty and content exists
+        if (!writeFilename && writeContent.trim()) {
           const firstLine = writeContent.trim().split('\n')[0];
           // Basic filename suggestion from first line
           writeFilename = firstLine.substring(0, 30).replace(/[^a-z0-9\s]/gi, '').replace(/\s+/g, '-') + '.md';
+        }
       }
+      
       showWriteSaveModal = true;
   }
 
@@ -276,17 +292,20 @@
     </div>
     <div class="write-tools-panel">
       <h3>Tools</h3>
-      <div class="button-group format-tools">
-         <button on:click={() => applyMarkdownFormat('bold')} title="Bold"><b>B</b></button>
-         <button on:click={() => applyMarkdownFormat('italic')} title="Italic"><i>I</i></button>
-         <button on:click={() => applyMarkdownFormat('h1')} title="Heading 1">H1</button>
-         <button on:click={() => applyMarkdownFormat('h2')} title="Heading 2">H2</button>
-         <button on:click={() => applyMarkdownFormat('h3')} title="Heading 3">H3</button>
-         <button on:click={() => applyMarkdownFormat('code')} title="Code">{'</>'}</button>
-         <button on:click={() => applyMarkdownFormat('blockquote')} title="Blockquote">"</button>
-         <!-- Add more buttons later: list, link, image -->
-      </div>
-       <button class="save-btn" on:click={openSaveModal} disabled={isLoading}>Save to Library</button>
+       <div class="formatting-buttons">
+          <button on:click={() => applyMarkdownFormat('bold')} title="Bold">B</button>
+          <button on:click={() => applyMarkdownFormat('italic')} title="Italic">I</button>
+          <button on:click={() => applyMarkdownFormat('h1')} title="Heading 1">H1</button>
+          <button on:click={() => applyMarkdownFormat('h2')} title="Heading 2">H2</button>
+          <button on:click={() => applyMarkdownFormat('h3')} title="Heading 3">H3</button>
+          <button on:click={() => applyMarkdownFormat('code')} title="Code">{'</>'}</button>
+          <button on:click={() => applyMarkdownFormat('blockquote')} title="Blockquote">"</button>
+          <!-- Add more buttons later: list, link, image -->
+       </div>
+       <div class="save-buttons">
+          <button class="save-btn" on:click={() => openSaveModal(false)} disabled={isLoading}>Save</button>
+          <button class="save-as-btn" on:click={() => openSaveModal(true)} disabled={isLoading}>Save As</button>
+       </div>
     </div>
   </div>
 
@@ -474,13 +493,15 @@
   .write-tools-panel {
       flex-shrink: 0; /* Prevent shrinking */
   }
-  .button-group.format-tools {
+  
+  .formatting-buttons {
       display: flex;
       flex-wrap: wrap;
       gap: 0.5rem;
       margin-bottom: 1rem;
   }
-  .format-tools button {
+  
+  .formatting-buttons button {
       padding: 0.4rem 0.8rem;
       font-size: 0.9rem;
       background: rgba(255, 255, 255, 0.1);
@@ -489,26 +510,53 @@
       border-radius: 4px;
       min-width: 35px;
       text-align: center;
-  }
-   .format-tools button:hover {
-       background: rgba(255, 255, 255, 0.2);
-       color: var(--text-primary);
-   }
-   .format-tools b, .format-tools i { font-size: 1rem; }
-
-  .save-btn {
-      width: 100%;
-      padding: 0.7rem;
-      background: var(--success-color);
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-weight: 500;
       cursor: pointer;
-      margin-top: auto; /* Push to bottom */
+      transition: background 0.2s ease;
   }
-   .save-btn:hover:not(:disabled) { background: #00b894; }
-   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  
+  .formatting-buttons button:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: var(--text-primary);
+  }
+  
+  .save-buttons {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+  }
+  
+  .save-btn, .save-as-btn {
+      padding: 0.6rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 4px;
+      border: none;
+      color: white;
+      cursor: pointer;
+      flex: 1;
+      transition: background 0.2s ease;
+      font-weight: 500;
+  }
+  
+  .save-btn {
+      background: var(--success-color);
+  }
+  
+  .save-btn:hover:not(:disabled) {
+      background: #00b894;
+  }
+  
+  .save-as-btn {
+      background: #0984e3; /* Blue color */
+  }
+  
+  .save-as-btn:hover:not(:disabled) {
+      background: #74b9ff; /* Lighter blue */
+  }
+  
+  .save-btn:disabled, .save-as-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+  }
 
 
   .write-right-panel {

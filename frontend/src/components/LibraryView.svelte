@@ -19,6 +19,10 @@
   function viewFile(filename: string) {
     dispatch('viewfile', filename);
   }
+  
+  function editInWriteMode(filename: string) {
+    dispatch('editinwrite', filename);
+  }
 </script>
 
 <button class="back-btn" on:click={goBack}>← Back to Mode Choice</button>
@@ -39,7 +43,14 @@
         {#each libraryFiles as filename (filename)}
           <li class="file-item">
             <span class="filename">{filename}</span>
-            <button class="view-btn" on:click={() => viewFile(filename)} title="View/Edit {filename}">View/Edit</button>
+            <div class="button-group">
+              <button class="write-btn" on:click={() => editInWriteMode(filename)} title="Edit in Write Mode">
+                <span class="btn-icon">✏️</span> Write
+              </button>
+              <button class="view-btn" on:click={() => viewFile(filename)} title="View/Edit {filename}">
+                <span class="btn-icon">👁️</span> View
+              </button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -135,20 +146,43 @@
     margin-right: 1rem;
   }
 
-  .view-btn {
+  .button-group {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0; /* Prevent buttons from shrinking */
+  }
+
+  .view-btn, .write-btn {
     padding: 0.4rem 0.8rem;
     font-size: 0.9rem;
-    background: #0984e3; /* Blue */
     color: white;
     border: none;
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.3s ease;
-    flex-shrink: 0; /* Prevent button from shrinking */
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .view-btn {
+    background: #0984e3; /* Blue */
   }
 
   .view-btn:hover {
     background: #74b9ff; /* Lighter blue */
+  }
+
+  .write-btn {
+    background: #6c5ce7; /* Purple */
+  }
+
+  .write-btn:hover {
+    background: #a29bfe; /* Lighter purple */
+  }
+
+  .btn-icon {
+    font-size: 1rem;
   }
 
   .error-message {

@@ -75,10 +75,16 @@
   let isProcessingImport = false; // Processing file content
   let storyImportErrorMsg = ''; // Specific errors for StoryImportView
   let storyImportSuccessMsg = ''; // Feedback for story import
+  
   // Refs to child components to call methods
-  let storyImportViewRef: StoryImportView;
-  let chatViewRef: ChatView;
-  let settingsViewRef: SettingsView;
+  let codexViewRef: CodexView | null = null;
+  let chatViewRef: ChatView | null = null;
+  let storyImportViewRef: StoryImportView | null = null;
+  let settingsViewRef: SettingsView | null = null;
+  
+  // Variables for WriteView initial content when opening from library
+  let writeViewInitialContent: string = '';
+  let writeViewInitialFilename: string = '';
 
   // --- Interfaces --- (Keep if needed globally, or move to models.ts if applicable)
   interface OpenRouterConfig {
@@ -804,6 +810,31 @@
       // Show feedback? Maybe a temporary message bar?
       console.log(`Write file saved: ${filename}`);
   }
+  
+  // Handle opening a library file in Write mode
+  async function handleEditInWriteMode(event: CustomEvent<string>) {
+    const filename = event.detail;
+    if (!vaultIsReady) {
+      libraryErrorMsg = 'No vault is currently loaded';
+      return;
+    }
+    isLoading = true;
+    libraryErrorMsg = '';
+    try {
+      const content = await ReadLibraryFile(filename);
+      // Set the initial content and filename for WriteView
+      writeViewInitialContent = content;
+      writeViewInitialFilename = filename;
+      // Switch to write mode
+      await setModeAndUpdate('write');
+    } catch (err) {
+      console.error(`Error reading library file ${filename} for write mode:`, err);
+      libraryErrorMsg = `Error reading file: ${err}`;
+      alert(libraryErrorMsg);
+    } finally {
+      isLoading = false;
+    }
+  }
 
   // Function to manually reset UI state when the debug button is clicked
   function handleResetState() {
@@ -897,6 +928,7 @@
       on:back={() => setModeAndUpdate(null)}
       on:refresh={refreshLibraryFiles}
       on:viewfile={viewLibraryFileContent}
+      on:editinwrite={handleEditInWriteMode}
     />
   {:else if mode === 'chat'}
     <ChatView
@@ -941,8 +973,8 @@
        on:filesaved={handleWriteFileSaved}
        on:loading={handleWriteLoading}
        on:error={handleGenericError}
-       initialContent=""
-       initialFilename=""
+       initialContent={writeViewInitialContent}
+       initialFilename={writeViewInitialFilename}
     />
   {/if}
 
