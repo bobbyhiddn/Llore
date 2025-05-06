@@ -79,12 +79,6 @@
   let chatViewRef: ChatView;
   let settingsViewRef: SettingsView;
 
-  // --- Chat State (Managed by ChatView, but some feedback might bubble up) ---
-  // let chatError = ''; // Now local to ChatView mostly
-
-  // --- Write State (Managed by WriteView) ---
-  // let writeError = ''; // Now local to WriteView
-
   // --- Interfaces --- (Keep if needed globally, or move to models.ts if applicable)
   interface OpenRouterConfig {
     openrouter_api_key: string;
@@ -417,19 +411,23 @@
         console.log("Attempting to create entry:", entryData.name);
         const newEntry = await CreateEntry(entryData.name, entryData.type, entryData.content);
         console.log("CreateEntry returned successfully. New ID:", newEntry.id);
-        alert(`Entry '${newEntry.name}' created successfully!`);
         
-        // Refresh entries list
+        // Refresh entries list before trying to find the new entry
         await loadEntries();
         console.log("loadEntries after create completed.");
         
         // Find the newly created entry in the refreshed list
-        const createdEntry = entries.find(e => e.id === newEntry.id) || null;
-        console.log("Found created entry:", createdEntry?.id);
+        const createdEntry = entries.find(e => e.id === newEntry.id);
+        if (!createdEntry) {
+          throw new Error("Failed to find newly created entry after refresh");
+        }
+        console.log("Found created entry:", createdEntry.id);
         
         // Update state in a specific order
         tempCurrentEntry = createdEntry;
-        tempIsEditing = !!createdEntry;
+        tempIsEditing = true; // Always set to true after creation to allow immediate editing
+        
+        alert(`Entry '${newEntry.name}' created successfully!`);
       }
     } catch (err) {
       console.error(`Error in handleSaveEntry (${wasEditing ? 'update' : 'create'})`, err);
