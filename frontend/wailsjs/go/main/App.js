@@ -58,6 +58,14 @@ export function LoadChatLog(arg1) {
   return window['go']['main']['App']['LoadChatLog'](arg1);
 }
 
+export function MergeEntryContentDirect(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MergeEntryContentDirect'](arg1, arg2, arg3);
+}
+
+export function MergeEntryContentWithRAG(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MergeEntryContentWithRAG'](arg1, arg2, arg3);
+}
+
 export function ProcessAndSaveTextAsEntries(arg1) {
   return window['go']['main']['App']['ProcessAndSaveTextAsEntries'](arg1);
 }

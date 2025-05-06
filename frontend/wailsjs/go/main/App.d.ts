@@ -32,6 +32,10 @@ export function ListLibraryFiles():Promise<Array<string>>;
 
 export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
 
+export function MergeEntryContentDirect(arg1:database.CodexEntry,arg2:string,arg3:string):Promise<string>;
+
+export function MergeEntryContentWithRAG(arg1:database.CodexEntry,arg2:string,arg3:string):Promise<string>;
+
 export function ProcessAndSaveTextAsEntries(arg1:string):Promise<number>;
 
 export function ProcessStory(arg1:string):Promise<main.ProcessStoryResult>;

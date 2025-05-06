@@ -627,10 +627,12 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) { // Ch
 				entryType = existingEntry.Type
 			}
 
-			// Merge the content - add the new content if it contains new information
-			mergedContent := existingEntry.Content
-			if !strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(llmEntry.Content)) {
-				mergedContent = existingEntry.Content + "\n\nAdditional information:\n" + llmEntry.Content
+			// Use RAG to intelligently merge the content
+			log.Printf("Using RAG to merge content for entry '%s'", existingEntry.Name)
+			mergedContent, err := a.MergeEntryContentWithRAG(existingEntry, llmEntry.Content, processingModel)
+			if err != nil {
+				log.Printf("Error merging content with RAG: %v. Using existing content.", err)
+				mergedContent = existingEntry.Content
 			}
 
 			updatedEntry := database.CodexEntry{
@@ -779,6 +781,73 @@ func (a *App) GetAIResponseWithContext(query string, model string) (string, erro
 	// Get OpenRouter completion with the potentially context-enhanced prompt
 	log.Printf("Sending context-aware prompt (length: %d) to model: %s", len(prompt), model)
 	return a.GenerateOpenRouterContent(prompt, model) // Use existing method for the API call
+}
+
+// MergeEntryContentDirect merges existing entry content with new content using direct AI prompting without RAG
+func (a *App) MergeEntryContentDirect(existingEntry database.CodexEntry, newContent string, model string) (string, error) {
+	// Skip merging if the new content is already contained in the existing content
+	if strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(newContent)) {
+		log.Printf("New content for '%s' is already contained in existing content. No changes needed.", existingEntry.Name)
+		return existingEntry.Content, nil
+	}
+
+	// Construct a prompt for merging content
+	mergePrompt := fmt.Sprintf(
+		"You are helping to update a codex entry with new information. Please merge the existing content with the new content to create a single, coherent entry. Incorporate all information from both sources without redundancy. Do not use phrases like 'According to the new information' or 'Additional information'. Just create a seamless, integrated entry.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nPlease provide the complete merged content for this entry:",
+		existingEntry.Name,
+		existingEntry.Type,
+		existingEntry.Content,
+		newContent,
+	)
+
+	// Get the merged content from the AI
+	log.Printf("Sending direct merge prompt for entry '%s' to model: %s", existingEntry.Name, model)
+	mergedContent, err := a.GenerateOpenRouterContent(mergePrompt, model)
+	if err != nil {
+		log.Printf("Error generating merged content: %v. Falling back to simple merge.", err)
+		// Fallback to simple merge on error
+		return existingEntry.Content + "\n\nAdditional information:\n" + newContent, nil
+	}
+
+	log.Printf("Successfully merged content for entry '%s' using direct AI prompting", existingEntry.Name)
+	return mergedContent, nil
+}
+
+// MergeEntryContentWithRAG uses the RAG system to intelligently merge existing entry content with new content
+func (a *App) MergeEntryContentWithRAG(existingEntry database.CodexEntry, newContent string, model string) (string, error) {
+	if a.promptBuilder == nil {
+		log.Println("Warning: MergeEntryContentWithRAG called but prompt builder not initialized. Falling back to direct merge.")
+		// Fallback to direct merge if RAG isn't set up
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	// Construct a prompt for merging content
+	mergePrompt := fmt.Sprintf(
+		"You are helping to update a codex entry with new information. Please merge the existing content with the new content to create a single, coherent entry. Incorporate all information from both sources without redundancy. Do not use phrases like 'According to the new information' or 'Additional information'. Just create a seamless, integrated entry.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nPlease provide the complete merged content for this entry:",
+		existingEntry.Name,
+		existingEntry.Type,
+		existingEntry.Content,
+		newContent,
+	)
+
+	log.Printf("Building RAG-enhanced prompt for merging content for entry '%s'", existingEntry.Name)
+	// Use the RAG system to enhance the merge with context from other related entries
+	enhancedPrompt, err := a.promptBuilder.BuildPromptWithContext(mergePrompt)
+	if err != nil {
+		log.Printf("Error building context-enhanced prompt for merge: %v. Falling back to direct merge.", err)
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	// Get the merged content from the AI
+	log.Printf("Sending RAG-enhanced merge prompt to model: %s", model)
+	mergedContent, err := a.GenerateOpenRouterContent(enhancedPrompt, model)
+	if err != nil {
+		log.Printf("Error generating merged content with RAG: %v. Falling back to direct merge.", err)
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	log.Printf("Successfully merged content for entry '%s' using RAG", existingEntry.Name)
+	return mergedContent, nil
 }
 
 // ProcessAndSaveTextAsEntries takes text, processes it via LLM to extract structured

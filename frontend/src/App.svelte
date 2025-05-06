@@ -19,6 +19,7 @@
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
     FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
+    GetAIResponseWithContext, // Added for RAG-based codex generation
   } from '@wailsjs/go/main/App';
 
   // --- Core App State ---
@@ -500,20 +501,91 @@
       let generatedContent = '';
 
       // Construct prompt
-      let prompt = `Expand on the following codex entry. Provide more details, background, or connections based on its name, type, and existing content.\n\nName: ${entryData.name}\nType: ${entryData.type}\nContent: ${entryData.content || '(empty)'}`;
+      let prompt = `Expand ONLY on the following codex entry. Focus exclusively on this entry and do not create entries for other characters or locations. You may mention relationships to other entities, but only as they relate directly to this entry.\n\nName: ${entryData.name}\nType: ${entryData.type}\nContent: ${entryData.content || '(empty)'}\n\nProvide a single, detailed expansion of this entry. Do not format your response as JSON or include multiple entries.`;
 
       try {
-          console.log(`Generating content for entry '${entryData.name}' using model ${model}`);
-          generatedContent = await GenerateOpenRouterContent(prompt, model);
-          console.log("Content generation successful");
+          console.log(`Generating content for entry '${entryData.name}' using model ${model} with RAG context`);
+          // Use GetAIResponseWithContext instead of GenerateOpenRouterContent to leverage RAG
+          generatedContent = await GetAIResponseWithContext(prompt, model);
+          console.log("Content generation with RAG successful");
 
-          // Update the current entry with the generated content
+          // Attempt to parse the JSON response
+          let extractedText = generatedContent; // Default to the raw response
+          try {
+              const parsedResponse = JSON.parse(generatedContent);
+              console.log("Successfully parsed generated content as JSON");
+              
+              if (typeof parsedResponse === 'string') {
+                  // Case 1: The JSON parsed into a direct string
+                  extractedText = parsedResponse;
+                  console.log("Parsed response is a string");
+              } else if (Array.isArray(parsedResponse)) {
+                  // Case 2: The JSON parsed into an array
+                  console.log("Parsed response is an array. Converting to formatted text...");
+                  
+                  // Convert array to formatted text
+                  let formattedText = '';
+                  parsedResponse.forEach((item, index) => {
+                      if (typeof item === 'string') {
+                          formattedText += item + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                      } else if (item && typeof item === 'object') {
+                          // Handle objects in the array (like the example with name, type, content)
+                          if (item.name && item.content) {
+                              formattedText += `## ${item.name}${item.type ? ' (' + item.type + ')' : ''}\n\n${item.content}\n\n`;
+                          } else {
+                              // Generic object formatting
+                              formattedText += JSON.stringify(item, null, 2) + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                          }
+                      } else {
+                          formattedText += String(item) + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                      }
+                  });
+                  
+                  if (formattedText.trim() !== '') {
+                      extractedText = formattedText;
+                      console.log("Converted array to formatted text");
+                  } else {
+                      console.warn("Array conversion resulted in empty text. Using raw JSON.");
+                      codexErrorMsg = 'AI response array could not be formatted. Displaying raw data. Check console.';
+                  }
+              } else if (parsedResponse && typeof parsedResponse === 'object') {
+                  // Case 3: The JSON parsed into an object. Check common keys.
+                  console.log("Parsed response is an object. Attempting to extract text...");
+                  const textField = parsedResponse.response || 
+                                  parsedResponse.text ||     
+                                  parsedResponse.content ||  
+                                  parsedResponse.completion || 
+                                  (parsedResponse.choices && Array.isArray(parsedResponse.choices) && 
+                                   parsedResponse.choices.length > 0 && parsedResponse.choices[0].text) || 
+                                  (parsedResponse.choices && Array.isArray(parsedResponse.choices) && 
+                                   parsedResponse.choices.length > 0 && parsedResponse.choices[0].message && 
+                                   parsedResponse.choices[0].message.content);
+
+                  if (typeof textField === 'string' && textField.trim() !== '') {
+                      extractedText = textField;
+                      console.log("Extracted text from object field");
+                  } else {
+                      console.warn("Parsed JSON object did not contain a recognized text field. Using raw JSON.");
+                      // extractedText remains the original generatedContent
+                      codexErrorMsg = 'AI response format not standard. Displaying raw data. Check console.';
+                  }
+              } else {
+                  console.warn("Parsed JSON response was not a string, array, or object. Using raw content.");
+                  // extractedText remains the original generatedContent
+                  codexErrorMsg = 'Unexpected AI response type. Displaying raw data. Check console.';
+              }
+          } catch (e) {
+              console.warn("Failed to parse generated content as JSON. Using raw content:", e);
+              // extractedText remains the original generatedContent
+          }
+
+          // Update the current entry with the extracted or raw content
           if (isEditing && currentEntry && currentEntry.id === entryData.id) {
-              tempCurrentEntry = { ...currentEntry, content: generatedContent };
-              console.log("Updated existing entry with generated content");
+              tempCurrentEntry = { ...currentEntry, content: extractedText };
+              console.log("Updated existing entry with processed content");
           } else if (!isEditing && entryData.id === 0) { // Handle generating for a new entry
-              tempCurrentEntry = { ...entryData, content: generatedContent };
-              console.log("Updated new entry with generated content");
+              tempCurrentEntry = { ...entryData, content: extractedText };
+              console.log("Updated new entry with processed content");
           }
       } catch (err) {
           console.error("Error generating content:", err);
