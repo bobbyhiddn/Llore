@@ -24,7 +24,7 @@ export function GetCurrentVaultPath():Promise<string>;
 
 export function GetSettings():Promise<llm.OpenRouterConfig>;
 
-export function ImportStoryTextAndFile(arg1:string):Promise<Array<database.CodexEntry>>;
+export function ImportStoryTextAndFile(arg1:string,arg2:string):Promise<Array<database.CodexEntry>>;
 
 export function ListChatLogs():Promise<Array<string>>;
 

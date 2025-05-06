@@ -317,24 +317,53 @@ func (a *App) refreshLibraryFiles() error {
 	return nil
 }
 
+// isValidFilename checks if a filename contains only valid characters
+func isValidFilename(filename string) bool {
+	for _, r := range filename {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' || r == '.') {
+			return false
+		}
+	}
+	return true && filename != ""
+}
+
 // ImportStoryTextAndFile saves story text to a file and processes it for codex entries
-func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error) {
+// If providedFilename is not empty, it will be used instead of generating a filename
+func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]database.CodexEntry, error) {
 	if a.db == nil {
 		return nil, fmt.Errorf("no vault is currently loaded")
 	}
 
-	// Generate a filename based on the first line or default
-	firstLine := strings.Split(strings.TrimSpace(text), "\n")[0]
 	filename := "story.txt"
-	if len(firstLine) > 0 {
-		// Clean the filename
-		filename = strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' {
-				return r
-			}
-			return '_'
-		}, firstLine)
-		filename = strings.TrimSpace(filename) + ".txt"
+	
+	// Use provided filename if it exists
+	if providedFilename != "" {
+		// Use the provided filename directly if it's already safe
+		if isValidFilename(providedFilename) {
+			filename = providedFilename
+		} else {
+			// Clean the provided filename to ensure it's safe
+			filename = strings.Map(func(r rune) rune {
+				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' || r == '.' {
+					return r
+				}
+				return '_'
+			}, providedFilename)
+			filename = strings.TrimSpace(filename)
+		}
+	} else {
+		// Generate a filename based on the first line if no filename provided
+		firstLine := strings.Split(strings.TrimSpace(text), "\n")[0]
+		if len(firstLine) > 0 {
+			// Clean the filename
+			filename = strings.Map(func(r rune) rune {
+				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' {
+					return r
+				}
+				return '_'
+			}, firstLine)
+			filename = strings.TrimSpace(filename) + ".txt"
+		}
 	}
 
 	// Ensure Library directory exists

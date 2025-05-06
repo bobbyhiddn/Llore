@@ -26,6 +26,8 @@
   let isDraggingFile = false;
   let importedFileName = '';
   let importedContent = '';
+  let customFilename = ''; // For user to specify a custom filename
+  let filenameError = ''; // For filename validation errors
   let showImportModal = false; // Modal for file preview before processing
   let showExistingEntriesModal = false; // Modal for confirming overwrite/update
   let existingEntries: database.CodexEntry[] = []; // Entries found during import that already exist (for modal)
@@ -65,8 +67,7 @@
     reader.onload = async (e) => {
       const content = e.target?.result as string;
       if (content) {
-        importedContent = content;
-        showImportModal = true; // Show preview modal
+        prepareImportModal(content, importedFileName);
       }
     };
     reader.readAsText(file);
@@ -90,8 +91,7 @@
     reader.onload = async (e) => {
       const content = e.target?.result as string;
       if (content) {
-        importedContent = content;
-        showImportModal = true; // Show preview modal
+        prepareImportModal(content, importedFileName);
       }
     };
     reader.readAsText(file);
@@ -102,6 +102,19 @@
   // Process the imported story (from modal)
   async function processImportedStory(forceReimport = false) {
     if (!importedContent) return;
+    
+    // Validate filename
+    if (!customFilename.trim()) {
+      filenameError = 'Filename cannot be empty.';
+      return;
+    }
+    filenameError = '';
+    
+    // Prepare filename with extension
+    let filenameToSave = customFilename.trim();
+    if (!filenameToSave.toLowerCase().endsWith('.txt') && !filenameToSave.toLowerCase().endsWith('.md')) {
+      filenameToSave += '.txt'; // Default to .txt extension
+    }
 
     showImportModal = false; // Close the modal immediately
 
@@ -118,7 +131,7 @@
 
     dispatch('processimport', {
         content: importedContent,
-        filename: importedFileName, // Pass filename for saving to library
+        filename: filenameToSave, // Use the custom filename
         force: forceReimport
     });
     // App.svelte will handle the backend call and update props or dispatch success/error events
@@ -135,19 +148,19 @@
       return;
     }
 
-    // Reset local states for processing (Keep separate for now)
-    isProcessingStory = true; // Use the specific text processing flag
-    // processStoryErrorMsg = ''; // Keep separate for text area errors?
-    // processStorySuccessMsg = ''; // Keep separate?
-
-    // Set status to 'sending' when text import starts
-    importStatus = 'sending'; // <-- Changed from 'idle'
-    importStatusError = null;
-    importNewEntries = [];
-    importUpdatedEntries = [];
-
-    dispatch('importstorytext', { content: storyText });
-    // App.svelte will handle the backend call and update props or dispatch success/error events
+    // Instead of immediately dispatching the event, show the modal first
+    importedContent = storyText;
+    importedFileName = ''; // No original filename for text input
+    
+    // Suggest a filename based on the content
+    customFilename = suggestFilename(storyText);
+    filenameError = '';
+    
+    // Show the import modal to let the user specify a filename
+    showImportModal = true;
+    
+    // The actual processing will happen when the user clicks the Import button in the modal
+    // which calls processImportedStory()
   }
 
   // Called by App.svelte via dispatch or prop update when import finds existing entries
@@ -211,10 +224,35 @@
   // }
 
 
+  // Function to suggest a filename based on content
+  function suggestFilename(content: string) {
+    if (!content) return '';
+    
+    const firstLine = content.trim().split('\n')[0];
+    // Basic filename suggestion from first line
+    let suggestion = firstLine.substring(0, 30).replace(/[^a-z0-9\s]/gi, '').replace(/\s+/g, '-');
+    // Add extension if needed
+    if (!suggestion.toLowerCase().endsWith('.txt') && !suggestion.toLowerCase().endsWith('.md')) {
+      suggestion += '.txt';
+    }
+    return suggestion;
+  }
+  
+  // Function to prepare the import modal
+  function prepareImportModal(content: string, filename: string) {
+    importedContent = content;
+    // Use the imported filename when available, otherwise suggest from content
+    customFilename = filename || suggestFilename(content);
+    filenameError = ''; // Reset any previous errors
+    showImportModal = true; // Show preview modal
+  }
+  
   function cancelImport() {
       showImportModal = false;
       importedContent = '';
       importedFileName = '';
+      customFilename = ''; // Reset custom filename
+      filenameError = ''; // Reset filename error
       // importError = ''; // Reset via status
       importStatus = 'idle';
       importStatusError = null;
@@ -313,21 +351,36 @@
     <div class="modal import-modal">
       <h3>Import Story File</h3>
       <div class="import-preview">
-        <p class="filename">File: {importedFileName}</p>
+        <p class="filename">Original File: {importedFileName}</p>
         <div class="content-preview">
           {importedContent.slice(0, 500)}{importedContent.length > 500 ? '...' : ''}
         </div>
       </div>
-      <!-- Error display moved to status component, but maybe keep one here for modal-specific issues? -->
-      <!-- {#if importError}
-        <p class="error-message">{importError}</p>
-      {/if} -->
+      
+      <!-- Filename input field -->
+      <div class="filename-input-container">
+        <label for="custom-filename">Save as:</label>
+        <input 
+          id="custom-filename" 
+          type="text" 
+          bind:value={customFilename} 
+          placeholder="Enter filename"
+        />
+        {#if filenameError}
+          <div class="error-message">{filenameError}</div>
+        {/if}
+      </div>
+      
       <div class="modal-actions">
-        <button on:click={() => processImportedStory(false)} disabled={importStatus !== 'idle' && importStatus !== 'error'}>
-          {#if importStatus !== 'idle' && importStatus !== 'error'}Processing...{:else}Process Story{/if}
-        </button>
         <button on:click={cancelImport} disabled={importStatus !== 'idle' && importStatus !== 'error'}>
           Cancel
+        </button>
+        <button 
+          class="primary" 
+          on:click={() => processImportedStory(false)} 
+          disabled={importStatus !== 'idle' && importStatus !== 'error'}
+        >
+          {#if importStatus !== 'idle' && importStatus !== 'error'}Processing...{:else}Process Story{/if}
         </button>
       </div>
     </div>
@@ -629,6 +682,32 @@
     border: 1px solid rgba(255,255,255,0.1);
   }
 
+  .filename-input-container {
+    margin: 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .filename-input-container label {
+    font-weight: bold;
+    color: var(--text-primary);
+  }
+
+  .filename-input-container input {
+    padding: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  .filename-input-container input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.3);
+  }
+
   .existing-entry {
     margin-bottom: 1rem;
     padding-bottom: 1rem;
@@ -650,21 +729,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  /* .error-message class is now primarily used within StoryImportStatus */
-  /* Keep it here if needed for other potential errors, but remove if unused */
-  /* .error-message { ... } */
-
-  /* Success message styling (if needed outside status component) */
-  .success-message {
-      color: var(--success-color);
-      background: rgba(46, 204, 113, 0.1);
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      margin-top: 1rem;
-      border: 1px solid rgba(46, 204, 113, 0.2);
-      font-size: 0.9rem;
   }
 
   /* Scrollbar */

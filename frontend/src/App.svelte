@@ -682,7 +682,7 @@
       } else {
         // Process directly if no existing entries
         storyImportViewRef?.updateImportStatus('library', 'Saving story to library...');
-        await ImportStoryTextAndFile(content);
+        await ImportStoryTextAndFile(content, ''); // Pass empty string for filename to use auto-generation
         storyImportViewRef?.showImportSuccess({
           newEntries: result.newEntries || [],
           updatedEntries: result.updatedEntries || []
@@ -696,8 +696,8 @@
     }
   }
 
-  async function handleProcessImport(event: CustomEvent<{ content: string, force?: boolean }>) {
-    const { content, force } = event.detail;
+  async function handleProcessImport(event: CustomEvent<{ content: string, filename: string, force?: boolean }>) {
+    const { content, filename, force } = event.detail;
 
     try {
       if (storyImportViewRef) {
@@ -716,8 +716,8 @@
           storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
         }
 
-        // Save to library
-        await ImportStoryTextAndFile(content);
+        // Save to library with the provided filename
+        await ImportStoryTextAndFile(content, filename);
 
         if (storyImportViewRef) {
           storyImportViewRef.showImportSuccess({

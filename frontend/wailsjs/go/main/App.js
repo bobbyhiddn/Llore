@@ -42,8 +42,8 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
-export function ImportStoryTextAndFile(arg1) {
-  return window['go']['main']['App']['ImportStoryTextAndFile'](arg1);
+export function ImportStoryTextAndFile(arg1, arg2) {
+  return window['go']['main']['App']['ImportStoryTextAndFile'](arg1, arg2);
 }
 
 export function ListChatLogs() {

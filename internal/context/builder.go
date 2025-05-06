@@ -23,7 +23,7 @@ func NewContextBuilder(embeddingService *embeddings.EmbeddingService) *ContextBu
 	}
 	return &ContextBuilder{
 		embeddingService:    embeddingService,
-		maxEntries:          10,  // Default max entries
+		maxEntries:          20,  // Default max entries (increased from 10)
 		similarityThreshold: 0.4, // Default minimum similarity score
 	}
 }
