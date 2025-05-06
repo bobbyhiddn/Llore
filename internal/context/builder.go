@@ -98,6 +98,8 @@ func (b *ContextBuilder) BuildContextForQuery(query string) (string, error) {
 		return "", nil // No entries met the threshold
 	}
 
-	log.Printf("Built context with %d entries for query: [%s]", includedCount, strings.Join(includedEntryInfo, "; ")) // Modify log message
+	// Format the included entries as a bulleted list for logging
+	formattedEntries := "\n - " + strings.Join(includedEntryInfo, "\n - ")
+	log.Printf("Built context with %d entries for query:%s", includedCount, formattedEntries) // Modify log message format
 	return sb.String(), nil
 }
