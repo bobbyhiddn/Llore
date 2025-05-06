@@ -38,7 +38,15 @@
     // A step is 'done' if the current status index is greater than the step's index,
     // OR if the status is 'complete', regardless of index (as complete is the final state).
     // It should not be marked done if there was an error before reaching it.
-    return status !== 'error' && (currentIdx > stepIdx || status === 'complete');
+    const isDone = status !== 'error' && (currentIdx > stepIdx || status === 'complete');
+
+    // --- DEBUG LOGGING --- 
+    if (status === 'complete') {
+        console.log(`[StoryImportStatus] Status='complete'. Checking step '${stepStatus}': isDone=${isDone}`);
+    }
+    // --- END DEBUG LOGGING ---
+
+    return isDone;
   };
 
 </script>
@@ -47,37 +55,39 @@
   <h4>Import Progress</h4>
 
   {#if status !== 'idle'}
-    <div class="status-steps">
-      <div class="step" class:active={status === 'sending'} class:done={isActiveOrDone('sending')}>
-        <span class="dot"></span> Sending to AI
+    {#key status} <!-- Force re-render on status change -->
+      <div class="status-steps">
+        <div class="step" class:active={status === 'sending'} class:done={isActiveOrDone('sending')}>
+          <span class="dot"></span> Sending to AI
+        </div>
+        <div class="step" class:active={status === 'receiving'} class:done={isActiveOrDone('receiving')}>
+          <span class="dot"></span> Receiving Response
+        </div>
+        <div class="step" class:active={status === 'parsing'} class:done={isActiveOrDone('parsing')}>
+          <span class="dot"></span> Parsing Entries
+        </div>
+        {#if isActiveOrDone('checking_existing') || status === 'checking_existing'}
+          <div class="step optional" class:active={status === 'checking_existing'} class:done={isActiveOrDone('checking_existing')}>
+            <span class="dot"></span> Checking Existing
+          </div>
+        {/if}
+        {#if isActiveOrDone('updating') || status === 'updating'}
+          <div class="step optional" class:active={status === 'updating'} class:done={isActiveOrDone('updating')}>
+            <span class="dot"></span> Updating Entries
+          </div>
+        {/if}
+        {#if isActiveOrDone('embedding') || status === 'embedding'} <!-- Added Embedding Step -->
+          <div class="step" class:active={status === 'embedding'} class:done={isActiveOrDone('embedding')}>
+            <span class="dot"></span> Generating Embeddings
+          </div>
+        {/if}
+        {#if isActiveOrDone('library') || status === 'library'} <!-- Added Library Step -->
+          <div class="step" class:active={status === 'library'} class:done={isActiveOrDone('library')}>
+            <span class="dot"></span> Saving to Library
+          </div>
+        {/if}
       </div>
-      <div class="step" class:active={status === 'receiving'} class:done={isActiveOrDone('receiving')}>
-        <span class="dot"></span> Receiving Response
-      </div>
-      <div class="step" class:active={status === 'parsing'} class:done={isActiveOrDone('parsing')}>
-        <span class="dot"></span> Parsing Entries
-      </div>
-      {#if isActiveOrDone('checking_existing') || status === 'checking_existing'}
-        <div class="step optional" class:active={status === 'checking_existing'} class:done={isActiveOrDone('checking_existing')}>
-          <span class="dot"></span> Checking Existing
-        </div>
-      {/if}
-      {#if isActiveOrDone('updating') || status === 'updating'}
-        <div class="step optional" class:active={status === 'updating'} class:done={isActiveOrDone('updating')}>
-          <span class="dot"></span> Updating Entries
-        </div>
-      {/if}
-      {#if isActiveOrDone('embedding') || status === 'embedding'} <!-- Added Embedding Step -->
-        <div class="step" class:active={status === 'embedding'} class:done={isActiveOrDone('embedding')}>
-          <span class="dot"></span> Generating Embeddings
-        </div>
-      {/if}
-      {#if isActiveOrDone('library') || status === 'library'} <!-- Added Library Step -->
-        <div class="step" class:active={status === 'library'} class:done={isActiveOrDone('library')}>
-          <span class="dot"></span> Saving to Library
-        </div>
-      {/if}
-    </div>
+    {/key} <!-- End key block -->
 
     <p class="current-status {status}">{currentStatusText}</p>
 

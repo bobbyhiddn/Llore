@@ -5,6 +5,7 @@ import (
 	"Llore/internal/embeddings" // Use the embeddings package
 	"fmt"
 	"log" // Added for logging
+	"sort"
 	"strings"
 )
 
@@ -60,6 +61,7 @@ func (b *ContextBuilder) BuildContextForQuery(query string) (string, error) {
 	// Build context string
 	var sb strings.Builder
 	includedCount := 0
+	var includedEntryInfo []string // Add slice to store info
 
 	if len(results) == 0 {
 		log.Println("No relevant context found for query.")
@@ -68,27 +70,27 @@ func (b *ContextBuilder) BuildContextForQuery(query string) (string, error) {
 
 	sb.WriteString("CONTEXT INFORMATION (ordered by relevance):\n") // Add header
 
-	// log.Printf("Found %d potential context entries. Checking scores against threshold %.2f:", len(results), b.similarityThreshold) // Remove count log
+	// Sort results by score descending (most similar first)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
 
 	for _, result := range results {
-		// Log the score before checking the threshold
-		// log.Printf("  - Entry ID: %d, Name: '%s', Score: %.4f", result.Entry.ID, result.Entry.Name, result.Score) // Remove score log
-
 		// Skip entries below the similarity threshold
 		if result.Score < b.similarityThreshold {
-			continue
+			break
 		}
 
 		// Add entry to context string
 		// Using a clear format for the LLM
 		sb.WriteString(fmt.Sprintf("--- Entry Start ---\n"))
-		sb.WriteString(fmt.Sprintf("Type: %s\n", result.Entry.Type))
 		sb.WriteString(fmt.Sprintf("Name: %s\n", result.Entry.Name))
 		sb.WriteString(fmt.Sprintf("Content:\n%s\n", result.Entry.Content))
 		sb.WriteString(fmt.Sprintf("(Relevance Score: %.2f)\n", result.Score))
 		sb.WriteString(fmt.Sprintf("--- Entry End ---\n\n"))
 
 		includedCount++
+		includedEntryInfo = append(includedEntryInfo, fmt.Sprintf("%s (Score: %.2f)", result.Entry.Name, result.Score)) // Store info
 	}
 
 	if includedCount == 0 {
@@ -96,6 +98,6 @@ func (b *ContextBuilder) BuildContextForQuery(query string) (string, error) {
 		return "", nil // No entries met the threshold
 	}
 
-	log.Printf("Built context with %d entries for query.", includedCount)
+	log.Printf("Built context with %d entries for query: [%s]", includedCount, strings.Join(includedEntryInfo, "; ")) // Modify log message
 	return sb.String(), nil
 }
