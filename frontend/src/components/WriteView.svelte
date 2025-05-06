@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
-  import { SaveLibraryFile, GenerateOpenRouterContent } from '@wailsjs/go/main/App';
+  import { SaveLibraryFile, GenerateOpenRouterContent, GetAIResponseWithContext } from '@wailsjs/go/main/App';
 
   // Props
   export let initialContent: string = ''; // If loading existing content
@@ -94,18 +94,31 @@
     }
     prompt += "AI:"; // Prompt the AI for its turn
 
+    // Define modelToUse outside the try block so it's available in the catch block for fallback
+    const modelToUse = chatModelId; // Use the model from props
+    
     try {
-      const modelToUse = chatModelId; // Use the model from props
-      console.log(`Write Chat using model: ${modelToUse}`);
+      console.log(`Write Chat using model: ${modelToUse} with RAG context`);
 
-      const aiReply = await GenerateOpenRouterContent(prompt, modelToUse);
+      // Use GetAIResponseWithContext instead of GenerateOpenRouterContent to leverage RAG
+      // This will automatically find and include relevant entries from the codex
+      const aiReply = await GetAIResponseWithContext(prompt, modelToUse);
       writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply }];
+      console.log("Received RAG-enhanced response for write chat");
 
     } catch (err) {
+      console.error("Error in RAG-based write chat:", err);
       writeChatError = `AI error: ${err}`;
-      console.error("Write Chat Error:", err);
-      // Optionally add the error as a system message to the chat?
-      // writeChatMessages = [...writeChatMessages, { sender: 'ai', text: `Sorry, I encountered an error: ${err}` }];
+      // Fall back to direct generation if RAG fails
+      try {
+        console.log("Falling back to direct generation for write chat");
+        const fallbackReply = await GenerateOpenRouterContent(prompt, modelToUse);
+        writeChatMessages = [...writeChatMessages, { sender: 'ai', text: fallbackReply }];
+        writeChatError = "Note: Used fallback generation method (RAG unavailable)";
+      } catch (fallbackErr) {
+        // If even the fallback fails, just show the original error
+        writeChatError = `AI error: ${err}. Fallback also failed: ${fallbackErr}`;
+      }
     } finally {
       isWriteChatLoading = false;
     }
