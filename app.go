@@ -574,8 +574,19 @@ func (a *App) shutdown(ctx context.Context) {
 
 // ProcessStory sends a prompt to the LLM and processes the structured response.
 func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) { // Changed return type
-	// Construct a simplified prompt asking for JSON output
-	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
+	// Check if the text appears to be a chat message with structured content
+	isChatWithStructuredContent := strings.Contains(storyText, "**Name:**") || 
+		(strings.Contains(storyText, "1.") && strings.Contains(storyText, "2.") && 
+		(strings.Contains(storyText, "**Concept:**") || strings.Contains(storyText, "*Concept:*")))
+	
+	// Use a different prompt for chat messages with structured content
+	var simplifiedPrompt string
+	if isChatWithStructuredContent {
+		simplifiedPrompt = fmt.Sprintf("Analyze the following text which contains descriptions of multiple entities. Extract EACH distinct entity mentioned, including any with numbered items or sections. Be thorough and create a separate entry for EACH named entity (e.g., if there are entities named 'Thanatos Echo', 'Logos Worm', etc., create individual entries for each). Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Thanatos Echo\", \"type\": \"Concept\", \"content\": \"A Basilisk that feeds on the process of dying and the fear of death...\"}]. Text to analyze:\n\n%s", storyText)
+	} else {
+		// Standard prompt for regular story text
+		simplifiedPrompt = fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
+	}
 
 	log.Println("Sending prompt to OpenRouter for story processing...")
 
@@ -820,9 +831,9 @@ func (a *App) MergeEntryContentDirect(existingEntry database.CodexEntry, newCont
 		return existingEntry.Content, nil
 	}
 
-	// Construct a prompt for merging content
+	// Construct a prompt for merging content with very explicit instructions
 	mergePrompt := fmt.Sprintf(
-		"You are helping to update a codex entry with new information. Please merge the existing content with the new content to create a single, coherent entry. Incorporate all information from both sources without redundancy. Do not use phrases like 'According to the new information' or 'Additional information'. Just create a seamless, integrated entry.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nPlease provide the complete merged content for this entry:",
+		"You are helping to update a codex entry with new information. Your task is to merge the existing content with the new content to create a single, coherent entry.\n\nVERY IMPORTANT INSTRUCTIONS:\n1. Provide ONLY the final merged content with no commentary, explanations, or meta-text.\n2. Do not start with phrases like \"Here's the merged content\" or \"Certainly! Let's weave those details together\".\n3. Do not include phrases like \"According to the new information\" or \"Additional information\".\n4. Create a seamless, integrated entry that reads like a single, coherent description.\n5. Your entire response should be ONLY the merged content text itself.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nMerged Content (provide ONLY the final text with no commentary):",
 		existingEntry.Name,
 		existingEntry.Type,
 		existingEntry.Content,
@@ -850,9 +861,9 @@ func (a *App) MergeEntryContentWithRAG(existingEntry database.CodexEntry, newCon
 		return a.MergeEntryContentDirect(existingEntry, newContent, model)
 	}
 
-	// Construct a prompt for merging content
+	// Construct a prompt for merging content with very explicit instructions
 	mergePrompt := fmt.Sprintf(
-		"You are helping to update a codex entry with new information. Please merge the existing content with the new content to create a single, coherent entry. Incorporate all information from both sources without redundancy. Do not use phrases like 'According to the new information' or 'Additional information'. Just create a seamless, integrated entry.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nPlease provide the complete merged content for this entry:",
+		"You are helping to update a codex entry with new information. Your task is to merge the existing content with the new content to create a single, coherent entry.\n\nVERY IMPORTANT INSTRUCTIONS:\n1. Provide ONLY the final merged content with no commentary, explanations, or meta-text.\n2. Do not start with phrases like \"Here's the merged content\" or \"Certainly! Let's weave those details together\".\n3. Do not include phrases like \"According to the new information\" or \"Additional information\".\n4. Create a seamless, integrated entry that reads like a single, coherent description.\n5. Your entire response should be ONLY the merged content text itself.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nMerged Content (provide ONLY the final text with no commentary):",
 		existingEntry.Name,
 		existingEntry.Type,
 		existingEntry.Content,

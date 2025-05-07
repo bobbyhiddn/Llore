@@ -39,7 +39,14 @@
   });
 
   // Reactive Markdown Rendering
-  $: renderMarkdown(writeContent);
+  $: {
+    if (writeContent !== undefined) {
+      renderMarkdown(writeContent);
+    }
+  }
+  
+  // Track editor view mode
+  let editorMode: 'split' | 'edit' | 'preview' = 'split';
 
   // Auto-scroll chat display
   afterUpdate(() => {
@@ -54,15 +61,17 @@
     dispatch('back');
   }
 
-  async function renderMarkdown(markdown: string) {
-      try {
-          // Use async parsing
-          renderedWriteHtml = await marked.parse(markdown || '');
-      } catch (err) {
-          console.error("Markdown rendering error:", err);
-          // Fallback to plain text on error
-          renderedWriteHtml = markdown.replace(/</g, "<").replace(/>/g, ">");
-      }
+  function renderMarkdown(text: string) {
+    try {
+      // Use the marked instance with basic configuration
+      // Cast the result to string to fix TypeScript error
+      const result = marked.parse(text || '');
+      renderedWriteHtml = typeof result === 'string' ? result : String(result);
+    } catch (err) {
+      console.error("Markdown rendering error:", err);
+      // Fallback to plain text on error
+      renderedWriteHtml = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
   }
 
   // --- Write Mode Chat Function ---
@@ -311,16 +320,47 @@
 
   <!-- Right Panel (Editor + Preview) -->
   <div class="write-right-panel">
-     <textarea
-       class="markdown-input"
-       bind:value={writeContent}
-       bind:this={markdownTextareaElement}
-       placeholder="Start writing your masterpiece (Markdown supported)..."
-     ></textarea>
-     <div class="markdown-preview-container">
-        <h3 class="preview-header">Preview</h3>
+    <div class="editor-toolbar">
+      <div class="view-mode-toggles">
+        <button 
+          class="view-mode-btn {editorMode === 'edit' ? 'active' : ''}"
+          on:click={() => editorMode = 'edit'}
+          title="Edit mode"
+        >
+          <span class="btn-icon">📝</span> Edit
+        </button>
+        <button 
+          class="view-mode-btn {editorMode === 'split' ? 'active' : ''}"
+          on:click={() => editorMode = 'split'}
+          title="Split mode"
+        >
+          <span class="btn-icon">⚔️</span> Split
+        </button>
+        <button 
+          class="view-mode-btn {editorMode === 'preview' ? 'active' : ''}"
+          on:click={() => editorMode = 'preview'}
+          title="Preview mode"
+        >
+          <span class="btn-icon">👁️</span> Preview
+        </button>
+      </div>
+    </div>
+    
+    <div class="editor-container {editorMode}">
+      <textarea
+        class="markdown-input"
+        bind:value={writeContent}
+        bind:this={markdownTextareaElement}
+        placeholder="Start writing your masterpiece (Markdown supported)..."
+        style="display: {editorMode === 'preview' ? 'none' : 'block'}"
+      ></textarea>
+      <div 
+        class="markdown-preview-container"
+        style="display: {editorMode === 'edit' ? 'none' : 'block'}"
+      >
         <div class="markdown-preview">{@html renderedWriteHtml}</div>
-     </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -561,76 +601,253 @@
 
   .write-right-panel {
     display: flex;
-    flex-direction: column; /* Stack editor and preview */
+    flex-direction: column;
     flex-grow: 1; /* Take remaining space */
-    gap: 1rem;
     min-width: 0; /* Important for flex child */
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden; /* Ensure content doesn't overflow */
+  }
+  
+  .editor-toolbar {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .view-mode-toggles {
+    display: flex;
+    gap: 0.5rem;
+  }
+  
+  .view-mode-btn {
+    padding: 0.4rem 0.8rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    transition: all 0.2s ease;
+  }
+  
+  .view-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--text-primary);
+  }
+  
+  .view-mode-btn.active {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+  }
+  
+  .editor-container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  
+  .editor-container.split {
+    flex-direction: row;
+  }
+  
+  .editor-container.edit, .editor-container.preview {
+    flex-direction: column;
   }
 
   .markdown-input {
-    flex: 1; /* Take half the space */
-    min-height: 150px; /* Minimum height */
-    resize: none; /* Disable manual resize */
-    font-family: monospace;
+    flex: 1;
+    min-height: 150px;
+    resize: none;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     background: var(--bg-secondary);
     color: var(--text-primary);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: none;
     padding: 1rem;
-    border-radius: 4px;
-    line-height: 1.5;
+    line-height: 1.6;
     font-size: 0.95rem;
+    overflow-y: auto;
   }
-   .markdown-input:focus {
-       outline: none;
-       border-color: var(--accent-primary);
-       background: rgba(0,0,0,0.1);
-   }
+  
+  .editor-container.split .markdown-input {
+    flex: 1;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .markdown-input:focus {
+    outline: none;
+  }
 
   .markdown-preview-container {
-    flex: 1; /* Take half the space */
+    flex: 1;
     background: var(--bg-secondary);
-    padding: 0 1rem 1rem 1rem; /* Padding bottom */
-    border-radius: 8px;
+    padding: 1rem;
     overflow-y: auto;
-    border: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
     flex-direction: column;
-    min-height: 150px;
   }
-  .preview-header {
-      margin: 1rem 0 0.5rem 0;
-      color: var(--text-secondary);
-      font-size: 1rem;
-      font-weight: 500;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      padding-bottom: 0.5rem;
-      flex-shrink: 0;
-  }
+  
   .markdown-preview {
-      flex-grow: 1;
-      overflow-y: auto; /* Scroll content within preview */
-      line-height: 1.6;
-      padding-right: 0.5rem; /* Space for scrollbar */
+    flex-grow: 1;
+    line-height: 1.6;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    color: var(--text-primary);
+    padding-bottom: 2rem; /* Add some bottom padding for scrolling */
   }
-  /* Basic Markdown Preview Styles */
+  
+  /* Enhanced Markdown Preview Styles */
   .markdown-preview :global(h1),
   .markdown-preview :global(h2),
-  .markdown-preview :global(h3) { margin-top: 1.5em; margin-bottom: 0.5em; color: var(--accent-secondary); border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.2em;}
-  .markdown-preview :global(h1) { font-size: 1.8em; }
-  .markdown-preview :global(h2) { font-size: 1.5em; }
-  .markdown-preview :global(h3) { font-size: 1.2em; }
-  .markdown-preview :global(p) { margin-bottom: 1em; }
+  .markdown-preview :global(h3),
+  .markdown-preview :global(h4),
+  .markdown-preview :global(h5),
+  .markdown-preview :global(h6) {
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    color: var(--accent-secondary);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  
+  .markdown-preview :global(h1) {
+    font-size: 1.8em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.3em;
+  }
+  
+  .markdown-preview :global(h2) {
+    font-size: 1.5em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.2em;
+  }
+  
+  .markdown-preview :global(h3) { font-size: 1.3em; }
+  .markdown-preview :global(h4) { font-size: 1.1em; }
+  
+  .markdown-preview :global(p) {
+    margin-bottom: 1em;
+    line-height: 1.6;
+  }
+  
   .markdown-preview :global(ul),
-  .markdown-preview :global(ol) { margin-left: 1.5em; margin-bottom: 1em; }
-  .markdown-preview :global(li) { margin-bottom: 0.3em; }
-  .markdown-preview :global(code) { background: rgba(255,255,255,0.1); padding: 0.2em 0.4em; border-radius: 3px; font-family: monospace; font-size: 0.9em;}
-  .markdown-preview :global(pre) { background: rgba(0,0,0,0.2); padding: 1em; border-radius: 4px; overflow-x: auto; }
-  .markdown-preview :global(pre code) { background: none; padding: 0; }
-  .markdown-preview :global(blockquote) { border-left: 3px solid var(--accent-primary); margin-left: 0; padding-left: 1em; color: var(--text-secondary); font-style: italic; }
-  .markdown-preview :global(a) { color: var(--accent-secondary); }
-  .markdown-preview :global(a:hover) { text-decoration: underline; }
-  .markdown-preview :global(strong) { font-weight: bold; }
-  .markdown-preview :global(em) { font-style: italic; }
+  .markdown-preview :global(ol) {
+    margin-left: 1.5em;
+    margin-bottom: 1em;
+    padding-left: 0.5em;
+  }
+  
+  .markdown-preview :global(li) {
+    margin-bottom: 0.5em;
+  }
+  
+  .markdown-preview :global(li > ul),
+  .markdown-preview :global(li > ol) {
+    margin-top: 0.3em;
+    margin-bottom: 0.3em;
+  }
+  
+  .markdown-preview :global(code) {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    color: #e6e6e6;
+  }
+  
+  .markdown-preview :global(pre) {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 1em;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin-bottom: 1em;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .markdown-preview :global(pre code) {
+    background: none;
+    padding: 0;
+    font-size: 0.9em;
+    color: #e6e6e6;
+    white-space: pre;
+  }
+  
+  .markdown-preview :global(blockquote) {
+    border-left: 3px solid var(--accent-primary);
+    margin: 1em 0;
+    padding: 0.5em 1em;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    border-radius: 0 4px 4px 0;
+  }
+  
+  .markdown-preview :global(blockquote p:last-child) {
+    margin-bottom: 0;
+  }
+  
+  .markdown-preview :global(a) {
+    color: var(--accent-secondary);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent-secondary);
+    transition: all 0.2s ease;
+  }
+  
+  .markdown-preview :global(a:hover) {
+    border-bottom: 1px solid var(--accent-secondary);
+  }
+  
+  .markdown-preview :global(strong) {
+    font-weight: 600;
+    color: #f0f0f0;
+  }
+  
+  .markdown-preview :global(em) {
+    font-style: italic;
+  }
+  
+  .markdown-preview :global(img) {
+    max-width: 100%;
+    border-radius: 4px;
+    margin: 1em 0;
+  }
+  
+  .markdown-preview :global(hr) {
+    border: none;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 2em 0;
+  }
+  
+  .markdown-preview :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    overflow-x: auto;
+    display: block;
+  }
+  
+  .markdown-preview :global(th),
+  .markdown-preview :global(td) {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5em 1em;
+    text-align: left;
+  }
+  
+  .markdown-preview :global(th) {
+    background: rgba(255, 255, 255, 0.05);
+    font-weight: 600;
+  }
+  
+  .markdown-preview :global(tr:nth-child(even)) {
+    background: rgba(255, 255, 255, 0.02);
+  }
 
 
   /* Modals */

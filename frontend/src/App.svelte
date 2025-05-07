@@ -710,31 +710,32 @@
         storyImportViewRef.updateImportStatus('sending');
       }
 
-      // Call ProcessStory and check for existing entries
-      const result = await ProcessStory(content);
-
-      if (!force && result.existingEntries && result.existingEntries.length > 0) {
-        // Show confirmation modal for existing entries
-        storyImportViewRef?.showExistingConfirmation(result.existingEntries);
-      } else {
-        // Process directly if no existing entries or force update
-        if (storyImportViewRef) {
-          storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
-        }
-
-        // Save to library with the provided filename
-        await ImportStoryTextAndFile(content, filename);
-
-        if (storyImportViewRef) {
-          storyImportViewRef.showImportSuccess({
-            newEntries: result.newEntries || [],
-            updatedEntries: result.updatedEntries || []
-          });
-        }
-
-        // Refresh codex entries
-        await loadEntries();
+      // First, save the file to the library with the provided filename
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
       }
+      
+      // Save to library with the provided filename
+      // This function both saves the file and processes it for codex entries
+      const entries = await ImportStoryTextAndFile(content, filename);
+      
+      // Refresh library files to ensure the new file appears in the list
+      await refreshLibraryFiles();
+      
+      // Show success message
+      if (storyImportViewRef) {
+        // Since ImportStoryTextAndFile already processes the story,
+        // we don't need to call ProcessStory separately
+        storyImportViewRef.showImportSuccess({
+          // New entries have ID > 0, updated entries have ID === 0
+          // This was reversed in the previous code
+          newEntries: entries.filter(e => e.id === 0) || [],
+          updatedEntries: entries.filter(e => e.id > 0) || []
+        });
+      }
+
+      // Refresh codex entries
+      await loadEntries();
     } catch (error: any) {
       console.error('Error processing story import:', error);
       if (storyImportViewRef) {

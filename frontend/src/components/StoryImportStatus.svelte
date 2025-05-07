@@ -48,7 +48,47 @@
 
     return isDone;
   };
-
+  
+  // --- Helper to extract entry data from various formats ---
+  function extractEntryData(entry: any): { name: string, type: string, content: string } {
+    // If the entry is already a proper object with name and type, use it directly
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && entry.name && entry.type) {
+      return {
+        name: entry.name,
+        type: entry.type,
+        content: entry.content || ''
+      };
+    }
+    
+    // Check if the entry might be a stringified JSON
+    if (typeof entry === 'string') {
+      try {
+        let parsed = JSON.parse(entry);
+        
+        // Handle case where it's a JSON array with a single object
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          parsed = parsed[0]; // Take the first item from the array
+        }
+        
+        if (parsed && typeof parsed === 'object' && parsed.name && parsed.type) {
+          return {
+            name: parsed.name,
+            type: parsed.type,
+            content: parsed.content || ''
+          };
+        }
+      } catch (e) {
+        console.error('Failed to parse entry as JSON:', e);
+      }
+    }
+    
+    // Return a default object if parsing failed
+    return {
+      name: 'Unknown',
+      type: 'Unknown',
+      content: String(entry)
+    };
+  }
 </script>
 
 <div class="status-container">
@@ -99,7 +139,9 @@
             <p><strong>New Entries ({totalNew}):</strong></p>
             <ul>
               {#each newEntries as entry (entry.id)}
-                <li>{entry.name} ({entry.type})</li>
+                <!-- Extract entry data from various formats -->
+                {@const entryData = extractEntryData(entry)}
+                <li>{entryData.name} ({entryData.type}): {entryData.content}</li>
               {/each}
             </ul>
           {/if}
@@ -107,7 +149,9 @@
             <p><strong>Updated Entries ({totalUpdated}):</strong></p>
             <ul>
               {#each updatedEntries as entry (entry.id)}
-                <li>{entry.name} ({entry.type})</li>
+                <!-- Extract entry data from various formats -->
+                {@const entryData = extractEntryData(entry)}
+                <li>{entryData.name} ({entryData.type}): {entryData.content}</li>
               {/each}
             </ul>
           {/if}
