@@ -18,8 +18,16 @@ export function FetchOpenRouterModelsWithKey(arg1) {
   return window['go']['main']['App']['FetchOpenRouterModelsWithKey'](arg1);
 }
 
+export function GenerateMissingEmbeddings() {
+  return window['go']['main']['App']['GenerateMissingEmbeddings']();
+}
+
 export function GenerateOpenRouterContent(arg1, arg2) {
   return window['go']['main']['App']['GenerateOpenRouterContent'](arg1, arg2);
+}
+
+export function GetAIResponseWithContext(arg1, arg2) {
+  return window['go']['main']['App']['GetAIResponseWithContext'](arg1, arg2);
 }
 
 export function GetAllEntries() {
@@ -34,8 +42,8 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
-export function ImportStoryTextAndFile(arg1) {
-  return window['go']['main']['App']['ImportStoryTextAndFile'](arg1);
+export function ImportStoryTextAndFile(arg1, arg2) {
+  return window['go']['main']['App']['ImportStoryTextAndFile'](arg1, arg2);
 }
 
 export function ListChatLogs() {
@@ -48,6 +56,14 @@ export function ListLibraryFiles() {
 
 export function LoadChatLog(arg1) {
   return window['go']['main']['App']['LoadChatLog'](arg1);
+}
+
+export function MergeEntryContentDirect(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MergeEntryContentDirect'](arg1, arg2, arg3);
+}
+
+export function MergeEntryContentWithRAG(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MergeEntryContentWithRAG'](arg1, arg2, arg3);
 }
 
 export function ProcessAndSaveTextAsEntries(arg1) {

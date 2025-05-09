@@ -6,6 +6,7 @@
   export let initialApiKey: string = '';
   export let initialChatModelId: string = '';
   export let initialStoryProcessingModelId: string = '';
+  export let initialGeminiApiKey: string = ''; // Added for Gemini key
   export let modelList: llm.OpenRouterModel[] = [];
   export let isModelListLoading: boolean = false;
   export let modelListError: string = '';
@@ -17,7 +18,9 @@
   let openrouterApiKey: string = '';
   let chatModelId: string = '';
   let storyProcessingModelId: string = '';
+  let geminiApiKey: string = ''; // Added for Gemini key
   let showApiKey = false;
+  let showGeminiKey = false; // Added for Gemini key visibility
 
   const dispatch = createEventDispatcher();
 
@@ -26,6 +29,7 @@
     openrouterApiKey = initialApiKey;
     chatModelId = initialChatModelId;
     storyProcessingModelId = initialStoryProcessingModelId;
+    geminiApiKey = initialGeminiApiKey; // Initialize Gemini key
     // Request model list load if API key is present but list is empty
     if (openrouterApiKey && modelList.length === 0 && !isModelListLoading) {
         dispatch('loadmodels');
@@ -73,7 +77,8 @@
     dispatch('savesettings', {
       openrouter_api_key: openrouterApiKey,
       chat_model_id: chatModelId,
-      story_processing_model_id: storyProcessingModelId
+      story_processing_model_id: storyProcessingModelId,
+      gemini_api_key: geminiApiKey
     });
   }
 
@@ -131,6 +136,41 @@
         </div>
          <p class="help-text">Get your key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>. Required for AI features.</p>
       </div>
+
+      <!-- Gemini API Key Input -->
+      <div class="form-group">
+          <label for="geminiApiKey">Gemini API Key (for embeddings):</label>
+          <div class="api-key-input">
+              {#if showGeminiKey}
+                  <input
+                      type="text"
+                      id="geminiApiKey"
+                      bind:value={geminiApiKey}
+                      placeholder="Enter your Gemini API key (e.g., AIza...)"
+                  />
+              {:else}
+                  <input
+                      type="password"
+                      id="geminiApiKey"
+                      bind:value={geminiApiKey}
+                      placeholder="Enter your Gemini API key"
+                  />
+              {/if}
+              <button
+                  type="button"
+                  class="toggle-visibility"
+                  on:click={() => showGeminiKey = !showGeminiKey}
+                  title={showGeminiKey ? "Hide Gemini Key" : "Show Gemini Key"}
+              >
+                  {#if showGeminiKey}👁️{:else}👁️‍🗨️{/if}
+              </button>
+          </div>
+          <p class="help-text">
+              Required for intelligent search & context features. Get your API key from
+              <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
+          </p>
+      </div>
+      <!-- End Gemini API Key Input -->
 
       <div class="form-group">
         <label for="chat-model-select">Default Chat Model:</label>

@@ -18,7 +18,8 @@
     GenerateOpenRouterContent, SelectVaultFolder, CreateNewVault, SwitchVault,
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
-    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly
+    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
+    GetAIResponseWithContext, // Added for RAG-based codex generation
   } from '@wailsjs/go/main/App';
 
   // --- Core App State ---
@@ -34,6 +35,7 @@
   let openrouterApiKey = '';
   let chatModelId: string = ''; // Default chat model
   let storyProcessingModelId: string = ''; // Default story processing model
+  let geminiApiKey: string = ''; // Gemini API key
   let modelList: llm.OpenRouterModel[] = [];
   let isModelListLoading = false;
   let modelListError = '';
@@ -46,6 +48,19 @@
   let isEditing = false;
   let isGenerating = false; // AI content generation state
   let codexErrorMsg = ''; // Specific errors for CodexView
+  
+  // Add reactivity to track state changes
+  $: if (isLoading !== undefined) {
+    console.log('App.svelte - isLoading changed:', isLoading);
+  }
+  
+  $: if (isEditing !== undefined) {
+    console.log('App.svelte - isEditing changed:', isEditing);
+  }
+  
+  $: if (currentEntry !== undefined) {
+    console.log('App.svelte - currentEntry changed:', currentEntry?.id);
+  }
 
   // --- Library State ---
   let libraryFiles: string[] = [];
@@ -60,22 +75,23 @@
   let isProcessingImport = false; // Processing file content
   let storyImportErrorMsg = ''; // Specific errors for StoryImportView
   let storyImportSuccessMsg = ''; // Feedback for story import
+  
   // Refs to child components to call methods
-  let storyImportViewRef: StoryImportView;
-  let chatViewRef: ChatView;
-  let settingsViewRef: SettingsView;
-
-  // --- Chat State (Managed by ChatView, but some feedback might bubble up) ---
-  // let chatError = ''; // Now local to ChatView mostly
-
-  // --- Write State (Managed by WriteView) ---
-  // let writeError = ''; // Now local to WriteView
+  let codexViewRef: CodexView | null = null;
+  let chatViewRef: ChatView | null = null;
+  let storyImportViewRef: StoryImportView | null = null;
+  let settingsViewRef: SettingsView | null = null;
+  
+  // Variables for WriteView initial content when opening from library
+  let writeViewInitialContent: string = '';
+  let writeViewInitialFilename: string = '';
 
   // --- Interfaces --- (Keep if needed globally, or move to models.ts if applicable)
   interface OpenRouterConfig {
     openrouter_api_key: string;
     chat_model_id: string;
     story_processing_model_id: string;
+    gemini_api_key: string;
   }
 
   // --- Initialization ---
@@ -240,7 +256,8 @@
       openrouterApiKey = settings.openrouter_api_key || '';
       chatModelId = settings.chat_model_id || '';
       storyProcessingModelId = settings.story_processing_model_id || '';
-      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId });
+      geminiApiKey = settings.gemini_api_key || '';
+      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId, geminiKeySet: !!geminiApiKey });
       // If API key is present, trigger model list load
       if (openrouterApiKey) {
         await loadModelList();
@@ -271,6 +288,7 @@
       openrouterApiKey = settingsToSave.openrouter_api_key;
       chatModelId = settingsToSave.chat_model_id;
       storyProcessingModelId = settingsToSave.story_processing_model_id;
+      geminiApiKey = settingsToSave.gemini_api_key;
       // Reload models if API key might have changed
       if (openrouterApiKey) {
           await loadModelList();
@@ -367,80 +385,228 @@
 
   async function handleSaveEntry(event: CustomEvent<{ entryData: database.CodexEntry, isEditing: boolean }>) {
     const { entryData, isEditing: wasEditing } = event.detail;
+    console.log(`handleSaveEntry called. WasEditing: ${wasEditing}`);
+    
+    // Important: Create local copies of state to avoid reactivity issues
+    let tempCurrentEntry = currentEntry;
+    let tempIsEditing = isEditing;
+    
+    // Set loading state
     isLoading = true;
+    console.log(`isLoading set to true`);
     codexErrorMsg = '';
+    
     try {
       if (wasEditing) {
-        console.log("Attempting to update entry:", entryData);
+        console.log("Attempting to update entry:", entryData.id);
         await UpdateEntry(entryData); // Assumes entryData includes the ID
+        console.log("UpdateEntry returned successfully for:", entryData.id);
         alert('Entry updated successfully!'); // Simple feedback for now
-        await loadEntries(); // Refresh list
-        // Reselect the updated entry
-        currentEntry = entries.find(e => e.id === entryData.id) || null;
-        isEditing = !!currentEntry; // Stay in edit mode if found
+        
+        // Refresh entries list
+        await loadEntries(); 
+        console.log("loadEntries after update completed.");
+        
+        // Find the updated entry in the refreshed list
+        const updatedEntry = entries.find(e => e.id === entryData.id) || null;
+        console.log("Found updated entry:", updatedEntry?.id);
+        
+        // Update state in a specific order
+        tempCurrentEntry = updatedEntry;
+        tempIsEditing = !!updatedEntry;
       } else {
-        console.log("Attempting to create entry:", entryData);
+        console.log("Attempting to create entry:", entryData.name);
         const newEntry = await CreateEntry(entryData.name, entryData.type, entryData.content);
+        console.log("CreateEntry returned successfully. New ID:", newEntry.id);
+        
+        // Refresh entries list before trying to find the new entry
+        await loadEntries();
+        console.log("loadEntries after create completed.");
+        
+        // Find the newly created entry in the refreshed list
+        const createdEntry = entries.find(e => e.id === newEntry.id);
+        if (!createdEntry) {
+          throw new Error("Failed to find newly created entry after refresh");
+        }
+        console.log("Found created entry:", createdEntry.id);
+        
+        // Update state in a specific order
+        tempCurrentEntry = createdEntry;
+        tempIsEditing = true; // Always set to true after creation to allow immediate editing
+        
         alert(`Entry '${newEntry.name}' created successfully!`);
-        await loadEntries(); // Refresh list
-        // Select the newly created entry
-        currentEntry = entries.find(e => e.id === newEntry.id) || null;
-        isEditing = !!currentEntry; // Switch to edit mode
       }
     } catch (err) {
-      console.error(`Error ${wasEditing ? 'updating' : 'creating'} entry:`, err);
+      console.error(`Error in handleSaveEntry (${wasEditing ? 'update' : 'create'})`, err);
       codexErrorMsg = `Failed to ${wasEditing ? 'update' : 'create'} entry: ${err}`;
       // Keep currentEntry and isEditing as they were before the failed attempt
     } finally {
+      // Apply state changes after all operations are complete
+      console.log("Setting final state values");
+      currentEntry = tempCurrentEntry;
+      isEditing = tempIsEditing;
+      
+      // IMPORTANT: Reset loading state last
       isLoading = false;
+      console.log(`Final state: isLoading=${isLoading}, isEditing=${isEditing}, currentEntry=${currentEntry?.id}`);
     }
   }
 
   async function handleDeleteEntry(event: CustomEvent<number>) {
     const entryId = event.detail;
+    console.log(`handleDeleteEntry called for ID: ${entryId}`);
+    
+    // Important: Create local copies of state to avoid reactivity issues
+    let tempCurrentEntry = currentEntry;
+    let tempIsEditing = isEditing;
+    
+    // Set loading state
     isLoading = true;
+    console.log(`isLoading set to true in handleDeleteEntry`);
     codexErrorMsg = '';
+    
     try {
       await DeleteEntry(entryId);
+      console.log("DeleteEntry returned successfully for:", entryId);
       alert('Entry deleted successfully!');
-      currentEntry = null; // Deselect
-      isEditing = false;
-      await loadEntries(); // Refresh list
+      
+      // Reset entry selection state
+      tempCurrentEntry = null;
+      tempIsEditing = false;
+      
+      // Refresh entries list
+      await loadEntries();
+      console.log("loadEntries after delete completed.");
     } catch (err) {
       console.error("Error deleting entry:", err);
       codexErrorMsg = `Failed to delete entry: ${err}`;
+      // Keep currentEntry and isEditing as they were before the failed attempt
     } finally {
+      // Apply state changes after all operations are complete
+      console.log("Setting final state values in handleDeleteEntry");
+      currentEntry = tempCurrentEntry;
+      isEditing = tempIsEditing;
+      
+      // IMPORTANT: Reset loading state last
       isLoading = false;
+      console.log(`Final state after delete: isLoading=${isLoading}, isEditing=${isEditing}, currentEntry=${currentEntry?.id}`);
     }
   }
 
   async function handleGenerateCodexContent(event: CustomEvent<{ entryData: database.CodexEntry, model: string }>) {
       const { entryData, model } = event.detail;
+      console.log(`handleGenerateCodexContent called for entry: ${entryData.name}`);
+      
+      // Important: Create local copies of state to avoid reactivity issues
+      let tempCurrentEntry = currentEntry;
+      
+      // Set generating state
       isGenerating = true;
+      console.log(`isGenerating set to true`);
       codexErrorMsg = '';
       let generatedContent = '';
 
-      // Construct prompt (similar to original App.svelte)
-      let prompt = `Expand on the following codex entry. Provide more details, background, or connections based on its name, type, and existing content.\n\nName: ${entryData.name}\nType: ${entryData.type}\nContent: ${entryData.content || '(empty)'}`;
+      // Construct prompt
+      let prompt = `Expand ONLY on the following codex entry. Focus exclusively on this entry and do not create entries for other characters or locations. You may mention relationships to other entities, but only as they relate directly to this entry.\n\nName: ${entryData.name}\nType: ${entryData.type}\nContent: ${entryData.content || '(empty)'}\n\nProvide a single, detailed expansion of this entry. Do not format your response as JSON or include multiple entries.`;
 
       try {
-          console.log(`Generating content for entry '${entryData.name}' using model ${model}`);
-          generatedContent = await GenerateOpenRouterContent(prompt, model);
-          console.log(`Generated content received: ${generatedContent.substring(0, 100)}...`);
-          // Update the current entry state directly - this will flow down to CodexView
-          if (currentEntry && currentEntry.id === entryData.id) { // Ensure we're updating the selected entry
-              currentEntry = { ...currentEntry, content: generatedContent };
-          } else if (!isEditing && entryData.id === 0) { // Handle generating for a new entry
-              currentEntry = { ...entryData, content: generatedContent };
+          console.log(`Generating content for entry '${entryData.name}' using model ${model} with RAG context`);
+          // Use GetAIResponseWithContext instead of GenerateOpenRouterContent to leverage RAG
+          generatedContent = await GetAIResponseWithContext(prompt, model);
+          console.log("Content generation with RAG successful");
+
+          // Attempt to parse the JSON response
+          let extractedText = generatedContent; // Default to the raw response
+          try {
+              const parsedResponse = JSON.parse(generatedContent);
+              console.log("Successfully parsed generated content as JSON");
+              
+              if (typeof parsedResponse === 'string') {
+                  // Case 1: The JSON parsed into a direct string
+                  extractedText = parsedResponse;
+                  console.log("Parsed response is a string");
+              } else if (Array.isArray(parsedResponse)) {
+                  // Case 2: The JSON parsed into an array
+                  console.log("Parsed response is an array. Converting to formatted text...");
+                  
+                  // Convert array to formatted text
+                  let formattedText = '';
+                  parsedResponse.forEach((item, index) => {
+                      if (typeof item === 'string') {
+                          formattedText += item + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                      } else if (item && typeof item === 'object') {
+                          // Handle objects in the array (like the example with name, type, content)
+                          if (item.name && item.content) {
+                              formattedText += `## ${item.name}${item.type ? ' (' + item.type + ')' : ''}\n\n${item.content}\n\n`;
+                          } else {
+                              // Generic object formatting
+                              formattedText += JSON.stringify(item, null, 2) + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                          }
+                      } else {
+                          formattedText += String(item) + (index < parsedResponse.length - 1 ? '\n\n' : '');
+                      }
+                  });
+                  
+                  if (formattedText.trim() !== '') {
+                      extractedText = formattedText;
+                      console.log("Converted array to formatted text");
+                  } else {
+                      console.warn("Array conversion resulted in empty text. Using raw JSON.");
+                      codexErrorMsg = 'AI response array could not be formatted. Displaying raw data. Check console.';
+                  }
+              } else if (parsedResponse && typeof parsedResponse === 'object') {
+                  // Case 3: The JSON parsed into an object. Check common keys.
+                  console.log("Parsed response is an object. Attempting to extract text...");
+                  const textField = parsedResponse.response || 
+                                  parsedResponse.text ||     
+                                  parsedResponse.content ||  
+                                  parsedResponse.completion || 
+                                  (parsedResponse.choices && Array.isArray(parsedResponse.choices) && 
+                                   parsedResponse.choices.length > 0 && parsedResponse.choices[0].text) || 
+                                  (parsedResponse.choices && Array.isArray(parsedResponse.choices) && 
+                                   parsedResponse.choices.length > 0 && parsedResponse.choices[0].message && 
+                                   parsedResponse.choices[0].message.content);
+
+                  if (typeof textField === 'string' && textField.trim() !== '') {
+                      extractedText = textField;
+                      console.log("Extracted text from object field");
+                  } else {
+                      console.warn("Parsed JSON object did not contain a recognized text field. Using raw JSON.");
+                      // extractedText remains the original generatedContent
+                      codexErrorMsg = 'AI response format not standard. Displaying raw data. Check console.';
+                  }
+              } else {
+                  console.warn("Parsed JSON response was not a string, array, or object. Using raw content.");
+                  // extractedText remains the original generatedContent
+                  codexErrorMsg = 'Unexpected AI response type. Displaying raw data. Check console.';
+              }
+          } catch (e) {
+              console.warn("Failed to parse generated content as JSON. Using raw content:", e);
+              // extractedText remains the original generatedContent
           }
-          // CodexView's local state will update via the reactive `$: currentEntry` block
+
+          // Update the current entry with the extracted or raw content
+          if (isEditing && currentEntry && currentEntry.id === entryData.id) {
+              tempCurrentEntry = { ...currentEntry, content: extractedText };
+              console.log("Updated existing entry with processed content");
+          } else if (!isEditing && entryData.id === 0) { // Handle generating for a new entry
+              tempCurrentEntry = { ...entryData, content: extractedText };
+              console.log("Updated new entry with processed content");
+          }
       } catch (err) {
           console.error("Error generating content:", err);
           codexErrorMsg = `Error generating content: ${err}`;
       } finally {
+          // Apply state changes after all operations are complete
+          console.log("Setting final state values in handleGenerateCodexContent");
+          currentEntry = tempCurrentEntry;
+          
+          // IMPORTANT: Reset generating state last
           isGenerating = false;
+          console.log(`Final state after generate: isGenerating=${isGenerating}, currentEntry=${currentEntry?.id}`);
       }
   }
+
 
   // --- Library Actions ---
   async function refreshLibraryFiles() {
@@ -507,92 +673,75 @@
 
   // --- Story Import Actions ---
   async function handleImportStoryText(event: CustomEvent<{ content: string }>) {
-      const { content } = event.detail;
-      isProcessingStory = true;
-      storyImportErrorMsg = '';
-      storyImportSuccessMsg = '';
-      let resultEntries: database.CodexEntry[] = [];
-      let newCount = 0;
+    const { content } = event.detail;
+    isProcessingStory = true;
 
-      try {
-          // Use ImportStoryTextAndFile which saves the file and processes
-          // We might need a different backend function if we *only* want to process text without saving
-          // Assuming ImportStoryTextAndFile is suitable for now, but filename will be missing.
-          // Let's use ProcessStory for text-only input for now.
-          resultEntries = await ProcessStory(content); // Use ProcessStory for text area
-          newCount = resultEntries.length; // ProcessStory likely only returns new entries
-
-          // Update state and notify child
-          if (storyImportViewRef) {
-              storyImportViewRef.showImportSuccess({ entries: resultEntries, newCount: newCount, updatedCount: 0 });
-          }
-          await loadEntries(); // Refresh codex entries
-          // Don't refresh library as text wasn't saved to a file here
-      } catch (err) {
-          console.error("Error processing story text:", err);
-          storyImportErrorMsg = `Failed to process story text: ${err}`;
-          if (storyImportViewRef) {
-              storyImportViewRef.setProcessingError(storyImportErrorMsg, 'story');
-          }
-      } finally {
-          isProcessingStory = false;
+    try {
+      storyImportViewRef?.updateImportStatus('sending');
+      
+      // Call backend to process story text
+      const result = await ProcessStory(content);
+      
+      if (result.existingEntries && result.existingEntries.length > 0) {
+        // Show confirmation modal for existing entries
+        storyImportViewRef?.showExistingConfirmation(result.existingEntries);
+      } else {
+        // Process directly if no existing entries
+        storyImportViewRef?.updateImportStatus('library', 'Saving story to library...');
+        await ImportStoryTextAndFile(content, ''); // Pass empty string for filename to use auto-generation
+        storyImportViewRef?.showImportSuccess({
+          newEntries: result.newEntries || [],
+          updatedEntries: result.updatedEntries || []
+        });
       }
+    } catch (error: any) {
+      console.error('Error importing story:', error);
+      storyImportViewRef?.updateImportStatus('error', error.message || 'Failed to import story');
+    } finally {
+      isProcessingStory = false; // Keep separate flag for text area button state
+    }
   }
 
-  async function handleProcessImport(event: CustomEvent<{ content: string, filename: string, force: boolean }>) {
-      const { content, filename, force } = event.detail;
-      isProcessingImport = true;
-      storyImportErrorMsg = '';
-      storyImportSuccessMsg = '';
+  async function handleProcessImport(event: CustomEvent<{ content: string, filename: string, force?: boolean }>) {
+    const { content, filename, force } = event.detail;
 
-      try {
-          // Call backend function that saves the file and processes it
-          // NOTE: This assumes ImportStoryTextAndFile saves the file named 'filename' and returns processed entries.
-          // The 'force' logic needs to be handled before calling or the backend needs adjustment.
-          // For now, we proceed with the frontend check simulation.
-          const resultEntriesFromFile = await ImportStoryTextAndFile(content); // Use the single-argument version
-
-          // Assuming result structure: { entries: CodexEntry[], existing: CodexEntry[], newCount: number, updatedCount: number } - This needs verification based on actual backend return
-          // Or maybe it throws an error if existing are found without force? Let's refine based on actual backend.
-
-          // TEMPORARY: Simulate backend logic for checking existing (backend should ideally handle this)
-          const potentialEntries = await ProcessStory(content); // Simulate processing
-          const currentEntries = await GetAllEntries();
-          const currentNames = new Set(currentEntries.map(e => e.name.toLowerCase()));
-          const foundExisting = potentialEntries.filter(p => currentNames.has(p.name.toLowerCase()));
-
-          if (foundExisting.length > 0 && !force) {
-              // Ask for confirmation via the child component
-              if (storyImportViewRef) {
-                  storyImportViewRef.showExistingConfirmation(foundExisting);
-              }
-              isProcessingImport = false; // Stop loading as we wait for user confirmation
-              return; // Don't proceed further
-          }
-
-          // If forcing or no existing found, proceed (Backend should handle actual creation/update)
-          // For now, just simulate success based on ProcessStory result
-          const processedEntries = potentialEntries; // Use simulated result
-          const newEntriesCount = processedEntries.length; // Simplistic count
-
-          if (storyImportViewRef) {
-              storyImportViewRef.showImportSuccess({ entries: processedEntries, newCount: newEntriesCount, updatedCount: (force ? foundExisting.length : 0) });
-          }
-          await loadEntries(); // Refresh codex
-          await refreshLibraryFiles(); // Refresh library as file was involved
-
-      } catch (err) {
-          console.error("Error processing story import:", err);
-          storyImportErrorMsg = `Failed to process story import: ${err}`;
-          if (storyImportViewRef) {
-              storyImportViewRef.setProcessingError(storyImportErrorMsg, 'import');
-          }
-      } finally {
-          // Ensure loading state is reset unless waiting for confirmation
-          if (isProcessingImport) { // Check if it wasn't reset by confirmation logic
-             isProcessingImport = false;
-          }
+    try {
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('sending');
       }
+
+      // First, save the file to the library with the provided filename
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
+      }
+      
+      // Save to library with the provided filename
+      // This function both saves the file and processes it for codex entries
+      const entries = await ImportStoryTextAndFile(content, filename);
+      
+      // Refresh library files to ensure the new file appears in the list
+      await refreshLibraryFiles();
+      
+      // Show success message
+      if (storyImportViewRef) {
+        // Since ImportStoryTextAndFile already processes the story,
+        // we don't need to call ProcessStory separately
+        storyImportViewRef.showImportSuccess({
+          // New entries have ID > 0, updated entries have ID === 0
+          // This was reversed in the previous code
+          newEntries: entries.filter(e => e.id === 0) || [],
+          updatedEntries: entries.filter(e => e.id > 0) || []
+        });
+      }
+
+      // Refresh codex entries
+      await loadEntries();
+    } catch (error: any) {
+      console.error('Error processing story import:', error);
+      if (storyImportViewRef) {
+        storyImportViewRef.setImportError(error.message || 'Failed to process story import');
+      }
+    }
   }
 
   // --- Event Handlers for Components ---
@@ -612,54 +761,47 @@
 
   // --- Chat Actions ---
   async function handleSaveCodexFromChat(event: CustomEvent<string>) {
-      const text = event.detail;
-      isLoading = true; // Use global loading? Or chat loading?
-      codexErrorMsg = ''; // Clear codex error specifically
-      try {
-          const potentialEntries: database.CodexEntry[] = await ProcessStory(text);
-          if (!potentialEntries || potentialEntries.length === 0) {
-              alert('AI processing did not extract any structured entries from the chat response.');
-              isLoading = false;
-              return;
-          }
+    const textToSave = event.detail;
+    console.log("App.svelte received savecodex event with text:", textToSave.substring(0, 50) + "...");
 
-          let processedCount = 0;
-          let errorMessages = [];
-          for (const entry of potentialEntries) {
-              try {
-                  if (!entry.name || !entry.type) {
-                      console.warn("Skipping entry with missing name or type:", entry);
-                      continue;
-                  }
-                  await CreateEntry(entry.name, entry.type, entry.content);
-                  processedCount++;
-              } catch (entryError) {
-                  console.error(`Error saving entry "${entry.name}":`, entryError);
-                  errorMessages.push(`${entry.name}: ${entryError}`);
-              }
-          }
+    if (!textToSave) {
+        chatViewRef?.setCodexSaveError("Cannot save empty text to Codex.");
+        return;
+    }
 
-          let feedback = '';
-          if (processedCount > 0) {
-              feedback += `Processed ${processedCount} entr${processedCount === 1 ? 'y' : 'ies'} from the chat response.`;
-              await loadEntries(); // Refresh codex if successful
-          } else {
-              feedback += 'No entries could be saved to the Codex.';
-          }
-          if (errorMessages.length > 0) {
-              feedback += `\nErrors occurred for: ${errorMessages.join(', ')}`;
-              codexErrorMsg = `Some entries failed to save: ${errorMessages.join(', ')}`; // Show error in codex view?
-          }
-          alert(feedback); // Simple feedback
+    // Use chatViewRef to update status immediately if possible
+    // Note: ProcessStory doesn't have granular progress, so we mainly signal start/end.
+    chatViewRef?.updateCodexSaveStatus('receiving', 'Processing text...'); // Or 'parsing'? Let's use receiving for now.
 
-      } catch (err) {
-          console.error("Error processing chat for codex:", err);
-          alert(`Error processing chat for codex: ${err}`); // Show generic error
-          codexErrorMsg = `Error processing chat for codex: ${err}`;
-      } finally {
-          isLoading = false;
-      }
+    try {
+        // Call ProcessStory - assume it handles creating entries from arbitrary text.
+        // The backend likely uses the default configured model and handles existing entries (force=false equivalent).
+        console.log(`Calling ProcessStory for chat text...`);
+        chatViewRef?.updateCodexSaveStatus('parsing', 'Finding codex entries...');
+        const result = await ProcessStory(textToSave);
+        console.log("ProcessStory result from chat text:", result);
+
+        // Update ChatView with the result
+        chatViewRef?.setCodexSaveResult(result);
+
+        // Additionally, refresh the main codex list if the codex view might be visible
+        // or just keep it simple and let the user refresh manually if needed.
+        // Consider adding a small delay before potentially refreshing main list
+        // if (mode === 'codex') {
+        //     setTimeout(refreshCodexEntries, 500); // Refresh codex list if in codex mode
+        // }
+
+    } catch (err: any) { // Type the error
+        const error = `Error processing chat text for Codex: ${err.message || String(err)}`;
+        console.error(error);
+        chatViewRef?.setCodexSaveError(error);
+    } finally {
+        // Ensure status isn't left hanging if ProcessStory fails without setting state
+        // This might be redundant if setCodexSaveResult/Error always fire, but safer.
+        // setTimeout(() => { if (chatViewRef?.codexSaveStatus !== 'complete' && chatViewRef?.codexSaveStatus !== 'error') chatViewRef?.updateCodexSaveStatus('idle'); }, 100);
+    }
   }
+
 
   // --- Write Actions ---
   function handleWriteFileSaved(event: CustomEvent<string>) {
@@ -669,7 +811,56 @@
       // Show feedback? Maybe a temporary message bar?
       console.log(`Write file saved: ${filename}`);
   }
+  
+  // Handle opening a library file in Write mode
+  async function handleEditInWriteMode(event: CustomEvent<string>) {
+    const filename = event.detail;
+    if (!vaultIsReady) {
+      libraryErrorMsg = 'No vault is currently loaded';
+      return;
+    }
+    isLoading = true;
+    libraryErrorMsg = '';
+    try {
+      const content = await ReadLibraryFile(filename);
+      // Set the initial content and filename for WriteView
+      writeViewInitialContent = content;
+      writeViewInitialFilename = filename;
+      // Switch to write mode
+      await setModeAndUpdate('write');
+    } catch (err) {
+      console.error(`Error reading library file ${filename} for write mode:`, err);
+      libraryErrorMsg = `Error reading file: ${err}`;
+      alert(libraryErrorMsg);
+    } finally {
+      isLoading = false;
+    }
+  }
 
+  // Function to manually reset UI state when the debug button is clicked
+  function handleResetState() {
+    console.log("App.svelte: handleResetState called - manually resetting UI state");
+    
+    // Force reset all state variables that might be causing the UI to lock
+    isLoading = false;
+    isGenerating = false;
+    isEditing = false;
+    
+    // Re-fetch entries to ensure we have the latest data
+    loadEntries();
+    
+    // Log the state after reset
+    console.log("State after reset:", { 
+      isLoading, 
+      isGenerating, 
+      isEditing, 
+      currentEntryId: currentEntry?.id 
+    });
+    
+    // Show feedback to the user
+    alert("UI state has been reset. Please try creating or editing an entry now.");
+  }
+  
   // --- Global Error Handling ---
   // Keep simple global handler or rely on specific error states?
   function handleError(message: string | Event, source?: string, lineno?: number, colno?: number, error?: Error) {
@@ -712,70 +903,23 @@
         currentEntry = null;
         isEditing = true;
       }}
-      on:saveentry={async (e) => {
-        try {
-          isLoading = true;
-          const { entryData, isEditing } = e.detail;
-          if (isEditing) {
-            await UpdateEntry(entryData);
-          } else {
-            await CreateEntry(entryData.name, entryData.type, entryData.content);
-          }
-          entries = await GetAllEntries();
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error saving entry: ${err}`;
-        } finally {
-          isLoading = false;
-        }
-      }}
-      on:deleteentry={async (e) => {
-        try {
-          isLoading = true;
-          const id = e.detail;
-          if (typeof id !== 'number' || id <= 0) {
-            throw new Error('Invalid entry ID');
-          }
-          await DeleteEntry(id);
-          entries = await GetAllEntries();
-          currentEntry = null;
-          isEditing = false;
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error deleting entry: ${err}`;
-        } finally {
-          isLoading = false;
-        }
-      }}
-      on:generatecontent={async (e) => {
-        try {
-          isGenerating = true;
-          const { entryData, model } = e.detail;
-          const prompt = `Generate content for a ${entryData.type} named ${entryData.name}`;
-          const generatedContent = await GenerateOpenRouterContent(prompt, model);
-          currentEntry = { ...entryData, content: generatedContent };
-          codexErrorMsg = '';
-        } catch (err) {
-          codexErrorMsg = `Error generating content: ${err}`;
-        } finally {
-          isGenerating = false;
-        }
-      }}
+      on:saveentry={handleSaveEntry}
+      on:deleteentry={handleDeleteEntry}
+      on:generatecontent={handleGenerateCodexContent}
+      on:resetstate={handleResetState}
       on:error={e => codexErrorMsg = e.detail}
     />
   {:else if mode === 'story'}
     <StoryImportView
       bind:this={storyImportViewRef}
       bind:isProcessingStory
-      bind:isProcessingImport
-      bind:processStoryErrorMsg={storyImportErrorMsg}
-      bind:importError={storyImportErrorMsg}
       {vaultIsReady}
       on:back={() => setModeAndUpdate(null)}
       on:importstorytext={handleImportStoryText}
       on:processimport={handleProcessImport}
-      on:error={(e) => storyImportErrorMsg = e.detail}
+      on:error={(e) => storyImportViewRef?.setImportError(e.detail)}
       on:importsuccess={handleImportSuccess}
+      on:gotocodex={() => setModeAndUpdate('codex')}
     />
   {:else if mode === 'library'}
     <LibraryView
@@ -785,6 +929,7 @@
       on:back={() => setModeAndUpdate(null)}
       on:refresh={refreshLibraryFiles}
       on:viewfile={viewLibraryFileContent}
+      on:editinwrite={handleEditInWriteMode}
     />
   {:else if mode === 'chat'}
     <ChatView
@@ -810,6 +955,7 @@
       initialApiKey={openrouterApiKey}
       initialChatModelId={chatModelId}
       initialStoryProcessingModelId={storyProcessingModelId}
+      initialGeminiApiKey={geminiApiKey}
       bind:modelList
       bind:isModelListLoading
       bind:modelListError
@@ -828,8 +974,8 @@
        on:filesaved={handleWriteFileSaved}
        on:loading={handleWriteLoading}
        on:error={handleGenericError}
-       initialContent=""
-       initialFilename=""
+       initialContent={writeViewInitialContent}
+       initialFilename={writeViewInitialFilename}
     />
   {/if}
 
@@ -851,6 +997,7 @@
    {#if errorMsg}
       <!-- <div class="global-error">{errorMsg}</div> -->
    {/if}
+
 
 </div>
 

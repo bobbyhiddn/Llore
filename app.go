@@ -1,7 +1,9 @@
 package main
 
 import (
+	ragcontext "Llore/internal/context" // Added for RAG context building (aliased)
 	"Llore/internal/database"
+	"Llore/internal/embeddings" // Added for RAG embeddings
 	"Llore/internal/llm"
 	"Llore/internal/vault"
 	"context"
@@ -12,8 +14,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ProcessStoryResult holds the separated lists of new, updated, and existing entries.
+type ProcessStoryResult struct {
+	NewEntries      []database.CodexEntry `json:"newEntries"`
+	UpdatedEntries  []database.CodexEntry `json:"updatedEntries"`
+	ExistingEntries []database.CodexEntry `json:"existingEntries"`
+}
+
+// Embedding queue system to process embeddings sequentially
+var (
+	// Create a channel for embedding requests
+	embeddingQueue     = make(chan embeddingRequest, 100)
+	embeddingQueueOnce sync.Once
+)
+
+type embeddingRequest struct {
+	entryID int64
+	text    string
+}
 
 // GetAllEntries retrieves all codex entries from the SQLite database
 func (a *App) GetAllEntries() ([]database.CodexEntry, error) {
@@ -43,14 +65,41 @@ func (a *App) CreateEntry(name, entryType, content string) (database.CodexEntry,
 	}
 	id, err := database.DBInsertEntry(a.db, name, entryType, content)
 	if err != nil {
-		return database.CodexEntry{}, err
+		return database.CodexEntry{}, fmt.Errorf("failed to insert entry: %w", err)
 	}
-	// Fetch the created entry
+
+	// Fetch the created entry to return it
 	row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE id = ?", id)
 	var entry database.CodexEntry
 	if err := row.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
-		return database.CodexEntry{}, err
+		log.Printf("Warning: Failed to fetch newly created entry (ID: %d) after insert: %v", id, err)
+		entry.ID = id
+		entry.Name = name
+		entry.Type = entryType
+		entry.Content = content
 	}
+
+	// Generate embedding for new entry using the queue system
+	if a.embeddingService != nil && entry.ID != 0 {
+		// Initialize worker if not already done
+		a.initEmbeddingWorker()
+
+		// Prepare text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+
+		// Send to channel with non-blocking behavior
+		select {
+		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
+			log.Printf("Queued embedding generation for entry %d", entry.ID)
+		default:
+			log.Printf("Warning: Embedding queue full, skipping embedding for entry %d", entry.ID)
+		}
+	} else {
+		log.Printf("Skipping embedding generation for new entry %d (service nil: %v, ID zero: %v)",
+			entry.ID, a.embeddingService == nil, entry.ID == 0)
+	}
+
 	return entry, nil
 }
 
@@ -59,7 +108,33 @@ func (a *App) UpdateEntry(entry database.CodexEntry) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	return database.DBUpdateEntry(a.db, entry)
+	err := database.DBUpdateEntry(a.db, entry)
+	if err != nil {
+		return err // Return early if DB update failed
+	}
+
+	// Update embedding for the entry using the queue system
+	if a.embeddingService != nil && entry.ID != 0 {
+		// Initialize worker if not already done
+		a.initEmbeddingWorker()
+
+		// Prepare text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+
+		// Send to channel with non-blocking behavior
+		select {
+		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
+			log.Printf("Queued embedding update for entry %d", entry.ID)
+		default:
+			log.Printf("Warning: Embedding queue full, skipping embedding update for entry %d", entry.ID)
+		}
+	} else {
+		log.Printf("Skipping embedding update for entry %d (service nil: %v, ID zero: %v)",
+			entry.ID, a.embeddingService == nil, entry.ID == 0)
+	}
+
+	return nil
 }
 
 // DeleteEntry deletes a codex entry by ID using SQLite
@@ -80,9 +155,14 @@ func (a *App) GetCurrentVaultPath() string {
 
 // App struct holds application state
 type App struct {
-	ctx    context.Context
-	db     *sql.DB // Database connection handle
-	dbPath string  // Current database path
+	ctx              context.Context
+	db               *sql.DB // Database connection handle
+	dbPath           string  // Current database path
+	geminiApiKey     string  // Store Gemini API key for embeddings
+	embeddingService *embeddings.EmbeddingService
+	contextBuilder   *ragcontext.ContextBuilder // Use alias
+	promptBuilder    *llm.PromptBuilder
+	// TODO: Add mutex if concurrent access to these services becomes an issue
 }
 
 // --- Vault Management ---
@@ -131,6 +211,57 @@ func (a *App) SwitchVault(path string) error {
 	}
 	a.db = dbConn
 	a.dbPath = path
+
+	// --- Ensure embeddings table exists ---
+	_, err = a.db.Exec(`CREATE TABLE IF NOT EXISTS codex_embeddings (
+	       id INTEGER PRIMARY KEY AUTOINCREMENT,
+	       codex_entry_id INTEGER NOT NULL UNIQUE, -- Ensure one embedding per entry
+	       embedding BLOB NOT NULL,
+	       vector_version TEXT NOT NULL,
+	       created_at TEXT NOT NULL,
+	       updated_at TEXT NOT NULL,
+	       FOREIGN KEY(codex_entry_id) REFERENCES codex_entries(id) ON DELETE CASCADE
+	   )`)
+	if err != nil {
+		// Log warning but don't fail the vault switch
+		log.Printf("Warning: Failed to create or verify embeddings table: %v", err)
+	}
+	_, err = a.db.Exec(`CREATE INDEX IF NOT EXISTS idx_embeddings_entry_id ON codex_embeddings(codex_entry_id);`)
+	if err != nil {
+		log.Printf("Warning: Failed to create index on embeddings table: %v", err)
+	}
+	// --- End embeddings table check ---
+
+	// --- Initialize Embedding and Context Services ---
+	config := llm.GetConfig() // Assumes config includes GeminiApiKey now
+	a.geminiApiKey = config.GeminiApiKey
+	if a.geminiApiKey == "" {
+		log.Println("Warning: Gemini API Key is not set in config. Embedding features will be disabled.")
+		a.embeddingService = nil
+		a.contextBuilder = nil
+		a.promptBuilder = nil
+	} else {
+		a.embeddingService = embeddings.NewEmbeddingService(a.db, a.geminiApiKey)
+		a.contextBuilder = ragcontext.NewContextBuilder(a.embeddingService) // Use alias
+		a.promptBuilder = llm.NewPromptBuilder(a.contextBuilder)
+
+		// Pre-load existing embeddings into cache in the background
+		go func() {
+			if err := a.embeddingService.LoadEmbeddingsIntoCache(); err != nil {
+				log.Printf("Warning: Failed to pre-load embeddings into cache: %v", err)
+			}
+		}()
+
+		// Process missing embeddings in background
+		go func() {
+			// Add a small delay to allow cache loading to potentially start first
+			time.Sleep(2 * time.Second)
+			if err := a.GenerateMissingEmbeddings(); err != nil {
+				log.Printf("Warning: Failed to generate missing embeddings in background: %v", err)
+			}
+		}()
+	}
+	// --- End Service Initialization ---
 
 	// Initialize LLM package with the new vault path (this will load the cache)
 	if err := llm.Init(path); err != nil {
@@ -186,24 +317,53 @@ func (a *App) refreshLibraryFiles() error {
 	return nil
 }
 
+// isValidFilename checks if a filename contains only valid characters
+func isValidFilename(filename string) bool {
+	for _, r := range filename {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' || r == '.') {
+			return false
+		}
+	}
+	return true && filename != ""
+}
+
 // ImportStoryTextAndFile saves story text to a file and processes it for codex entries
-func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error) {
+// If providedFilename is not empty, it will be used instead of generating a filename
+func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]database.CodexEntry, error) {
 	if a.db == nil {
 		return nil, fmt.Errorf("no vault is currently loaded")
 	}
 
-	// Generate a filename based on the first line or default
-	firstLine := strings.Split(strings.TrimSpace(text), "\n")[0]
 	filename := "story.txt"
-	if len(firstLine) > 0 {
-		// Clean the filename
-		filename = strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' {
-				return r
-			}
-			return '_'
-		}, firstLine)
-		filename = strings.TrimSpace(filename) + ".txt"
+	
+	// Use provided filename if it exists
+	if providedFilename != "" {
+		// Use the provided filename directly if it's already safe
+		if isValidFilename(providedFilename) {
+			filename = providedFilename
+		} else {
+			// Clean the provided filename to ensure it's safe
+			filename = strings.Map(func(r rune) rune {
+				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' || r == '.' {
+					return r
+				}
+				return '_'
+			}, providedFilename)
+			filename = strings.TrimSpace(filename)
+		}
+	} else {
+		// Generate a filename based on the first line if no filename provided
+		firstLine := strings.Split(strings.TrimSpace(text), "\n")[0]
+		if len(firstLine) > 0 {
+			// Clean the filename
+			filename = strings.Map(func(r rune) rune {
+				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' {
+					return r
+				}
+				return '_'
+			}, firstLine)
+			filename = strings.TrimSpace(filename) + ".txt"
+		}
 	}
 
 	// Ensure Library directory exists
@@ -223,43 +383,29 @@ func (a *App) ImportStoryTextAndFile(text string) ([]database.CodexEntry, error)
 	}
 
 	// Process the story into codex entries
-	entries, err := a.ProcessStory(text)
+	result, err := a.ProcessStory(text) // Now returns ProcessStoryResult
 	if err != nil {
 		return nil, fmt.Errorf("failed to process story into codex entries: %w", err)
 	}
-	created := make([]database.CodexEntry, 0, len(entries))
-	for _, entry := range entries {
-		// First try to find if an entry with this name exists
-		var existingId int64
-		err := a.db.QueryRow("SELECT id FROM codex_entries WHERE name = ?", entry.Name).Scan(&existingId)
 
-		if err == nil {
-			// Entry exists, update it
-			updatedEntry := database.CodexEntry{
-				ID:        existingId,
-				Name:      entry.Name,
-				Type:      entry.Type,
-				Content:   entry.Content,
-				CreatedAt: entry.CreatedAt,
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-			err = a.UpdateEntry(updatedEntry)
-			if err != nil {
-				log.Printf("Warning: Failed to update existing codex entry '%s': %v", entry.Name, err)
-				continue
-			}
-			created = append(created, updatedEntry)
-		} else {
-			// Entry doesn't exist, create new
-			newEntry, err := a.CreateEntry(entry.Name, entry.Type, entry.Content)
-			if err != nil {
-				log.Printf("Warning: Failed to insert new codex entry '%s': %v", entry.Name, err)
-				continue
-			}
-			created = append(created, newEntry)
-		}
+	// Use counts from the result struct
+	newCount := len(result.NewEntries)
+	updatedCount := len(result.UpdatedEntries)
+	totalProcessed := newCount + updatedCount
+
+	// Log summary of the import operation
+	log.Printf("Import complete. Processed %d entries: %d new, %d updated.",
+		totalProcessed, newCount, updatedCount)
+
+	if updatedCount > 0 {
+		log.Printf("Note: %d entries already existed and were updated with merged content.", updatedCount)
 	}
-	return created, nil
+
+	// Combine new and updated entries for the return value (as the function signature still expects []database.CodexEntry)
+	// TODO: Consider changing ImportStoryTextAndFile return type to ProcessStoryResult in the future if needed.
+	allEntries := append(result.NewEntries, result.UpdatedEntries...)
+
+	return allEntries, nil
 }
 
 // ReadLibraryFile reads the content of a file from the vault's Library folder
@@ -427,9 +573,20 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 // ProcessStory sends a prompt to the LLM and processes the structured response.
-func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
-	// Construct a simplified prompt asking for JSON output
-	simplifiedPrompt := fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
+func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) { // Changed return type
+	// Check if the text appears to be a chat message with structured content
+	isChatWithStructuredContent := strings.Contains(storyText, "**Name:**") || 
+		(strings.Contains(storyText, "1.") && strings.Contains(storyText, "2.") && 
+		(strings.Contains(storyText, "**Concept:**") || strings.Contains(storyText, "*Concept:*")))
+	
+	// Use a different prompt for chat messages with structured content
+	var simplifiedPrompt string
+	if isChatWithStructuredContent {
+		simplifiedPrompt = fmt.Sprintf("Analyze the following text which contains descriptions of multiple entities. Extract EACH distinct entity mentioned, including any with numbered items or sections. Be thorough and create a separate entry for EACH named entity (e.g., if there are entities named 'Thanatos Echo', 'Logos Worm', etc., create individual entries for each). Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Thanatos Echo\", \"type\": \"Concept\", \"content\": \"A Basilisk that feeds on the process of dying and the fear of death...\"}]. Text to analyze:\n\n%s", storyText)
+	} else {
+		// Standard prompt for regular story text
+		simplifiedPrompt = fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
+	}
 
 	log.Println("Sending prompt to OpenRouter for story processing...")
 
@@ -446,7 +603,7 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 	llmResponse, err := a.GenerateOpenRouterContent(simplifiedPrompt, processingModel)
 	if err != nil {
 		log.Printf("Error generating content from OpenRouter: %v", err)
-		return nil, fmt.Errorf("failed to get OpenRouter response: %w", err)
+		return ProcessStoryResult{}, fmt.Errorf("failed to get OpenRouter response: %w", err) // Changed return
 	}
 
 	log.Println("Received LLM response, attempting to parse JSON...")
@@ -479,39 +636,79 @@ func (a *App) ProcessStory(storyText string) ([]database.CodexEntry, error) {
 		log.Printf("Warning: LLM response was not a valid JSON array of entries. Error: %v", err)
 		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
-		now := time.Now().UTC()
-		fallbackEntry := database.CodexEntry{
-			ID:        time.Now().UnixNano(),
-			Name:      "Generated CodexEntry (Unstructured)", // Provide a default name
-			Type:      "Generated",                           // Provide a default type
-			Content:   llmResponse,
-			CreatedAt: now.Format(time.RFC3339),
-			UpdatedAt: now.Format(time.RFC3339),
-		}
-		return []database.CodexEntry{fallbackEntry}, nil // Return as a slice
+		// Remove unused fallbackEntry declaration
+		// For now, returning empty result.
+		log.Println("Returning empty result due to LLM response parsing error.")
+		return ProcessStoryResult{}, nil // Changed return
 	}
 
 	// Process the structured entries
 	now := time.Now().UTC()
-	var createdEntries []database.CodexEntry
+	var newEntriesResult []database.CodexEntry     // Initialize new slice
+	var updatedEntriesResult []database.CodexEntry // Initialize updated slice
 	for _, llmEntry := range llmEntries {
 		if llmEntry.Name == "" {
 			log.Println("Warning: Skipping entry with empty name from LLM response.")
 			continue
 		}
-		createdEntry := database.CodexEntry{
-			ID:        time.Now().UnixNano(),
-			Name:      llmEntry.Name,
-			Type:      llmEntry.Type,
-			Content:   llmEntry.Content,
-			CreatedAt: now.Format(time.RFC3339),
-			UpdatedAt: now.Format(time.RFC3339),
-		}
 
-		createdEntries = append(createdEntries, createdEntry)
+		// Check if an entry with this name already exists
+		var existingEntry database.CodexEntry
+		row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE name = ?", llmEntry.Name)
+		err := row.Scan(&existingEntry.ID, &existingEntry.Name, &existingEntry.Type, &existingEntry.Content, &existingEntry.CreatedAt, &existingEntry.UpdatedAt)
+
+		if err == nil {
+			// Entry exists, merge the content
+			log.Printf("Merging new information into existing entry '%s'", llmEntry.Name)
+
+			// Keep the existing type if the new one is empty or generic
+			entryType := llmEntry.Type
+			if entryType == "" || entryType == "Generated" {
+				entryType = existingEntry.Type
+			}
+
+			// Use RAG to intelligently merge the content
+			log.Printf("Using RAG to merge content for entry '%s'", existingEntry.Name)
+			mergedContent, err := a.MergeEntryContentWithRAG(existingEntry, llmEntry.Content, processingModel)
+			if err != nil {
+				log.Printf("Error merging content with RAG: %v. Using existing content.", err)
+				mergedContent = existingEntry.Content
+			}
+
+			updatedEntry := database.CodexEntry{
+				ID:        existingEntry.ID,
+				Name:      existingEntry.Name,
+				Type:      entryType,
+				Content:   mergedContent,
+				CreatedAt: existingEntry.CreatedAt,
+				UpdatedAt: now.Format(time.RFC3339),
+			}
+
+			// Update in DB
+			err = a.UpdateEntry(updatedEntry) // Use existing UpdateEntry which queues embedding
+			if err != nil {
+				log.Printf("Warning: Failed to update entry '%s' in database: %v", updatedEntry.Name, err)
+				continue
+			}
+			updatedEntriesResult = append(updatedEntriesResult, updatedEntry) // Add to updated list
+
+		} else if err == sql.ErrNoRows { // Entry does not exist
+			// Create new entry in DB
+			savedEntry, err := a.CreateEntry(llmEntry.Name, llmEntry.Type, llmEntry.Content) // Use existing CreateEntry which queues embedding
+			if err != nil {
+				log.Printf("Warning: Failed to create entry '%s' in database: %v", llmEntry.Name, err)
+				continue
+			}
+			newEntriesResult = append(newEntriesResult, savedEntry) // Add to new list
+		} else { // Other DB error during check
+			log.Printf("Error checking for existing entry '%s': %v", llmEntry.Name, err)
+			continue
+		}
 	}
 
-	return createdEntries, nil
+	log.Printf("Story processing complete. Created %d new entries, updated %d existing entries.", len(newEntriesResult), len(updatedEntriesResult))
+
+	return ProcessStoryResult{NewEntries: newEntriesResult, UpdatedEntries: updatedEntriesResult}, nil // Return the struct
 }
 
 // GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
@@ -523,6 +720,174 @@ func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
 		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
 	}
 	return llm.GetOpenRouterCompletion(prompt, model)
+}
+
+// GenerateMissingEmbeddings ensures all entries have embeddings
+func (a *App) GenerateMissingEmbeddings() error {
+	if a.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if a.embeddingService == nil {
+		log.Println("Skipping GenerateMissingEmbeddings: Embedding service not initialized (likely missing API key).")
+		return nil // Not an error, just skipping
+	}
+
+	log.Println("Starting background check for missing embeddings...")
+
+	// Find entries without embeddings
+	rows, err := a.db.Query(`
+        SELECT e.id, e.name, e.type, e.content
+        FROM codex_entries e
+        LEFT JOIN codex_embeddings em ON e.id = em.codex_entry_id
+        WHERE em.id IS NULL
+    `)
+	if err != nil {
+		return fmt.Errorf("failed to query entries missing embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var processedCount int
+	var entriesToProcess []database.CodexEntry // Collect entries first
+
+	for rows.Next() {
+		var entry database.CodexEntry
+		if err := rows.Scan(&entry.ID, &entry.Name, &entry.Type, &entry.Content); err != nil {
+			log.Printf("Warning: Failed to scan entry during missing embedding check: %v", err)
+			continue
+		}
+		entriesToProcess = append(entriesToProcess, entry)
+	}
+	if err = rows.Err(); err != nil {
+		log.Printf("Warning: Error iterating rows for missing embeddings: %v", err)
+		// Continue processing the entries found so far
+	}
+
+	if len(entriesToProcess) == 0 {
+		log.Println("No missing embeddings found.")
+		return nil
+	}
+
+	log.Printf("Found %d entries missing embeddings. Processing...", len(entriesToProcess))
+
+	// Process entries sequentially to avoid overwhelming the API
+	for _, entry := range entriesToProcess {
+		// Create text for embedding
+		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+			entry.Name, entry.Type, entry.Content)
+
+		// Generate embedding
+		embedding, err := a.embeddingService.CreateEmbedding(text)
+		if err != nil {
+			log.Printf("Warning: Failed to create embedding for entry %d ('%s'): %v", entry.ID, entry.Name, err)
+			// Consider adding a delay or backoff here if API errors are frequent
+			time.Sleep(1 * time.Second) // Simple delay
+			continue                    // Skip this entry
+		}
+
+		// Save embedding
+		if err := a.embeddingService.SaveEmbedding(entry.ID, embedding); err != nil {
+			log.Printf("Warning: Failed to save embedding for entry %d ('%s'): %v", entry.ID, entry.Name, err)
+			continue // Skip this entry
+		}
+
+		processedCount++
+		log.Printf("Generated embedding for entry %d ('%s') (%d/%d)", entry.ID, entry.Name, processedCount, len(entriesToProcess))
+		time.Sleep(500 * time.Millisecond) // Add a small delay between API calls
+	}
+
+	log.Printf("Finished generating missing embeddings. Processed %d entries.", processedCount)
+	return nil
+}
+
+// GetAIResponseWithContext gets AI response using the RAG pipeline
+func (a *App) GetAIResponseWithContext(query string, model string) (string, error) {
+	if a.promptBuilder == nil {
+		log.Println("Warning: GetAIResponseWithContext called but prompt builder not initialized. Falling back to simple generation.")
+		// Fallback to non-contextual response if RAG isn't set up
+		return a.GenerateOpenRouterContent(query, model)
+		// Alternatively, return an error:
+		// return "", fmt.Errorf("RAG system (prompt builder) not initialized, likely missing Gemini API key")
+	}
+
+	log.Printf("Building prompt with context for query: %s", query)
+	// Build prompt with context
+	prompt, err := a.promptBuilder.BuildPromptWithContext(query)
+	if err != nil {
+		log.Printf("Error building prompt with context: %v. Falling back to simple prompt.", err)
+		// Fallback to simple prompt if context building fails
+		prompt = query // Or use llm.BuildSimplePrompt if you have a standard system message
+	}
+
+	// Get OpenRouter completion with the potentially context-enhanced prompt
+	log.Printf("Sending context-aware prompt (length: %d) to model: %s", len(prompt), model)
+	return a.GenerateOpenRouterContent(prompt, model) // Use existing method for the API call
+}
+
+// MergeEntryContentDirect merges existing entry content with new content using direct AI prompting without RAG
+func (a *App) MergeEntryContentDirect(existingEntry database.CodexEntry, newContent string, model string) (string, error) {
+	// Skip merging if the new content is already contained in the existing content
+	if strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(newContent)) {
+		log.Printf("New content for '%s' is already contained in existing content. No changes needed.", existingEntry.Name)
+		return existingEntry.Content, nil
+	}
+
+	// Construct a prompt for merging content with very explicit instructions
+	mergePrompt := fmt.Sprintf(
+		"You are helping to update a codex entry with new information. Your task is to merge the existing content with the new content to create a single, coherent entry.\n\nVERY IMPORTANT INSTRUCTIONS:\n1. Provide ONLY the final merged content with no commentary, explanations, or meta-text.\n2. Do not start with phrases like \"Here's the merged content\" or \"Certainly! Let's weave those details together\".\n3. Do not include phrases like \"According to the new information\" or \"Additional information\".\n4. Create a seamless, integrated entry that reads like a single, coherent description.\n5. Your entire response should be ONLY the merged content text itself.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nMerged Content (provide ONLY the final text with no commentary):",
+		existingEntry.Name,
+		existingEntry.Type,
+		existingEntry.Content,
+		newContent,
+	)
+
+	// Get the merged content from the AI
+	log.Printf("Sending direct merge prompt for entry '%s' to model: %s", existingEntry.Name, model)
+	mergedContent, err := a.GenerateOpenRouterContent(mergePrompt, model)
+	if err != nil {
+		log.Printf("Error generating merged content: %v. Falling back to simple merge.", err)
+		// Fallback to simple merge on error
+		return existingEntry.Content + "\n\nAdditional information:\n" + newContent, nil
+	}
+
+	log.Printf("Successfully merged content for entry '%s' using direct AI prompting", existingEntry.Name)
+	return mergedContent, nil
+}
+
+// MergeEntryContentWithRAG uses the RAG system to intelligently merge existing entry content with new content
+func (a *App) MergeEntryContentWithRAG(existingEntry database.CodexEntry, newContent string, model string) (string, error) {
+	if a.promptBuilder == nil {
+		log.Println("Warning: MergeEntryContentWithRAG called but prompt builder not initialized. Falling back to direct merge.")
+		// Fallback to direct merge if RAG isn't set up
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	// Construct a prompt for merging content with very explicit instructions
+	mergePrompt := fmt.Sprintf(
+		"You are helping to update a codex entry with new information. Your task is to merge the existing content with the new content to create a single, coherent entry.\n\nVERY IMPORTANT INSTRUCTIONS:\n1. Provide ONLY the final merged content with no commentary, explanations, or meta-text.\n2. Do not start with phrases like \"Here's the merged content\" or \"Certainly! Let's weave those details together\".\n3. Do not include phrases like \"According to the new information\" or \"Additional information\".\n4. Create a seamless, integrated entry that reads like a single, coherent description.\n5. Your entire response should be ONLY the merged content text itself.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nMerged Content (provide ONLY the final text with no commentary):",
+		existingEntry.Name,
+		existingEntry.Type,
+		existingEntry.Content,
+		newContent,
+	)
+
+	log.Printf("Building RAG-enhanced prompt for merging content for entry '%s'", existingEntry.Name)
+	// Use the RAG system to enhance the merge with context from other related entries
+	enhancedPrompt, err := a.promptBuilder.BuildPromptWithContext(mergePrompt)
+	if err != nil {
+		log.Printf("Error building context-enhanced prompt for merge: %v. Falling back to direct merge.", err)
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	// Get the merged content from the AI
+	log.Printf("Sending RAG-enhanced merge prompt to model: %s", model)
+	mergedContent, err := a.GenerateOpenRouterContent(enhancedPrompt, model)
+	if err != nil {
+		log.Printf("Error generating merged content with RAG: %v. Falling back to direct merge.", err)
+		return a.MergeEntryContentDirect(existingEntry, newContent, model)
+	}
+
+	log.Printf("Successfully merged content for entry '%s' using RAG", existingEntry.Name)
+	return mergedContent, nil
 }
 
 // ProcessAndSaveTextAsEntries takes text, processes it via LLM to extract structured
@@ -694,4 +1059,33 @@ func getLastNChars(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// Fetchllm.OpenRouterModelsWithKey fetches models using a provided API key.
+// initEmbeddingWorker initializes the embedding worker goroutine
+func (a *App) initEmbeddingWorker() {
+	embeddingQueueOnce.Do(func() {
+		go func() {
+			for req := range embeddingQueue {
+				if a.embeddingService == nil {
+					log.Println("Warning: Embedding service not initialized, skipping embedding for entry:", req.entryID)
+					continue
+				}
+
+				// Create embedding
+				embedding, err := a.embeddingService.CreateEmbedding(req.text)
+				if err != nil {
+					log.Printf("Warning: Failed to create embedding for entry %d: %v", req.entryID, err)
+					continue
+				}
+
+				// Save embedding (SaveEmbedding now has its own mutex)
+				if err := a.embeddingService.SaveEmbedding(req.entryID, embedding); err != nil {
+					log.Printf("Warning: Failed to save embedding for entry %d: %v", req.entryID, err)
+				} else {
+					log.Printf("Successfully generated and saved embedding for entry %d", req.entryID)
+				}
+
+				// Add a small delay between operations to reduce contention
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	})
+}

@@ -1,27 +1,41 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { database } from '@wailsjs/go/models'; // Import namespace
+  import StoryImportStatus from './StoryImportStatus.svelte'; // Import the status component
+  import type { Writable } from 'svelte/store'; // For type hinting if needed later
+
+  // Type for the status prop of StoryImportStatus (sync with StoryImportStatus.svelte)
+  type ImportStatus = 'idle' | 'sending' | 'receiving' | 'parsing' | 'checking_existing' | 'updating' | 'embedding' | 'library' | 'complete' | 'error';
 
   // Props
-  export let isProcessingStory: boolean = false;
-  export let isProcessingImport: boolean = false;
-  export let processStoryErrorMsg: string = '';
-  export let importError: string = '';
+  export let isProcessingStory: boolean = false; // Keep for text area processing? Or merge logic? For now, keep separate.
+  // export let isProcessingImport: boolean = false; // Replaced by importStatus
+  // export let processStoryErrorMsg: string = ''; // Replaced by importStatusError for file import
+  // export let importError: string = ''; // Replaced by importStatusError
   export let vaultIsReady: boolean = false;
 
-  // Local State for this view
+  // --- State for StoryImportStatus ---
+  let importStatus: ImportStatus = 'idle';
+  let importStatusError: string | null = null;
+  let importNewEntries: database.CodexEntry[] = [];
+  let importUpdatedEntries: database.CodexEntry[] = [];
+  // --- End State for StoryImportStatus ---
+
+  // Local State for this view (related to UI interaction)
   let storyText = '';
   let isDraggingFile = false;
   let importedFileName = '';
   let importedContent = '';
+  let customFilename = ''; // For user to specify a custom filename
+  let filenameError = ''; // For filename validation errors
   let showImportModal = false; // Modal for file preview before processing
   let showExistingEntriesModal = false; // Modal for confirming overwrite/update
-  let existingEntries: database.CodexEntry[] = []; // Entries found during import that already exist
-  let processStorySuccessMsg = ''; // Message shown after successful processing (maybe in a toast later)
-  let processedEntries: database.CodexEntry[] = []; // Entries created/updated by the last import
-  let createdEntriesCount = 0; // Count of *new* entries from last import
-  let showResultFeedback = false; // Show feedback message after import
-  let lastImportWasSuccess = false; // Track if last import was a success
+  let existingEntries: database.CodexEntry[] = []; // Entries found during import that already exist (for modal)
+  // let processStorySuccessMsg = ''; // Replaced by StoryImportStatus display
+  // let processedEntries: database.CodexEntry[] = []; // Replaced by importNewEntries/importUpdatedEntries
+  // let createdEntriesCount = 0; // Can derive from importNewEntries.length
+  // let showResultFeedback = false; // Handled by StoryImportStatus visibility
+  // let lastImportWasSuccess = false; // Handled by importStatus === 'complete' or 'error'
 
   const dispatch = createEventDispatcher();
 
@@ -33,14 +47,18 @@
   function handleFileDrop(event: DragEvent) {
     event.preventDefault();
     isDraggingFile = false;
-    importError = '';
+    // importError = ''; // Reset via status change
+    importStatus = 'idle'; // Reset status on new drop
+    importStatusError = null;
 
     const files = event.dataTransfer?.files;
     if (!files || files.length === 0) return;
 
     const file = files[0];
     if (!file.name.match(/\.(txt|md)$/i)) {
-      importError = 'Please drop a .txt or .md file';
+      // importError = 'Please drop a .txt or .md file';
+      importStatus = 'error';
+      importStatusError = 'Please drop a .txt or .md file';
       return;
     }
 
@@ -49,8 +67,7 @@
     reader.onload = async (e) => {
       const content = e.target?.result as string;
       if (content) {
-        importedContent = content;
-        showImportModal = true; // Show preview modal
+        prepareImportModal(content, importedFileName);
       }
     };
     reader.readAsText(file);
@@ -63,7 +80,9 @@
 
     const file = input.files[0];
     if (!file.name.match(/\.(txt|md)$/i)) {
-      importError = 'Please select a .txt or .md file';
+      // importError = 'Please select a .txt or .md file';
+      importStatus = 'error';
+      importStatusError = 'Please select a .txt or .md file';
       return;
     }
 
@@ -72,8 +91,7 @@
     reader.onload = async (e) => {
       const content = e.target?.result as string;
       if (content) {
-        importedContent = content;
-        showImportModal = true; // Show preview modal
+        prepareImportModal(content, importedFileName);
       }
     };
     reader.readAsText(file);
@@ -84,16 +102,36 @@
   // Process the imported story (from modal)
   async function processImportedStory(forceReimport = false) {
     if (!importedContent) return;
+    
+    // Validate filename
+    if (!customFilename.trim()) {
+      filenameError = 'Filename cannot be empty.';
+      return;
+    }
+    filenameError = '';
+    
+    // Prepare filename with extension
+    let filenameToSave = customFilename.trim();
+    if (!filenameToSave.toLowerCase().endsWith('.txt') && !filenameToSave.toLowerCase().endsWith('.md')) {
+      filenameToSave += '.txt'; // Default to .txt extension
+    }
 
-    // Reset local states for processing
-    isProcessingImport = true; // Use the specific import processing flag
-    importError = '';
-    processStorySuccessMsg = '';
+    showImportModal = false; // Close the modal immediately
+
+    // Reset status for processing
+    importStatus = 'sending'; // Start the status tracking
+    importStatusError = null;
+    importNewEntries = [];
+    importUpdatedEntries = [];
     showExistingEntriesModal = false; // Ensure this is closed
+
+    // TODO: Update status progressively via events from App.svelte/backend
+    // For now, we just set it to 'sending' and App.svelte will call
+    // showExistingConfirmation, showImportSuccess, or setProcessingError
 
     dispatch('processimport', {
         content: importedContent,
-        filename: importedFileName, // Pass filename for saving to library
+        filename: filenameToSave, // Use the custom filename
         force: forceReimport
     });
     // App.svelte will handle the backend call and update props or dispatch success/error events
@@ -110,64 +148,114 @@
       return;
     }
 
-    // Reset local states for processing
-    isProcessingStory = true; // Use the specific text processing flag
-    processStoryErrorMsg = '';
-    processStorySuccessMsg = '';
-
-    dispatch('importstorytext', { content: storyText });
-    // App.svelte will handle the backend call and update props or dispatch success/error events
+    // Instead of immediately dispatching the event, show the modal first
+    importedContent = storyText;
+    importedFileName = ''; // No original filename for text input
+    
+    // Suggest a filename based on the content
+    customFilename = suggestFilename(storyText);
+    filenameError = '';
+    
+    // Show the import modal to let the user specify a filename
+    showImportModal = true;
+    
+    // The actual processing will happen when the user clicks the Import button in the modal
+    // which calls processImportedStory()
   }
 
   // Called by App.svelte via dispatch or prop update when import finds existing entries
   export function showExistingConfirmation(foundExisting: database.CodexEntry[]) {
       existingEntries = foundExisting;
+      importStatus = 'checking_existing'; // Update status
       showExistingEntriesModal = true;
-      isProcessingImport = false; // Stop loading indicator
+      // isProcessingImport = false; // Status handles loading state
   }
 
   // Called by App.svelte via dispatch or prop update on successful import/processing
-  export function showImportSuccess(result: { entries: database.CodexEntry[], newCount: number, updatedCount: number }) {
-      processedEntries = result.entries;
-      createdEntriesCount = result.newCount;
-      showResultFeedback = true;
-      lastImportWasSuccess = true;
-      if (result.entries.length === 0) {
-        processStorySuccessMsg = `No structured entries could be extracted from the import. Check your text formatting or try another model.`;
-      } else if (result.updatedCount > 0) {
-          processStorySuccessMsg = `Imported ${result.newCount} new entr${result.newCount === 1 ? 'y' : 'ies'} and updated ${result.updatedCount} entr${result.updatedCount === 1 ? 'y' : 'ies'}.`;
-      } else {
-          processStorySuccessMsg = `Successfully imported ${result.newCount} entr${result.newCount === 1 ? 'y' : 'ies'}.`;
-      }
-      // For now, we can just log it or rely on App.svelte to show feedback
-      console.log(processStorySuccessMsg);
-      dispatch('importsuccess', { message: processStorySuccessMsg, entries: processedEntries });
-      // After successful import/update, automatically switch to codex view
-      setTimeout(() => dispatch('gotocodex'), 400); // Small delay for feedback
+  export function showImportSuccess(result: { newEntries: database.CodexEntry[], updatedEntries: database.CodexEntry[] }) {
+      importNewEntries = result.newEntries || [];
+      importUpdatedEntries = result.updatedEntries || [];
+      importStatus = 'complete';
+      importStatusError = null;
+
+      // Clear modal state
+      showImportModal = false;
+      importedContent = '';
+      importedFileName = '';
+
+      // Dispatch success event (App.svelte might listen to this)
+      dispatch('importsuccess', {
+          message: `Import complete: ${importNewEntries.length} new, ${importUpdatedEntries.length} updated.`,
+          newEntries: importNewEntries,
+          updatedEntries: importUpdatedEntries
+      });
+
+      // After successful import/update, automatically switch to codex view - REMOVED FOR USER FEEDBACK
+      // setTimeout(() => dispatch('gotocodex'), 1500);
   }
 
-  // Called by App.svelte on error
-  export function setProcessingError(message: string, type: 'import' | 'story') {
-      showResultFeedback = true;
-      lastImportWasSuccess = false;
-      if (type === 'import') {
-          importError = message;
-          isProcessingImport = false;
-      } else {
-          processStoryErrorMsg = message;
-          isProcessingStory = false;
+  // Called by App.svelte to update status during processing
+  export function updateImportStatus(newStatus: ImportStatus, message?: string) {
+      importStatus = newStatus;
+      if (message) {
+          // Potentially display intermediate messages if needed, though status text might suffice
+          console.log(`Import Status: ${newStatus} - ${message}`);
       }
+      if (newStatus === 'error' && message) {
+          importStatusError = message;
+      }
+  }
+
+
+  // Called by App.svelte on error during file import
+  export function setImportError(message: string) {
+      importStatus = 'error';
+      importStatusError = message;
       // Optionally, reset modal states
       showImportModal = false;
       importedContent = '';
       importedFileName = '';
   }
 
+  // TODO: Handle errors specifically from the text area import separately if needed
+  // export function setStoryProcessingError(message: string) {
+  //     processStoryErrorMsg = message;
+  //     isProcessingStory = false;
+  // }
+
+
+  // Function to suggest a filename based on content
+  function suggestFilename(content: string) {
+    if (!content) return '';
+    
+    const firstLine = content.trim().split('\n')[0];
+    // Basic filename suggestion from first line
+    let suggestion = firstLine.substring(0, 30).replace(/[^a-z0-9\s]/gi, '').replace(/\s+/g, '-');
+    // Add extension if needed
+    if (!suggestion.toLowerCase().endsWith('.txt') && !suggestion.toLowerCase().endsWith('.md')) {
+      suggestion += '.txt';
+    }
+    return suggestion;
+  }
+  
+  // Function to prepare the import modal
+  function prepareImportModal(content: string, filename: string) {
+    importedContent = content;
+    // Use the imported filename when available, otherwise suggest from content
+    customFilename = filename || suggestFilename(content);
+    filenameError = ''; // Reset any previous errors
+    showImportModal = true; // Show preview modal
+  }
+  
   function cancelImport() {
       showImportModal = false;
       importedContent = '';
       importedFileName = '';
-      importError = '';
+      customFilename = ''; // Reset custom filename
+      filenameError = ''; // Reset filename error
+      // importError = ''; // Reset via status
+      importStatus = 'idle';
+      importStatusError = null;
   }
 
   function cancelExistingOverwrite() {
@@ -190,7 +278,7 @@
         bind:value={storyText}
         class="story-input"
         placeholder="Paste your story text here..."
-        disabled={isProcessingStory || isProcessingImport}
+        disabled={isProcessingStory || importStatus !== 'idle'}
       ></textarea>
     </div>
   </div>
@@ -217,34 +305,44 @@
           on:change={handleFileSelect}
           style="display: none"
           id="file-input"
-          disabled={isProcessingStory || isProcessingImport}
+          disabled={isProcessingStory || importStatus !== 'idle'}
         />
-        <button class="browse-btn" on:click={() => document.getElementById('file-input')?.click()} disabled={isProcessingStory || isProcessingImport}>
+        <button class="browse-btn" on:click={() => document.getElementById('file-input')?.click()} disabled={isProcessingStory || importStatus !== 'idle'}>
           Browse Files
         </button>
-        {#if importError && !showImportModal} <!-- Show drop zone error only if modal isn't open -->
+        <!-- Error message display moved to StoryImportStatus -->
+        <!-- {#if importError && !showImportModal}
           <p class="error-message">{importError}</p>
-        {/if}
+        {/if} -->
       </div>
       <button
         class="import-btn"
         on:click={handleImportStoryText}
-        disabled={isProcessingStory || isProcessingImport || !storyText.trim()}
+        disabled={isProcessingStory || importStatus !== 'idle' || !storyText.trim()}
       >
         {#if isProcessingStory}Processing Text...{:else}Import Text & Add Entries{/if}
       </button>
-      {#if processStoryErrorMsg}
+      <!-- Text area processing error message (keep separate for now?) -->
+      <!-- {#if processStoryErrorMsg}
         <p class="error-message">{processStoryErrorMsg}</p>
-      {/if}
-      {#if showResultFeedback && !isProcessingStory && !isProcessingImport}
-        {#if lastImportWasSuccess}
-          <p class="success-message">{processStorySuccessMsg}</p>
-        {:else}
-          <p class="error-message">{importError || processStoryErrorMsg}</p>
-        {/if}
-      {/if}
-    </div>
-  </div>
+      {/if} -->
+      <!-- Feedback messages moved to StoryImportStatus -->
+      <!-- {#if showResultFeedback && !isProcessingStory && !isProcessingImport} ... {/if} -->
+    </div> <!-- End of drop-zone-container -->
+
+    <!-- Instance removed from here -->
+
+  </div> <!-- End of drop-zone-section -->
+
+  <!-- Remove the conditional block and the extra instance below -->
+
+  <!-- Add the single instance here, before the end of the section -->
+  <StoryImportStatus
+      status={importStatus}
+      errorMsg={importStatusError}
+      newEntries={importNewEntries}
+      updatedEntries={importUpdatedEntries}
+  />
 </section>
 
 <!-- Import Preview Modal -->
@@ -253,20 +351,36 @@
     <div class="modal import-modal">
       <h3>Import Story File</h3>
       <div class="import-preview">
-        <p class="filename">File: {importedFileName}</p>
+        <p class="filename">Original File: {importedFileName}</p>
         <div class="content-preview">
           {importedContent.slice(0, 500)}{importedContent.length > 500 ? '...' : ''}
         </div>
       </div>
-      {#if importError}
-        <p class="error-message">{importError}</p>
-      {/if}
+      
+      <!-- Filename input field -->
+      <div class="filename-input-container">
+        <label for="custom-filename">Save as:</label>
+        <input 
+          id="custom-filename" 
+          type="text" 
+          bind:value={customFilename} 
+          placeholder="Enter filename"
+        />
+        {#if filenameError}
+          <div class="error-message">{filenameError}</div>
+        {/if}
+      </div>
+      
       <div class="modal-actions">
-        <button on:click={() => processImportedStory(false)} disabled={isProcessingImport}>
-          {#if isProcessingImport}Processing...{:else}Process Story{/if}
-        </button>
-        <button on:click={cancelImport} disabled={isProcessingImport}>
+        <button on:click={cancelImport} disabled={importStatus !== 'idle' && importStatus !== 'error'}>
           Cancel
+        </button>
+        <button 
+          class="primary" 
+          on:click={() => processImportedStory(false)} 
+          disabled={importStatus !== 'idle' && importStatus !== 'error'}
+        >
+          {#if importStatus !== 'idle' && importStatus !== 'error'}Processing...{:else}Process Story{/if}
         </button>
       </div>
     </div>
@@ -288,17 +402,18 @@
         {/each}
       </div>
       <p>Would you like to update these entries with the content from the file?</p>
-      {#if importError}
+      <!-- Error display moved to status component -->
+      <!-- {#if importError}
         <p class="error-message">{importError}</p>
-      {/if}
+      {/if} -->
       <div class="modal-actions">
-         <button on:click={cancelExistingOverwrite} disabled={isProcessingImport}>Cancel</button>
+         <button on:click={cancelExistingOverwrite} disabled={importStatus === 'sending' || importStatus === 'receiving' || importStatus === 'parsing' || importStatus === 'updating'}>Cancel</button>
          <button
            class="primary"
            on:click={() => processImportedStory(true)}
-           disabled={isProcessingImport}
+           disabled={importStatus === 'sending' || importStatus === 'receiving' || importStatus === 'parsing' || importStatus === 'updating'}
          >
-           {#if isProcessingImport}
+           {#if importStatus === 'updating'} <!-- Or maybe a generic 'processing' state? -->
              Updating...
            {:else}
              Update Entries
@@ -336,6 +451,7 @@
     height: calc(100vh - 4rem); /* Adjust if header exists */
     display: flex;
     flex-direction: column;
+    overflow-y: auto; /* Allow the main section to scroll if needed */
   }
 
   h2 {
@@ -348,10 +464,11 @@
   }
 
   .text-input-section {
-    flex: 1; /* Grow to fill space */
+    /* flex: 1; */ /* Remove flex-grow: 1 */
     display: flex;
     flex-direction: column;
-    min-height: 0; /* Crucial for flex child scrolling */
+    min-height: 150px; /* Ensure minimum height */
+    flex-shrink: 0; /* Prevent shrinking */
     margin-bottom: 1rem;
   }
 
@@ -565,6 +682,32 @@
     border: 1px solid rgba(255,255,255,0.1);
   }
 
+  .filename-input-container {
+    margin: 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .filename-input-container label {
+    font-weight: bold;
+    color: var(--text-primary);
+  }
+
+  .filename-input-container input {
+    padding: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  .filename-input-container input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.3);
+  }
+
   .existing-entry {
     margin-bottom: 1rem;
     padding-bottom: 1rem;
@@ -586,16 +729,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .error-message {
-    color: var(--error-color);
-    background: rgba(255, 71, 87, 0.1);
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
-    margin-top: 1rem;
-    border: 1px solid rgba(255, 71, 87, 0.2);
-    font-size: 0.9rem;
   }
 
   /* Scrollbar */
