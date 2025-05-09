@@ -328,23 +328,10 @@ func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
 	} else {
 		log.Println("Database not available, skipping cache load and missing embedding generation for now.")
 	}
-		log.Println("OpenAI LLM initialization not yet implemented")
-		if err := llm.Init(path); err != nil {
-			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
-		}
-	} else if config.ActiveMode == "gemini" {
-		// TODO: Initialize Gemini LLM client
-		log.Println("Gemini LLM initialization not yet implemented")
-		if err := llm.Init(path); err != nil {
-			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
-		}
-	}
-	// --- End Service Initialization ---
 
-	// Initialize LLM package with the new vault path (this will load the cache)
-	if err := llm.Init(path); err != nil {
-		// Log warning but don't fail the vault switch entirely, cache might just be missing/corrupt
-		log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
+	// Initialize LLM service
+	if err := a.initializeLLM(cfg, a.dbPath); err != nil {
+		log.Printf("Warning: Failed to initialize LLM service: %v", err)
 	}
 
 	// Load initial library data
@@ -352,7 +339,31 @@ func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
 		log.Printf("Warning: Failed to load library files: %v", err)
 	}
 
-	log.Printf("Successfully switched to vault: %s", path)
+	log.Printf("Successfully initialized embedding services for vault: %s", a.dbPath)
+	return nil
+}
+
+// initializeLLM sets up the LLM service based on the current configuration
+func (a *App) initializeLLM(cfg llm.OpenRouterConfig, vaultPath string) error {
+	switch cfg.ActiveMode {
+	case "openai":
+		log.Println("OpenAI LLM initialization not yet implemented")
+		if err := llm.Init(vaultPath); err != nil {
+			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", vaultPath, err)
+		}
+	case "gemini":
+		// TODO: Initialize Gemini LLM client
+		log.Println("Gemini LLM initialization not yet implemented")
+		if err := llm.Init(vaultPath); err != nil {
+			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", vaultPath, err)
+		}
+	default:
+		// Initialize LLM package with the vault path (this will load the cache)
+		if err := llm.Init(vaultPath); err != nil {
+			// Log warning but don't fail initialization entirely, cache might just be missing/corrupt
+			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", vaultPath, err)
+		}
+	}
 	return nil
 }
 
@@ -425,6 +436,7 @@ func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]da
 				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' || r == '.' {
 					return r
 				}
+		
 				return '_'
 			}, providedFilename)
 			filename = strings.TrimSpace(filename)
@@ -805,20 +817,21 @@ func (a *App) GenerateMissingEmbeddings() error {
 	if a.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	if a.embeddingService == nil {
-		log.Println("Skipping GenerateMissingEmbeddings: Embedding service not initialized (likely missing API key).")
+	if a.embeddingService == nil || a.embeddingService.GetProvider() == nil { // Ensure provider is available
+		log.Println("Skipping GenerateMissingEmbeddings: Embedding service or provider not fully initialized.")
 		return nil // Not an error, just skipping
 	}
 
-	log.Println("Starting background check for missing embeddings...")
+	currentProviderIdentifier := a.embeddingService.ModelIdentifier()
+	log.Printf("Starting background check for missing embeddings for provider: %s", currentProviderIdentifier)
 
-	// Find entries without embeddings
+	// Find entries that do not have an embedding for the current provider
 	rows, err := a.db.Query(`
         SELECT e.id, e.name, e.type, e.content
         FROM codex_entries e
-        LEFT JOIN codex_embeddings em ON e.id = em.codex_entry_id
+        LEFT JOIN codex_embeddings em ON e.id = em.codex_entry_id AND em.vector_version = ?
         WHERE em.id IS NULL
-    `)
+    `, currentProviderIdentifier)
 	if err != nil {
 		return fmt.Errorf("failed to query entries missing embeddings: %w", err)
 	}

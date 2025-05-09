@@ -80,9 +80,10 @@ func (s *EmbeddingService) SaveEmbedding(entryID int64, embedding []float32) err
 		`INSERT INTO codex_embeddings
          (codex_entry_id, embedding, vector_version, created_at, updated_at)
          VALUES (?, ?, ?, datetime('now'), datetime('now'))
-         ON CONFLICT(codex_entry_id, vector_version) DO UPDATE SET
+         ON CONFLICT DO UPDATE SET
          embedding = excluded.embedding,
-         updated_at = datetime('now')`,
+         updated_at = datetime('now')
+         WHERE codex_entry_id = excluded.codex_entry_id AND vector_version = excluded.vector_version`,
 		entryID, embeddingBytes, vectorVersion,
 	)
 	if err != nil {
@@ -229,14 +230,7 @@ func (s *EmbeddingService) FindSimilarEntries(query string, limit int) ([]Search
 	vectorVersion := s.provider.ModelIdentifier()
 
 	rows, err := s.db.Query(`
-		SELECT
-			e.id, e.name, e.type, e.content, e.created_at, e.updated_at,
-			em.embedding
-		FROM
-			codex_entries e
-		LEFT JOIN
-			codex_embeddings em ON e.id = em.codex_entry_id AND em.vector_version = ?`, vectorVersion
-	`)
+		SELECT e.id, e.name, e.type, e.content, e.created_at, e.updated_at, em.embedding FROM codex_entries e LEFT JOIN codex_embeddings em ON e.id = em.codex_entry_id AND em.vector_version = ?`, vectorVersion)
 	if err != nil {
 		// Log this error
 		log.Printf("ERROR in FindSimilarEntries: failed to query entries with embeddings: %v", err)
