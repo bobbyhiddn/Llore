@@ -200,7 +200,6 @@ func (a *App) SwitchVault(path string) error {
 	// Close previous DB connection if open
 	if a.db != nil {
 		database.DBClose(a.db)
-		a.db = nil
 	}
 
 	// Initialize SQLite DB for this vault (store under Codex folder)
@@ -209,57 +208,136 @@ func (a *App) SwitchVault(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize codex database: %w", err)
 	}
+
 	a.db = dbConn
 	a.dbPath = path
 
 	// --- Ensure embeddings table exists ---
 	_, err = a.db.Exec(`CREATE TABLE IF NOT EXISTS codex_embeddings (
-	       id INTEGER PRIMARY KEY AUTOINCREMENT,
-	       codex_entry_id INTEGER NOT NULL UNIQUE, -- Ensure one embedding per entry
-	       embedding BLOB NOT NULL,
-	       vector_version TEXT NOT NULL,
-	       created_at TEXT NOT NULL,
-	       updated_at TEXT NOT NULL,
-	       FOREIGN KEY(codex_entry_id) REFERENCES codex_entries(id) ON DELETE CASCADE
-	   )`)
-	if err != nil {
-		// Log warning but don't fail the vault switch
-		log.Printf("Warning: Failed to create or verify embeddings table: %v", err)
-	}
-	_, err = a.db.Exec(`CREATE INDEX IF NOT EXISTS idx_embeddings_entry_id ON codex_embeddings(codex_entry_id);`)
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		codex_entry_id INTEGER NOT NULL,
+		embedding BLOB NOT NULL,
+		vector_version TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		FOREIGN KEY(codex_entry_id) REFERENCES codex_entries(id) ON DELETE CASCADE,
+		UNIQUE (codex_entry_id, vector_version)
+	)`)
 	if err != nil {
 		log.Printf("Warning: Failed to create index on embeddings table: %v", err)
 	}
-	// --- End embeddings table check ---
 
-	// --- Initialize Embedding and Context Services ---
-	config := llm.GetConfig() // Assumes config includes GeminiApiKey now
-	a.geminiApiKey = config.GeminiApiKey
-	if a.geminiApiKey == "" {
-		log.Println("Warning: Gemini API Key is not set in config. Embedding features will be disabled.")
+	// Get current config and initialize services
+	currentConfig := llm.GetConfig()
+	a.geminiApiKey = currentConfig.GeminiApiKey
+
+	// Initialize LLM client for general LLM tasks
+	llmProviderForChat := currentConfig.ActiveMode
+	if llmProviderForChat == "local" { // Local embeddings might still use OpenRouter for LLM chat
+		llmProviderForChat = "openrouter"
+	}
+
+	log.Printf("SwitchVault: Initializing LLM client for mode '%s' (derived for LLM tasks)", llmProviderForChat)
+	if err := llm.Init(path); err != nil {
+		log.Printf("Warning: Failed to initialize LLM package (OpenRouter cache) for vault '%s': %v", path, err)
+	}
+
+	// Initialize embedding services using the helper
+	if err := a.initializeEmbeddingServices(currentConfig); err != nil {
+		log.Printf("Warning: Failed to initialize embedding services during SwitchVault: %v", err)
+	}
+
+	// Load library files
+	if err := a.refreshLibraryFiles(); err != nil {
+		log.Printf("Warning: Failed to load library files: %v", err)
+	}
+
+	log.Printf("Successfully switched to vault: %s", path)
+	return nil
+}
+
+// initializeEmbeddingServices sets up the embedding provider and related services.
+// It should be called on vault switch and after settings are saved.
+func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
+	log.Printf("Initializing/Re-initializing embedding services for ActiveMode: '%s'", cfg.ActiveMode)
+
+	var chosenProvider embeddings.EmbeddingProvider
+	var errProv error
+
+	switch cfg.ActiveMode {
+	case "local", "codex":
+		providerName := cfg.LocalEmbeddingModelName
+		if providerName == "" {
+			errProv = fmt.Errorf("Ollama model name (LocalEmbeddingModelName) not set in config for 'local' mode. Please set it in Settings")
+		} else {
+			chosenProvider, errProv = embeddings.NewLocalEmbeddingProvider(providerName)
+		}
+	case "gemini":
+		if cfg.GeminiApiKey == "" {
+			errProv = fmt.Errorf("Gemini API key missing for 'gemini' mode")
+		} else {
+			chosenProvider = embeddings.NewGeminiEmbeddingProvider(cfg.GeminiApiKey)
+		}
+	case "openrouter":
+		// For 'openrouter' mode, embeddings might still use Gemini or local,
+		// depending on your backend logic. Current code defaults to Gemini if key available.
+		log.Println("ActiveMode is 'openrouter'. Embedding provider will be Gemini if API key is set, otherwise check local.")
+		if cfg.GeminiApiKey != "" {
+			chosenProvider = embeddings.NewGeminiEmbeddingProvider(cfg.GeminiApiKey)
+		} else if cfg.LocalEmbeddingModelName != "" {
+			log.Printf("Gemini key not found for 'openrouter' mode embeddings, falling back to local Ollama model: %s", cfg.LocalEmbeddingModelName)
+			chosenProvider, errProv = embeddings.NewLocalEmbeddingProvider(cfg.LocalEmbeddingModelName)
+		} else {
+			errProv = fmt.Errorf("for 'openrouter' mode, either Gemini API key (for embeddings) or a Local Embedding Model Name must be set")
+		}
+	default: // Including empty string if ActiveMode not set
+		log.Printf("Warning: ActiveMode '%s' is not explicitly handled or is empty. Attempting to default to local embeddings if LocalEmbeddingModelName is set.", cfg.ActiveMode)
+		if cfg.LocalEmbeddingModelName != "" {
+			chosenProvider, errProv = embeddings.NewLocalEmbeddingProvider(cfg.LocalEmbeddingModelName)
+		} else {
+			errProv = fmt.Errorf("no suitable embedding provider for ActiveMode '%s'. Ensure LocalEmbeddingModelName is set for local mode, or configure another mode", cfg.ActiveMode)
+		}
+	}
+
+	if errProv != nil || chosenProvider == nil {
+		log.Printf("CRITICAL: Failed to initialize embedding provider for mode '%s': %v. RAG/Embedding features will be disabled.", cfg.ActiveMode, errProv)
 		a.embeddingService = nil
 		a.contextBuilder = nil
 		a.promptBuilder = nil
-	} else {
-		a.embeddingService = embeddings.NewEmbeddingService(a.db, a.geminiApiKey)
-		a.contextBuilder = ragcontext.NewContextBuilder(a.embeddingService) // Use alias
-		a.promptBuilder = llm.NewPromptBuilder(a.contextBuilder)
+		return fmt.Errorf("failed to initialize embedding provider: %w. RAG/Embedding features disabled", errProv)
+	}
 
-		// Pre-load existing embeddings into cache in the background
+	log.Printf("Embedding provider successfully initialized: %s", chosenProvider.ModelIdentifier())
+	a.embeddingService = embeddings.NewEmbeddingService(a.db, chosenProvider)
+	a.contextBuilder = ragcontext.NewContextBuilder(a.embeddingService)
+	a.promptBuilder = llm.NewPromptBuilder(a.contextBuilder)
+
+	// Load cache and process missing embeddings only if DB is available
+	if a.db != nil {
 		go func() {
 			if err := a.embeddingService.LoadEmbeddingsIntoCache(); err != nil {
 				log.Printf("Warning: Failed to pre-load embeddings into cache: %v", err)
 			}
 		}()
-
-		// Process missing embeddings in background
 		go func() {
-			// Add a small delay to allow cache loading to potentially start first
-			time.Sleep(2 * time.Second)
+			time.Sleep(2 * time.Second) // Allow cache loading
 			if err := a.GenerateMissingEmbeddings(); err != nil {
 				log.Printf("Warning: Failed to generate missing embeddings in background: %v", err)
 			}
 		}()
+	} else {
+		log.Println("Database not available, skipping cache load and missing embedding generation for now.")
+	}
+		log.Println("OpenAI LLM initialization not yet implemented")
+		if err := llm.Init(path); err != nil {
+			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
+		}
+	} else if config.ActiveMode == "gemini" {
+		// TODO: Initialize Gemini LLM client
+		log.Println("Gemini LLM initialization not yet implemented")
+		if err := llm.Init(path); err != nil {
+			log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
+		}
 	}
 	// --- End Service Initialization ---
 
@@ -1005,19 +1083,27 @@ func (a *App) GetSettings() llm.OpenRouterConfig {
 
 // SaveSettings saves the OpenRouter configuration settings
 func (a *App) SaveSettings(config llm.OpenRouterConfig) error {
-	log.Printf("SaveSettings called with received config: %+v", config) // Log received config
+	log.Printf("SaveSettings called with received config: %+v", config)
 
-	// Update the global variable
+	// Update the global variable in the llm package
 	llm.SetConfig(config)
-	log.Printf("Global openRouterConfig updated to: %+v", config)
-	//  is now in llm package, so we don't need to unlock here
 
 	// Save the updated global config to the file
 	if err := llm.SaveOpenRouterConfig(); err != nil {
-		log.Printf("Error saving settings: %v", err)
+		log.Printf("Error saving settings to file: %v", err)
 		return fmt.Errorf("failed to save OpenRouter configuration: %w", err)
 	}
-	log.Println("Settings saved successfully.")
+	log.Println("Settings saved to file successfully. Re-initializing services...")
+
+	// CRITICAL: Re-initialize embedding services with the new config
+	// This ensures that if ActiveMode or related keys/models changed, the app uses them.
+	if err := a.initializeEmbeddingServices(config); err != nil {
+		log.Printf("Warning: Failed to re-initialize embedding services after saving settings: %v", err)
+		// Return this error to the frontend so it can display it
+		return fmt.Errorf("settings saved, but failed to apply embedding service changes: %w. Embeddings might not work as expected until next vault switch or app restart", err)
+	}
+
+	log.Println("Services re-initialized based on new settings.")
 	return nil
 }
 

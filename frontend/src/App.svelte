@@ -36,6 +36,9 @@
   let chatModelId: string = ''; // Default chat model
   let storyProcessingModelId: string = ''; // Default story processing model
   let geminiApiKey: string = ''; // Gemini API key
+  let activeMode: string = 'openrouter'; // Default processing mode
+  let openaiApiKey: string = ''; // OpenAI API key
+  let localEmbeddingModelName: string = ''; // Local embedding model name
   let modelList: llm.OpenRouterModel[] = [];
   let isModelListLoading = false;
   let modelListError = '';
@@ -92,6 +95,9 @@
     chat_model_id: string;
     story_processing_model_id: string;
     gemini_api_key: string;
+    active_mode: string;
+    openai_api_key: string;
+    local_embedding_model_name: string;
   }
 
   // --- Initialization ---
@@ -257,15 +263,22 @@
       chatModelId = settings.chat_model_id || '';
       storyProcessingModelId = settings.story_processing_model_id || '';
       geminiApiKey = settings.gemini_api_key || '';
-      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId, geminiKeySet: !!geminiApiKey });
-      // If API key is present, trigger model list load
-      if (openrouterApiKey) {
-        await loadModelList();
-      } else {
-        // Clear models if key is not set
-        modelList = [];
-        modelListError = '';
-      }
+      activeMode = settings.active_mode || 'openrouter'; // Default to openrouter if not set
+      openaiApiKey = settings.openai_api_key || '';
+      localEmbeddingModelName = settings.local_embedding_model_name || '';
+      
+      console.log("Settings loaded:", { 
+        keySet: !!openrouterApiKey, 
+        chatM: chatModelId, 
+        storyM: storyProcessingModelId, 
+        geminiKeySet: !!geminiApiKey,
+        activeMode,
+        openaiKeySet: !!openaiApiKey,
+        localModelName: localEmbeddingModelName
+      });
+      
+      // Load model list based on active mode
+      await loadModelListForMode();
     } catch (err) {
       settingsErrorMsg = `Error loading settings: ${err}`;
       console.error("Settings load error:", err);
@@ -273,34 +286,88 @@
       isLoading = false;
     }
   }
-
-  async function handleSaveSettings(event: CustomEvent<OpenRouterConfig>) {
-    console.log("Attempting to save settings...");
-    isLoading = true;
+  
+  // This function is defined later in the file
+  
+  // Load model list based on active mode
+  async function loadModelListForMode() {
+    if (activeMode === 'openrouter' || activeMode === 'local') {
+      if (openrouterApiKey) {
+        await loadModelList();
+      } else {
+        modelList = [];
+        modelListError = '';
+      }
+    } else if (activeMode === 'openai') {
+      // TODO: Implement OpenAI model loading
+      modelList = [];
+      modelListError = 'OpenAI model loading not yet implemented';
+    } else if (activeMode === 'gemini') {
+      // TODO: Implement Gemini model loading
+      modelList = [];
+      modelListError = 'Gemini model loading not yet implemented';
+    }
+  }
+  
+  // Handler functions for SettingsView events
+  async function handleLoadModels() {
+    await loadModelListForMode();
+  }
+  
+  function handleClearModels() {
+    modelList = [];
+    modelListError = '';
+  }
+  
+  function handleClearErrors() {
     settingsErrorMsg = '';
     settingsSaveMsg = '';
-    const settingsToSave = event.detail;
+  }
+  
+  function handleSettingsError(event: CustomEvent<string>) {
+    settingsErrorMsg = event.detail;
+  }
+
+  async function handleSaveSettings(event: CustomEvent<OpenRouterConfig>) {
+    console.log("Saving settings...", event.detail);
+    isLoading = true;
+    settingsSaveMsg = '';
+    settingsErrorMsg = '';
     try {
-      await SaveSettings(settingsToSave);
+      // Update local state
+      openrouterApiKey = event.detail.openrouter_api_key;
+      chatModelId = event.detail.chat_model_id;
+      storyProcessingModelId = event.detail.story_processing_model_id;
+      geminiApiKey = event.detail.gemini_api_key;
+      activeMode = event.detail.active_mode;
+      openaiApiKey = event.detail.openai_api_key;
+      localEmbeddingModelName = event.detail.local_embedding_model_name;
+
+      // Save to backend
+      await SaveSettings({
+        openrouter_api_key: openrouterApiKey,
+        chat_model_id: chatModelId,
+        story_processing_model_id: storyProcessingModelId,
+        gemini_api_key: geminiApiKey,
+        active_mode: activeMode,
+        openai_api_key: openaiApiKey,
+        local_embedding_model_name: localEmbeddingModelName
+      });
+      
       settingsSaveMsg = 'Settings saved successfully!';
       console.log("Settings saved successfully");
-      // Update local state after successful save
-      openrouterApiKey = settingsToSave.openrouter_api_key;
-      chatModelId = settingsToSave.chat_model_id;
-      storyProcessingModelId = settingsToSave.story_processing_model_id;
-      geminiApiKey = settingsToSave.gemini_api_key;
-      // Reload models if API key might have changed
-      if (openrouterApiKey) {
-          await loadModelList();
-      } else {
-          modelList = []; // Clear models if key removed
-          modelListError = '';
-      }
+      
+      // Load model list based on active mode
+      await loadModelListForMode();
     } catch (err) {
       settingsErrorMsg = `Error saving settings: ${err}`;
       console.error("Settings save error:", err);
     } finally {
       isLoading = false;
+      // Clear success message after 3 seconds
+      if (settingsSaveMsg) {
+        setTimeout(() => { settingsSaveMsg = ''; }, 3000);
+      }
     }
   }
 
@@ -949,33 +1016,35 @@
   {:else if mode === 'settings'}
     <SettingsView
       bind:this={settingsViewRef}
-      bind:isLoading
-      bind:settingsSaveMsg
-      bind:settingsErrorMsg
       initialApiKey={openrouterApiKey}
       initialChatModelId={chatModelId}
       initialStoryProcessingModelId={storyProcessingModelId}
       initialGeminiApiKey={geminiApiKey}
-      bind:modelList
-      bind:isModelListLoading
-      bind:modelListError
-      on:back={() => setModeAndUpdate(null)}
+      initialActiveMode={activeMode}
+      initialOpenAIAPIKey={openaiApiKey}
+      initialLocalEmbeddingModelName={localEmbeddingModelName}
+      {modelList}
+      isModelListLoading={isModelListLoading}
+      modelListError={modelListError}
+      isLoading={isLoading}
+      settingsSaveMsg={settingsSaveMsg}
+      settingsErrorMsg={settingsErrorMsg}
+      on:loadmodels={handleLoadModels}
+      on:clearmodels={handleClearModels}
       on:savesettings={handleSaveSettings}
-      on:loadmodels={loadModelList}
-      on:clearmodels={() => { modelList = []; modelListError = ''; }}
-      on:error={(e) => settingsErrorMsg = e.detail}
-      on:clearerrors={() => { settingsErrorMsg = ''; settingsSaveMsg = ''; }}
+      on:clearerrors={handleClearErrors}
+      on:error={handleSettingsError}
+      on:back={() => setModeAndUpdate(null)}
     />
   {:else if mode === 'write'}
     <WriteView
-       bind:isLoading
-       chatModelId={chatModelId}
-       on:back={() => setModeAndUpdate(null)}
-       on:filesaved={handleWriteFileSaved}
-       on:loading={handleWriteLoading}
-       on:error={handleGenericError}
-       initialContent={writeViewInitialContent}
-       initialFilename={writeViewInitialFilename}
+      chatModelId={chatModelId}
+      on:back={() => setModeAndUpdate(null)}
+      on:filesaved={handleWriteFileSaved}
+      on:loading={handleWriteLoading}
+      on:error={handleGenericError}
+      initialContent={writeViewInitialContent}
+      initialFilename={writeViewInitialFilename}
     />
   {/if}
 

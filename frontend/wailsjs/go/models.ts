@@ -32,6 +32,9 @@ export namespace llm {
 	    chat_model_id?: string;
 	    story_processing_model_id?: string;
 	    gemini_api_key?: string;
+	    active_mode?: string;
+	    openai_api_key?: string;
+	    local_embedding_model_name?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpenRouterConfig(source);
@@ -43,6 +46,9 @@ export namespace llm {
 	        this.chat_model_id = source["chat_model_id"];
 	        this.story_processing_model_id = source["story_processing_model_id"];
 	        this.gemini_api_key = source["gemini_api_key"];
+	        this.active_mode = source["active_mode"];
+	        this.openai_api_key = source["openai_api_key"];
+	        this.local_embedding_model_name = source["local_embedding_model_name"];
 	    }
 	}
 	export class OpenRouterModel {
