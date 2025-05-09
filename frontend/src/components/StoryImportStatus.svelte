@@ -28,6 +28,35 @@
 
   $: currentStatusText = statusMap[status] || 'Unknown status';
 
+  // --- Time Tracking ---
+  let startTime: number | null = null;
+  let elapsedTime = '0s';
+  let elapsedInterval: number | null = null;
+
+  // Update elapsed time every second while processing
+  $: {
+    if (status !== 'idle' && status !== 'complete' && status !== 'error') {
+      if (!startTime) {
+        startTime = Date.now();
+        elapsedInterval = window.setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startTime!) / 1000);
+          const minutes = Math.floor(elapsed / 60);
+          const seconds = elapsed % 60;
+          elapsedTime = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+        }, 1000);
+      }
+    } else {
+      if (elapsedInterval) {
+        clearInterval(elapsedInterval);
+        elapsedInterval = null;
+      }
+      if (status === 'idle') {
+        startTime = null;
+        elapsedTime = '0s';
+      }
+    }
+  }
+
   // --- Helper to determine if a step is active or done ---
   const isActiveOrDone = (stepStatus: typeof status) => {
     // Added 'library' and 'embedding' to the order
@@ -129,7 +158,12 @@
       </div>
     {/key} <!-- End key block -->
 
-    <p class="current-status {status}">{currentStatusText}</p>
+    <p class="current-status {status}">
+      {currentStatusText}
+      {#if status !== 'complete' && status !== 'error'}
+        <span class="elapsed-time">({elapsedTime})</span>
+      {/if}
+    </p>
 
     {#if status === 'complete'}
       <div class="results">
@@ -248,6 +282,15 @@
     border-radius: 4px;
     background-color: rgba(255, 255, 255, 0.05);
     transition: color 0.4s ease, background-color 0.4s ease; /* Added transition */
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .current-status .elapsed-time {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: normal;
   }
   .current-status.complete {
       color: var(--success-color);
