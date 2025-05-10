@@ -277,8 +277,21 @@
         localModelName: localEmbeddingModelName
       });
       
-      // Load model list based on active mode
+      // Load model list based on active mode, but preserve our loaded settings
+      const currentChatModel = chatModelId;
+      const currentStoryModel = storyProcessingModelId;
+      
       await loadModelListForMode();
+      
+      // Ensure our loaded settings are preserved after model list load
+      if (currentChatModel) chatModelId = currentChatModel;
+      if (currentStoryModel) storyProcessingModelId = currentStoryModel;
+      
+      console.log('Final settings after model list load:', {
+        chatModelId,
+        storyProcessingModelId,
+        activeMode
+      });
     } catch (err) {
       settingsErrorMsg = `Error loading settings: ${err}`;
       console.error("Settings load error:", err);
@@ -291,20 +304,35 @@
   
   // Load model list based on active mode
   async function loadModelListForMode() {
+    console.log("Loading model list for mode:", activeMode);
+    // Reset model list first to ensure UI refreshes
+    modelList = [];
+    
     if (activeMode === 'openrouter' || activeMode === 'local') {
+      // For OpenRouter and local modes, preserve existing model selections
+      const currentChatModel = chatModelId;
+      const currentStoryModel = storyProcessingModelId;
+      
+      // Load models without resetting selections
       if (openrouterApiKey) {
         await loadModelList();
       } else {
-        modelList = [];
-        modelListError = '';
+        modelListError = 'Set OpenRouter API Key in Settings first.';
+      }
+      
+      // If we're in local mode, ensure we keep the original selections
+      if (activeMode === 'local') {
+        console.log('Preserving model selections in local mode:');
+        console.log('Chat model:', currentChatModel);
+        console.log('Story model:', currentStoryModel);
+        chatModelId = currentChatModel;
+        storyProcessingModelId = currentStoryModel;
       }
     } else if (activeMode === 'openai') {
       // TODO: Implement OpenAI model loading
-      modelList = [];
       modelListError = 'OpenAI model loading not yet implemented';
     } else if (activeMode === 'gemini') {
       // TODO: Implement Gemini model loading
-      modelList = [];
       modelListError = 'Gemini model loading not yet implemented';
     }
   }
@@ -392,7 +420,7 @@
       console.log("API key not set, skipping model list load.");
       modelListError = 'Set OpenRouter API Key in Settings first.';
       modelList = [];
-      // Don't clear selected models here, let components handle defaults
+      // Don't clear selected models if API key is missing, they might have been valid with a previous key.
       return;
     }
     console.log("Attempting to load models using key...");
@@ -400,22 +428,51 @@
     modelListError = '';
     try {
       const fetchedModels: llm.OpenRouterModel[] = await FetchOpenRouterModelsWithKey(openrouterApiKey);
+      console.log("Raw fetched models:", fetchedModels);
       modelList = fetchedModels || [];
-      // Set default models if they are not set or invalid
-      if (!chatModelId || !modelList.some(m => m.id === chatModelId)) {
-          chatModelId = modelList.length > 0 ? modelList[0].id : '';
+      
+      // Preserve what was loaded from settings or previously saved by the user
+      const currentConfiguredChatModel = chatModelId; 
+      const currentConfiguredStoryModel = storyProcessingModelId;
+
+      const chatModelExistsInFetchedList = modelList.some(m => m.id === currentConfiguredChatModel);
+      const storyModelExistsInFetchedList = modelList.some(m => m.id === currentConfiguredStoryModel);
+      
+      console.log("Configured Chat Model:", currentConfiguredChatModel, "Exists in fetched list:", chatModelExistsInFetchedList);
+      console.log("Configured Story Model:", currentConfiguredStoryModel, "Exists in fetched list:", storyModelExistsInFetchedList);
+      
+      // Handle Chat Model
+      if (currentConfiguredChatModel && !chatModelExistsInFetchedList) {
+        // If a chat model was configured but is not in the fetched list, keep it and warn.
+        console.warn(`Configured chat model '${currentConfiguredChatModel}' not found in the latest fetched list. It will be kept, but may not be available or valid. Please verify in Settings.`);
+        // chatModelId remains currentConfiguredChatModel
+      } else if (!currentConfiguredChatModel && modelList.length > 0) {
+        // Only set a default if no chat model was configured at all.
+        chatModelId = modelList[0].id;
+        console.log("No chat model was configured. Setting default chat model to:", chatModelId);
       }
-      if (!storyProcessingModelId || !modelList.some(m => m.id === storyProcessingModelId)) {
-          // Maybe choose a different default for story processing? Or same as chat?
-          storyProcessingModelId = modelList.length > 0 ? modelList[0].id : '';
+      // If currentConfiguredChatModel exists in the list, chatModelId is already correctly set.
+
+      // Handle Story Processing Model
+      if (currentConfiguredStoryModel && !storyModelExistsInFetchedList) {
+        // If a story model was configured but is not in the fetched list, keep it and warn.
+        console.warn(`Configured story processing model '${currentConfiguredStoryModel}' not found in the latest fetched list. It will be kept, but may not be available or valid. Please verify in Settings.`);
+        // storyProcessingModelId remains currentConfiguredStoryModel
+      } else if (!currentConfiguredStoryModel && modelList.length > 0) {
+        // Only set a default if no story model was configured at all.
+        storyProcessingModelId = modelList[0].id;
+        console.log("No story processing model was configured. Setting default story model to:", storyProcessingModelId);
       }
-      console.log(`Fetched ${modelList.length} models. Defaults set: Chat=${chatModelId}, Story=${storyProcessingModelId}`);
+      // If currentConfiguredStoryModel exists in the list, storyProcessingModelId is already correctly set.
+      
+      console.log(`Fetched ${modelList.length} models. Final active selections: Chat=${chatModelId}, Story=${storyProcessingModelId}`);
     } catch (err) {
       console.error("Error fetching models:", err);
       modelListError = 'Failed to load models: ' + err;
       modelList = [];
-      chatModelId = ''; // Clear selection on error
-      storyProcessingModelId = '';
+      // On error fetching models, do not clear previously configured model IDs.
+      // They might still be valid if the API error is temporary.
+      console.warn("Failed to fetch model list. Previously configured models will be kept but might not be valid or available.");
     } finally {
       isModelListLoading = false;
     }
@@ -453,6 +510,7 @@
   async function handleSaveEntry(event: CustomEvent<{ entryData: database.CodexEntry, isEditing: boolean }>) {
     const { entryData, isEditing: wasEditing } = event.detail;
     console.log(`handleSaveEntry called. WasEditing: ${wasEditing}`);
+    console.log(`Entry data:`, entryData);
     
     // Important: Create local copies of state to avoid reactivity issues
     let tempCurrentEntry = currentEntry;
@@ -464,11 +522,12 @@
     codexErrorMsg = '';
     
     try {
-      if (wasEditing) {
+      // For existing entries (with ID > 0), use UpdateEntry
+      if (wasEditing && entryData.id > 0) {
         console.log("Attempting to update entry:", entryData.id);
-        await UpdateEntry(entryData); // Assumes entryData includes the ID
+        await UpdateEntry(entryData);
         console.log("UpdateEntry returned successfully for:", entryData.id);
-        alert('Entry updated successfully!'); // Simple feedback for now
+        alert('Entry updated successfully!');
         
         // Refresh entries list
         await loadEntries(); 
@@ -481,7 +540,9 @@
         // Update state in a specific order
         tempCurrentEntry = updatedEntry;
         tempIsEditing = !!updatedEntry;
-      } else {
+      } 
+      // For new entries (ID = 0 or wasEditing = false), use CreateEntry
+      else {
         console.log("Attempting to create entry:", entryData.name);
         const newEntry = await CreateEntry(entryData.name, entryData.type, entryData.content);
         console.log("CreateEntry returned successfully. New ID:", newEntry.id);

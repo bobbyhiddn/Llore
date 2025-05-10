@@ -108,27 +108,51 @@ func (a *App) UpdateEntry(entry database.CodexEntry) error {
 	if a.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	err := database.DBUpdateEntry(a.db, entry)
+
+	// Fetch current entry's content and type to compare
+	var currentName, currentType, currentContent string
+	err := a.db.QueryRow("SELECT name, type, content FROM codex_entries WHERE id = ?", entry.ID).Scan(&currentName, &currentType, &currentContent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("entry with ID %d not found for update", entry.ID)
+		}
+		return fmt.Errorf("failed to fetch current data for entry %d: %w", entry.ID, err)
+	}
+
+	// Determine if an update is actually needed (name, type, or content changed)
+	nameChanged := entry.Name != currentName
+	typeChanged := entry.Type != currentType
+	contentChanged := entry.Content != currentContent
+
+	if !nameChanged && !typeChanged && !contentChanged {
+		log.Printf("Skipping update for entry %d ('%s'): no changes to name, type, or content.", entry.ID, entry.Name)
+		return nil // No actual change, so no DB update or embedding regeneration needed
+	}
+
+	log.Printf("Updating entry %d ('%s'). Changes - Name: %v, Type: %v, Content: %v", entry.ID, entry.Name, nameChanged, typeChanged, contentChanged)
+	err = database.DBUpdateEntry(a.db, entry) // DBUpdateEntry already sets updated_at
 	if err != nil {
 		return err // Return early if DB update failed
 	}
 
-	// Update embedding for the entry using the queue system
-	if a.embeddingService != nil && entry.ID != 0 {
+	// Only queue embedding update if textual content (name, type, content) relevant to embedding has changed
+	if (nameChanged || typeChanged || contentChanged) && a.embeddingService != nil && entry.ID != 0 {
 		// Initialize worker if not already done
 		a.initEmbeddingWorker()
 
 		// Prepare text for embedding
-		text := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
+		textForEmbedding := fmt.Sprintf("Name: %s\nType: %s\nContent: %s",
 			entry.Name, entry.Type, entry.Content)
 
 		// Send to channel with non-blocking behavior
 		select {
-		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: text}:
-			log.Printf("Queued embedding update for entry %d", entry.ID)
+		case embeddingQueue <- embeddingRequest{entryID: entry.ID, text: textForEmbedding}:
+			log.Printf("Queued embedding update for entry %d ('%s') due to changes.", entry.ID, entry.Name)
 		default:
 			log.Printf("Warning: Embedding queue full, skipping embedding update for entry %d", entry.ID)
 		}
+	} else if !(nameChanged || typeChanged || contentChanged) {
+		log.Printf("Skipping embedding update for entry %d ('%s'): content relevant to embedding did not change.", entry.ID, entry.Name)
 	} else {
 		log.Printf("Skipping embedding update for entry %d (service nil: %v, ID zero: %v)",
 			entry.ID, a.embeddingService == nil, entry.ID == 0)
@@ -747,40 +771,53 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) { // Ch
 		row := a.db.QueryRow("SELECT id, name, type, content, created_at, updated_at FROM codex_entries WHERE name = ?", llmEntry.Name)
 		err := row.Scan(&existingEntry.ID, &existingEntry.Name, &existingEntry.Type, &existingEntry.Content, &existingEntry.CreatedAt, &existingEntry.UpdatedAt)
 
-		if err == nil {
-			// Entry exists, merge the content
-			log.Printf("Merging new information into existing entry '%s'", llmEntry.Name)
+		if err == nil { // Entry exists, attempt to merge and update
+			log.Printf("Existing entry found for '%s' (ID: %d). Attempting to merge content.", llmEntry.Name, existingEntry.ID)
 
-			// Keep the existing type if the new one is empty or generic
-			entryType := llmEntry.Type
-			if entryType == "" || entryType == "Generated" {
-				entryType = existingEntry.Type
+			newContentType := llmEntry.Type
+			if newContentType == "" || newContentType == "Generated" {
+				newContentType = existingEntry.Type // Keep existing type if new one is generic
+				if newContentType == "" {
+					newContentType = "Concept" // Default if both are empty
+				}
 			}
 
-			// Use RAG to intelligently merge the content
-			log.Printf("Using RAG to merge content for entry '%s'", existingEntry.Name)
-			mergedContent, err := a.MergeEntryContentWithRAG(existingEntry, llmEntry.Content, processingModel)
-			if err != nil {
-				log.Printf("Error merging content with RAG: %v. Using existing content.", err)
-				mergedContent = existingEntry.Content
+			// Use the refined MergeEntryContentDirect instead of MergeEntryContentWithRAG
+			mergedContent, mergeErr := a.MergeEntryContentDirect(existingEntry, llmEntry.Content, processingModel)
+			if mergeErr != nil {
+				// This error is from MergeEntryContentDirect setup, not the LLM call (which has its own fallback)
+				log.Printf("Critical error in MergeEntryContentDirect function for '%s': %v. Appending new info as failsafe.", existingEntry.Name, mergeErr)
+				mergedContent = existingEntry.Content + "\n\n--- (New Information from Import - Merge Function Error) ---\n" + llmEntry.Content
 			}
+
+			// Check if content or type actually changed before updating
+			contentChanged := strings.TrimSpace(mergedContent) != strings.TrimSpace(existingEntry.Content)
+			typeChanged := newContentType != existingEntry.Type
+
+			if !contentChanged && !typeChanged {
+				log.Printf("No effective change for entry '%s' after merge and type check. Skipping update.", existingEntry.Name)
+				// If you want to inform the frontend it was "found but not changed", you might add it to a different list in ProcessStoryResult.
+				// For now, we simply don't add it to updatedEntriesResult.
+				continue
+			}
+
+			log.Printf("Content or type changed for entry '%s'. Proceeding with update. Content changed: %v, Type changed: %v", existingEntry.Name, contentChanged, typeChanged)
 
 			updatedEntry := database.CodexEntry{
 				ID:        existingEntry.ID,
-				Name:      existingEntry.Name,
-				Type:      entryType,
+				Name:      existingEntry.Name, // Name doesn't change during this update
+				Type:      newContentType,
 				Content:   mergedContent,
-				CreatedAt: existingEntry.CreatedAt,
+				CreatedAt: existingEntry.CreatedAt, // Preserve original creation date
 				UpdatedAt: now.Format(time.RFC3339),
 			}
 
-			// Update in DB
-			err = a.UpdateEntry(updatedEntry) // Use existing UpdateEntry which queues embedding
-			if err != nil {
-				log.Printf("Warning: Failed to update entry '%s' in database: %v", updatedEntry.Name, err)
+			// Call UpdateEntry, which now checks for actual changes before updating DB and queueing embedding
+			if err := a.UpdateEntry(updatedEntry); err != nil {
+				log.Printf("Warning: Failed to update entry '%s' (ID: %d) in database: %v", updatedEntry.Name, updatedEntry.ID, err)
 				continue
 			}
-			updatedEntriesResult = append(updatedEntriesResult, updatedEntry) // Add to updated list
+			updatedEntriesResult = append(updatedEntriesResult, updatedEntry)
 
 		} else if err == sql.ErrNoRows { // Entry does not exist
 			// Create new entry in DB
@@ -916,32 +953,53 @@ func (a *App) GetAIResponseWithContext(query string, model string) (string, erro
 
 // MergeEntryContentDirect merges existing entry content with new content using direct AI prompting without RAG
 func (a *App) MergeEntryContentDirect(existingEntry database.CodexEntry, newContent string, model string) (string, error) {
-	// Skip merging if the new content is already contained in the existing content
+	// Simple check to see if new content is already present.
+	// More sophisticated diffing could be used, but this is a quick win.
 	if strings.Contains(strings.ToLower(existingEntry.Content), strings.ToLower(newContent)) {
-		log.Printf("New content for '%s' is already contained in existing content. No changes needed.", existingEntry.Name)
-		return existingEntry.Content, nil
+		log.Printf("New content for '%s' appears to be already contained in existing content. Skipping AI merge.", existingEntry.Name)
+		return existingEntry.Content, nil // Return original content, no actual merge needed by AI
 	}
 
-	// Construct a prompt for merging content with very explicit instructions
+	// Construct a more explicit prompt for intelligent merging
 	mergePrompt := fmt.Sprintf(
-		"You are helping to update a codex entry with new information. Your task is to merge the existing content with the new content to create a single, coherent entry.\n\nVERY IMPORTANT INSTRUCTIONS:\n1. Provide ONLY the final merged content with no commentary, explanations, or meta-text.\n2. Do not start with phrases like \"Here's the merged content\" or \"Certainly! Let's weave those details together\".\n3. Do not include phrases like \"According to the new information\" or \"Additional information\".\n4. Create a seamless, integrated entry that reads like a single, coherent description.\n5. Your entire response should be ONLY the merged content text itself.\n\nExisting Entry Name: %s\nExisting Entry Type: %s\nExisting Content: %s\n\nNew Content to Incorporate: %s\n\nMerged Content (provide ONLY the final text with no commentary):",
+		"You are an expert editor updating a codex entry. Your task is to intelligently integrate the \"New Information\" into the \"Existing Content\" to create a single, coherent, and improved entry. Preserve all key details from both. Avoid redundancy. Ensure the final merged content flows naturally and maintains a consistent tone.\n\n"+
+			"VERY IMPORTANT INSTRUCTIONS:\n"+
+			"1. Output ONLY the final merged content text. No conversational filler, explanations, preambles, or apologies like \"Certainly!\" or \"Here's the merged content:\".\n"+
+			"2. Do NOT use meta-text like \"Additional information:\" or \"Updated content:\" unless it's a natural part of the lore itself.\n"+
+			"3. The merged content should read as if it were written as a single, original piece.\n\n"+
+			"Existing Entry Name: %s\n"+
+			"Existing Entry Type: %s\n"+
+			"Existing Content:\n\"\"\"\n%s\n\"\"\"\n\n"+
+			"New Information to Incorporate:\n\"\"\"\n%s\n\"\"\"\n\n"+
+			"Final Merged Content (provide ONLY the text, ensuring it's a complete and coherent description):",
 		existingEntry.Name,
 		existingEntry.Type,
 		existingEntry.Content,
 		newContent,
 	)
 
-	// Get the merged content from the AI
-	log.Printf("Sending direct merge prompt for entry '%s' to model: %s", existingEntry.Name, model)
-	mergedContent, err := a.GenerateOpenRouterContent(mergePrompt, model)
+	log.Printf("Sending direct merge prompt for entry '%s' (ID: %d) to model: %s", existingEntry.Name, existingEntry.ID, model)
+	mergedOutput, err := a.GenerateOpenRouterContent(mergePrompt, model) // This is your LLM call
 	if err != nil {
-		log.Printf("Error generating merged content: %v. Falling back to simple merge.", err)
-		// Fallback to simple merge on error
-		return existingEntry.Content + "\n\nAdditional information:\n" + newContent, nil
+		log.Printf("Error generating merged content via AI for '%s': %v. Falling back to appending new information.", existingEntry.Name, err)
+		// Fallback to simple append with a clear separator if AI call fails
+		return existingEntry.Content + "\n\n--- (New Information from Import - AI Merge Failed) ---\n" + newContent, nil
 	}
 
-	log.Printf("Successfully merged content for entry '%s' using direct AI prompting", existingEntry.Name)
-	return mergedContent, nil
+	mergedOutput = strings.TrimSpace(mergedOutput)
+	if mergedOutput == "" {
+		log.Printf("AI returned empty string for merged content for '%s'. Falling back to appending.", existingEntry.Name)
+		return existingEntry.Content + "\n\n--- (New Information from Import - AI Returned Empty) ---\n" + newContent, nil
+	}
+
+	// If AI essentially returns the original content, treat it as no change
+	if strings.TrimSpace(mergedOutput) == strings.TrimSpace(existingEntry.Content) {
+		log.Printf("AI merge for '%s' resulted in no significant change to content. Using original.", existingEntry.Name)
+		return existingEntry.Content, nil
+	}
+
+	log.Printf("Successfully merged content for entry '%s' using direct AI prompting. Old length: %d, New length: %d", existingEntry.Name, len(existingEntry.Content), len(mergedOutput))
+	return mergedOutput, nil
 }
 
 // MergeEntryContentWithRAG uses the RAG system to intelligently merge existing entry content with new content

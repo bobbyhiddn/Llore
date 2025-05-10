@@ -80,10 +80,9 @@ func (s *EmbeddingService) SaveEmbedding(entryID int64, embedding []float32) err
 		`INSERT INTO codex_embeddings
          (codex_entry_id, embedding, vector_version, created_at, updated_at)
          VALUES (?, ?, ?, datetime('now'), datetime('now'))
-         ON CONFLICT DO UPDATE SET
-         embedding = excluded.embedding,
-         updated_at = datetime('now')
-         WHERE codex_entry_id = excluded.codex_entry_id AND vector_version = excluded.vector_version`,
+         ON CONFLICT(codex_entry_id, vector_version) DO UPDATE SET
+             embedding = excluded.embedding,
+             updated_at = datetime('now')`,
 		entryID, embeddingBytes, vectorVersion,
 	)
 	if err != nil {
@@ -162,8 +161,11 @@ func (s *EmbeddingService) LoadEmbeddingsIntoCache() error {
 	vectorVersion := s.provider.ModelIdentifier()
 	log.Printf("Loading embeddings into cache for provider: %s", vectorVersion)
 
-	rows, err := s.db.Query(
-		"SELECT codex_entry_id, embedding FROM codex_embeddings WHERE vector_version = ?",
+	rows, err := s.db.Query(`
+		SELECT ce.id, em.embedding 
+		FROM codex_entries ce
+		INNER JOIN codex_embeddings em ON ce.id = em.codex_entry_id 
+		WHERE em.vector_version = ?`,
 		vectorVersion,
 	)
 	if err != nil {

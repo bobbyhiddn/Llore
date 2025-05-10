@@ -56,6 +56,7 @@
   function handleChatModelChange(event: Event) {
     userChangedChatModel = true;
     chatModelId = (event.target as HTMLSelectElement).value;
+    console.log("Chat model changed to:", chatModelId);
   }
 
   function handleStoryModelChange(event: Event) {
@@ -322,7 +323,7 @@
             id="chat-model-select"
             bind:value={chatModelId}
             on:change={handleChatModelChange}
-            disabled={isModelListLoading || modelList.length === 0}
+            disabled={isModelListLoading}
           >
             <option value="" disabled={chatModelId !== ""}>Select a model</option>
             {#each modelList as model (model.id)}
@@ -348,7 +349,7 @@
             id="story-processing-model-select"
             bind:value={storyProcessingModelId}
             on:change={handleStoryModelChange}
-            disabled={isModelListLoading || modelList.length === 0}
+            disabled={isModelListLoading}
           >
             <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
             {#each modelList as model (model.id)}
