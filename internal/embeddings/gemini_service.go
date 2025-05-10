@@ -2,21 +2,20 @@
 package embeddings
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
-	"strings"
-	"time"
+
+	"google.golang.org/genai"
 )
 
 const (
-	GeminiEmbeddingsAPI = "https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent"
-	GeminiModelVersion  = "gemini-embedding-001"
+	GeminiEmbeddingModel = "text-embedding-004" // Updated to a more current model
+	TaskTypeRetrievalDocument = "RETRIEVAL_DOCUMENT"
 )
 
 // GeminiEmbeddingProvider implements the EmbeddingProvider interface for Gemini
+// It now correctly returns []float32 for CreateEmbedding.
 type GeminiEmbeddingProvider struct {
 	apiKey string
 }
@@ -28,91 +27,42 @@ func NewGeminiEmbeddingProvider(apiKey string) *GeminiEmbeddingProvider {
 	}
 }
 
-// CreateEmbedding generates an embedding for the given text using Gemini API
+// CreateEmbedding generates an embedding for the given text using the Gemini SDK.
+// It now returns []float32 as expected by the EmbeddingProvider interface.
 func (p *GeminiEmbeddingProvider) CreateEmbedding(text string) ([]float32, error) {
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("Gemini API key is not configured")
 	}
 
-	// Prepare request body
-	requestBody := map[string]interface{}{
-		"model": "models/embedding-001",
-		"content": map[string]interface{}{
-			"parts": []map[string]interface{}{
-				{
-					"text": text,
-				},
-			},
-		},
-	}
-
-	requestJSON, err := json.Marshal(requestBody)
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: p.apiKey})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		log.Printf("GeminiEmbeddingProvider: failed to create genai client: %v", err)
+		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
-	// Build request URL with API key
-	url := fmt.Sprintf("%s?key=%s", GeminiEmbeddingsAPI, p.apiKey)
-
-	// Create HTTP request
-	req, err := http.NewRequest("POST", url, strings.NewReader(string(requestJSON)))
+	resp, err := client.Models.EmbedContent(ctx, GeminiEmbeddingModel, genai.Text(text), &genai.EmbedContentConfig{TaskType: TaskTypeRetrievalDocument})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		log.Printf("GeminiEmbeddingProvider: failed to embed content: %v", err)
+		return nil, fmt.Errorf("failed to embed content with Gemini: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-
-	// Send request
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read response
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	if resp == nil || len(resp.Embeddings) == 0 || resp.Embeddings[0] == nil {
+		log.Printf("GeminiEmbeddingProvider: received nil response or no embeddings or nil embedding")
+		return nil, fmt.Errorf("gemini embedding response contained no embeddings")
 	}
 
-	// Check for error
-	if resp.StatusCode != http.StatusOK {
-		// Try to parse potential error message from Google API
-		var errorResponse struct {
-			Error struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-				Status  string `json:"status"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(body, &errorResponse) == nil && errorResponse.Error.Message != "" {
-			return nil, fmt.Errorf("API error (%d %s): %s", errorResponse.Error.Code, errorResponse.Error.Status, errorResponse.Error.Message)
-		}
-		// Fallback to raw body if parsing fails
-		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	embeddingValues := resp.Embeddings[0].Values
+	if embeddingValues == nil {
+		log.Printf("GeminiEmbeddingProvider: embedding values are nil")
+		return nil, fmt.Errorf("gemini embedding values are nil")
 	}
 
-	// Parse response
-	var response struct {
-		Embedding struct {
-			Values []float32 `json:"values"`
-		} `json:"embedding"`
-	}
-
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(response.Embedding.Values) == 0 {
-		return nil, fmt.Errorf("API returned empty embedding values")
-	}
-
-	log.Printf("Generated Gemini embedding with %d dimensions", len(response.Embedding.Values))
-	return response.Embedding.Values, nil
+	// Return []float32 directly, as assumed from SDK and required by interface
+	return embeddingValues, nil
 }
 
-// ModelIdentifier returns the identifier for this embedding model
+// ModelIdentifier returns the specific model identifier for this provider.
 func (p *GeminiEmbeddingProvider) ModelIdentifier() string {
-	return GeminiModelVersion
+	return fmt.Sprintf("gemini:%s", GeminiEmbeddingModel)
 }

@@ -14,8 +14,20 @@ export function DeleteEntry(arg1) {
   return window['go']['main']['App']['DeleteEntry'](arg1);
 }
 
+export function FetchGeminiModels() {
+  return window['go']['main']['App']['FetchGeminiModels']();
+}
+
+export function FetchOpenAIModels() {
+  return window['go']['main']['App']['FetchOpenAIModels']();
+}
+
 export function FetchOpenRouterModelsWithKey(arg1) {
   return window['go']['main']['App']['FetchOpenRouterModelsWithKey'](arg1);
+}
+
+export function GenerateLLMContent(arg1, arg2) {
+  return window['go']['main']['App']['GenerateLLMContent'](arg1, arg2);
 }
 
 export function GenerateMissingEmbeddings() {

@@ -15,11 +15,11 @@
   import {
     // Keep all backend functions needed by App or passed down
     GetAllEntries, CreateEntry, UpdateEntry, DeleteEntry,
-    GenerateOpenRouterContent, SelectVaultFolder, CreateNewVault, SwitchVault,
+    SelectVaultFolder, CreateNewVault, SwitchVault,
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
     FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
-    GetAIResponseWithContext, // Added for RAG-based codex generation
+    GetAIResponseWithContext, FetchOpenAIModels, FetchGeminiModels, // Added new model fetchers
   } from '@wailsjs/go/main/App';
 
   // --- Core App State ---
@@ -308,32 +308,62 @@
     // Reset model list first to ensure UI refreshes
     modelList = [];
     
-    if (activeMode === 'openrouter' || activeMode === 'local') {
-      // For OpenRouter and local modes, preserve existing model selections
-      const currentChatModel = chatModelId;
-      const currentStoryModel = storyProcessingModelId;
+    isModelListLoading = true;
+    modelListError = '';
+    try {
+      if (activeMode === 'openrouter' || activeMode === 'local') {
+        // For OpenRouter and local modes, preserve existing model selections
+        const currentChatModel = chatModelId;
+        const currentStoryModel = storyProcessingModelId;
+        
+        if (openrouterApiKey) {
+          modelList = await FetchOpenRouterModelsWithKey(openrouterApiKey) || [];
+        } else {
+          modelListError = 'Set OpenRouter API Key in Settings for OpenRouter/Local LLM mode.';
+          modelList = [];
+        }
+        
+        // If we're in local mode, ensure we keep the original selections
+        if (activeMode === 'local' && modelList.length > 0) {
+          console.log('Preserving model selections in local mode:');
+          console.log('Chat model:', currentChatModel);
+          console.log('Story model:', currentStoryModel);
+          if (currentChatModel) chatModelId = currentChatModel;
+          if (currentStoryModel) storyProcessingModelId = currentStoryModel;
+        }
+      } else if (activeMode === 'openai') {
+        if (openaiApiKey) {
+          modelList = await FetchOpenAIModels() || [];
+        } else {
+          modelListError = 'Set OpenAI API Key in Settings for OpenAI mode.';
+          modelList = [];
+        }
+      } else if (activeMode === 'gemini') {
+        if (geminiApiKey) {
+          modelList = await FetchGeminiModels() || [];
+        } else {
+          modelListError = 'Set Gemini API Key in Settings for Gemini mode.';
+          modelList = [];
+        }
+      }
       
-      // Load models without resetting selections
-      if (openrouterApiKey) {
-        await loadModelList();
+      // Default model selection if list is populated and no model is selected
+      if (modelList.length > 0) {
+        if (!chatModelId && modelList.find(m => m.id)) chatModelId = modelList[0].id;
+        if (!storyProcessingModelId && modelList.find(m => m.id)) storyProcessingModelId = modelList[0].id;
       } else {
-        modelListError = 'Set OpenRouter API Key in Settings first.';
+        // If model list is empty after trying to load, clear selections
+        chatModelId = '';
+        storyProcessingModelId = '';
       }
-      
-      // If we're in local mode, ensure we keep the original selections
-      if (activeMode === 'local') {
-        console.log('Preserving model selections in local mode:');
-        console.log('Chat model:', currentChatModel);
-        console.log('Story model:', currentStoryModel);
-        chatModelId = currentChatModel;
-        storyProcessingModelId = currentStoryModel;
-      }
-    } else if (activeMode === 'openai') {
-      // TODO: Implement OpenAI model loading
-      modelListError = 'OpenAI model loading not yet implemented';
-    } else if (activeMode === 'gemini') {
-      // TODO: Implement Gemini model loading
-      modelListError = 'Gemini model loading not yet implemented';
+    } catch (err) {
+      console.error(`Error fetching models for mode ${activeMode}:`, err);
+      modelListError = `Failed to load models for ${activeMode} mode: ${err}`;
+      modelList = [];
+      chatModelId = ''; // Clear selections on error too
+      storyProcessingModelId = '';
+    } finally {
+      isModelListLoading = false;
     }
   }
   
@@ -400,17 +430,34 @@
   }
 
    // Handle API key save from ChatView modal
-  async function handleApiKeySaved(event: CustomEvent<string>) {
-      const newApiKey = event.detail;
-      console.log("App.svelte received api key saved event");
-      openrouterApiKey = newApiKey;
-      settingsSaveMsg = 'API Key updated!'; // Provide feedback
-      // Reload models
-      if (openrouterApiKey) {
-          await loadModelList();
+  async function handleApiKeySaved(event: CustomEvent<{key: string, mode: string}>) {
+      const {key: newApiKey, mode: keyMode} = event.detail;
+      console.log(`App.svelte received api key saved event for mode: ${keyMode}`);
+      
+      // Update the appropriate API key based on the mode
+      if (keyMode === 'openrouter' || keyMode === 'local') {
+          openrouterApiKey = newApiKey;
+      } else if (keyMode === 'openai') {
+          openaiApiKey = newApiKey;
+      } else if (keyMode === 'gemini') {
+          geminiApiKey = newApiKey;
       } else {
-          modelList = [];
-          modelListError = '';
+          console.warn(`Unknown mode for API key: ${keyMode}`);
+          return;
+      }
+      
+      // Save the API key to backend
+      try {
+          // Save only the API key that was updated
+          await SaveAPIKeyOnly(newApiKey);
+          
+          settingsSaveMsg = `${keyMode.toUpperCase()} API Key updated!`; // Provide feedback
+          
+          // Reload models based on active mode
+          await loadModelListForMode();
+      } catch (err) {
+          settingsErrorMsg = `Error saving API key: ${err}`;
+          console.error("API key save error:", err);
       }
   }
 

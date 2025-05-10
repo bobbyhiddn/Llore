@@ -2,8 +2,7 @@
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import {
-    GenerateOpenRouterContent, // Keep for potential fallback or other uses
-    GetAIResponseWithContext, // Added for RAG chat
+    GetAIResponseWithContext, // For all LLM interactions
     ListChatLogs,
     LoadChatLog,
     SaveChatLog,
@@ -52,6 +51,9 @@
   // API Key Modal State (Simplified for chat view)
   let showApiKeyModal = false;
   let openrouterApiKey = initialApiKey; // Initialize with prop
+  let openaiApiKey = ''; // For OpenAI mode
+  let geminiApiKey = ''; // For Gemini mode
+  let activeMode = 'openrouter'; // Default mode
   let apiKeyErrorMsg = '';
   let apiKeySaveMsg = '';
 
@@ -294,12 +296,20 @@
   }
 
   // --- API Key Modal Logic ---
-  function openApiKeyModal() {
+  function openApiKeyModal(modeOrEvent: string | Event = 'openrouter') {
     // Reset modal state when opening
     apiKeySaveMsg = '';
     apiKeyErrorMsg = '';
-    // Don't clear the key, let user see/edit current one
-    // openrouterApiKey = '';
+    
+    // Handle both direct string mode and event from button click
+    if (typeof modeOrEvent === 'string') {
+      activeMode = modeOrEvent;
+    } else {
+      // Default to openrouter when called from a button click
+      activeMode = 'openrouter';
+    }
+    
+    // Don't clear the keys, let user see/edit current ones
     showApiKeyModal = true;
   }
 
@@ -308,17 +318,31 @@
     apiKeySaveMsg = '';
     isChatLoading = true; // Indicate loading while saving from modal
     try {
-      console.log("Saving API key via SaveAPIKeyOnly from ChatView...");
-      await SaveAPIKeyOnly(openrouterApiKey); // Call the simpler backend function
-      apiKeySaveMsg = 'API key saved!';
-      console.log("API key saved via SaveAPIKeyOnly.");
+      // Determine which API key to save based on the active mode
+      let apiKeyToSave = '';
+      if (activeMode === 'openrouter' || activeMode === 'local') {
+        apiKeyToSave = openrouterApiKey;
+      } else if (activeMode === 'openai') {
+        apiKeyToSave = openaiApiKey;
+      } else if (activeMode === 'gemini') {
+        apiKeyToSave = geminiApiKey;
+      } else {
+        throw new Error(`Unknown mode: ${activeMode}`);
+      }
+      
+      console.log(`Saving API key for ${activeMode} mode via SaveAPIKeyOnly from ChatView...`);
+      await SaveAPIKeyOnly(apiKeyToSave); // Call the simpler backend function
+      apiKeySaveMsg = `${activeMode.toUpperCase()} API key saved!`;
+      console.log(`API key saved for ${activeMode} mode via SaveAPIKeyOnly.`);
       showApiKeyModal = false;
+      
       // Dispatch event to notify parent (App.svelte) that key was updated
-      dispatch('apikeysaved', openrouterApiKey);
+      // Include both the key and the mode to update the correct state variable
+      dispatch('apikeysaved', {key: apiKeyToSave, mode: activeMode});
       // Parent should handle reloading model list globally
     } catch (err) {
       apiKeyErrorMsg = 'Failed to save API key: ' + err;
-      console.error("API key save error (SaveAPIKeyOnly):", err);
+      console.error(`API key save error for ${activeMode} mode (SaveAPIKeyOnly):`, err);
     } finally {
       isChatLoading = false;
     }
@@ -441,8 +465,63 @@
 {#if showApiKeyModal}
   <div class="modal-backdrop">
     <div class="modal api-key-modal">
-      <h3>Set OpenRouter API Key</h3>
-      <input type="password" bind:value={openrouterApiKey} placeholder="sk-..." style="width: 100%; padding: 0.5em; margin-bottom: 1em;" />
+      <h3>Set LLM API Key</h3>
+      
+      <!-- Mode selection tabs -->
+      <div class="api-key-mode-tabs">
+        <button 
+          class={activeMode === 'openrouter' ? 'active' : ''} 
+          on:click={() => activeMode = 'openrouter'}
+          disabled={isChatLoading}
+        >OpenRouter</button>
+        <button 
+          class={activeMode === 'openai' ? 'active' : ''} 
+          on:click={() => activeMode = 'openai'}
+          disabled={isChatLoading}
+        >OpenAI</button>
+        <button 
+          class={activeMode === 'gemini' ? 'active' : ''} 
+          on:click={() => activeMode = 'gemini'}
+          disabled={isChatLoading}
+        >Gemini</button>
+        <button 
+          class={activeMode === 'local' ? 'active' : ''} 
+          on:click={() => activeMode = 'local'}
+          disabled={isChatLoading}
+        >Local</button>
+      </div>
+      
+      <!-- API key input based on active mode -->
+      {#if activeMode === 'openrouter' || activeMode === 'local'}
+        <label for="openrouter-key">OpenRouter API Key:</label>
+        <input 
+          id="openrouter-key"
+          type="password" 
+          bind:value={openrouterApiKey} 
+          placeholder="sk-..." 
+          style="width: 100%; padding: 0.5em; margin-bottom: 1em;" 
+        />
+        <small>Required for OpenRouter and Local modes</small>
+      {:else if activeMode === 'openai'}
+        <label for="openai-key">OpenAI API Key:</label>
+        <input 
+          id="openai-key"
+          type="password" 
+          bind:value={openaiApiKey} 
+          placeholder="sk-..." 
+          style="width: 100%; padding: 0.5em; margin-bottom: 1em;" 
+        />
+      {:else if activeMode === 'gemini'}
+        <label for="gemini-key">Gemini API Key:</label>
+        <input 
+          id="gemini-key"
+          type="password" 
+          bind:value={geminiApiKey} 
+          placeholder="..." 
+          style="width: 100%; padding: 0.5em; margin-bottom: 1em;" 
+        />
+      {/if}
+      
       {#if apiKeySaveMsg}
         <p class="success-message">{apiKeySaveMsg}</p>
       {/if}
@@ -451,7 +530,13 @@
       {/if}
       <div class="modal-buttons">
         <button on:click={saveApiKey} disabled={isChatLoading}>Save</button>
-        <button on:click={() => { showApiKeyModal = false; apiKeyErrorMsg=''; apiKeySaveMsg=''; openrouterApiKey=initialApiKey; }} disabled={isChatLoading}>Cancel</button>
+        <button on:click={() => { 
+          showApiKeyModal = false; 
+          apiKeyErrorMsg=''; 
+          apiKeySaveMsg=''; 
+          // Reset to initial values
+          openrouterApiKey=initialApiKey; 
+        }} disabled={isChatLoading}>Cancel</button>
       </div>
     </div>
   </div>
@@ -763,6 +848,42 @@
     width: 100%; padding: 0.75rem; background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px;
     color: var(--text-primary); font-size: 1rem; margin-bottom: 1rem;
+  }
+  
+  /* API Key Modal Tabs */
+  .api-key-mode-tabs {
+    display: flex;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  
+  .api-key-mode-tabs button {
+    padding: 0.5rem 1rem;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: var(--text-secondary, #999);
+  }
+  
+  .api-key-mode-tabs button.active {
+    border-bottom: 2px solid var(--accent-primary, #4a90e2);
+    color: var(--text-primary, #fff);
+    font-weight: bold;
+  }
+  
+  .api-key-mode-tabs button:hover:not(.active):not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary, #fff);
+  }
+  
+  .modal small {
+    display: block;
+    color: var(--text-secondary, #999);
+    margin-top: -0.5rem;
+    margin-bottom: 1rem;
+    font-size: 0.8rem;
   }
   .modal-buttons { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.5rem; }
   .modal-buttons button { padding: 0.6rem 1.2rem; }

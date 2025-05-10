@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
-  import { SaveLibraryFile, GenerateOpenRouterContent, GetAIResponseWithContext } from '@wailsjs/go/main/App';
+  import { SaveLibraryFile, GetAIResponseWithContext } from '@wailsjs/go/main/App';
 
   // Props
   export let initialContent: string = ''; // If loading existing content
@@ -196,7 +196,7 @@
     }
 
     try {
-      const aiReply = await GenerateOpenRouterContent(finalPrompt, chatModelId);
+      const aiReply = await GetAIResponseWithContext(finalPrompt, chatModelId);
       writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply }];
     } catch (err) {
       console.error("Error in write chat:", err);

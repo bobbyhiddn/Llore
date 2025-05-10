@@ -75,22 +75,23 @@
   }
 
   function handleModeSpecificModelLoad() {
-    // This function primarily triggers loading of LLM models (e.g., for OpenRouter).
-    // Embedding provider selection is handled by the backend based on activeMode.
+    // This function triggers loading of LLM models based on the active mode
+    // Clear any existing models first
+    dispatch('clearmodels');
+    
+    // Load models based on active mode
     if (activeMode === 'openrouter' || activeMode === 'local') { // 'local' uses OpenRouter for LLM
-      if (openrouterApiKey && modelList.length === 0 && !isModelListLoading) {
+      if (openrouterApiKey && !isModelListLoading) {
         dispatch('loadmodels'); // This event is for OpenRouter models
-      } else if (!openrouterApiKey) {
-        dispatch('clearmodels');
       }
     } else if (activeMode === 'openai') {
-      // OpenAI uses its own models; no separate list to load via OpenRouter dispatcher
-      // If you had a specific event for OpenAI models: dispatch('loadopenaistuff');
-      dispatch('clearmodels'); // Clear OpenRouter models if switching away
+      if (openaiApiKey && !isModelListLoading) {
+        dispatch('loadmodels'); // This will now load OpenAI models
+      }
     } else if (activeMode === 'gemini') {
-      // Gemini uses its own models for LLM if it were implemented for LLM;
-      // no separate list to load via OpenRouter dispatcher for LLM side.
-      dispatch('clearmodels'); // Clear OpenRouter models
+      if (geminiApiKey && !isModelListLoading) {
+        dispatch('loadmodels'); // This will now load Gemini models
+      }
     }
   }
 
@@ -153,12 +154,34 @@
     });
   }
 
-  // Function to trigger model list loading, typically after OpenRouter API key is entered/changed
+  // Functions to trigger model list loading after API keys are entered/changed
   function handleOpenRouterApiKeyChange() {
       dispatch('clearerrors');
       if (activeMode === 'openrouter' || activeMode === 'local') {
           if (openrouterApiKey) {
               dispatch('loadmodels'); // This is for OpenRouter models
+          } else {
+              dispatch('clearmodels');
+          }
+      }
+  }
+  
+  function handleOpenAIApiKeyChange() {
+      dispatch('clearerrors');
+      if (activeMode === 'openai') {
+          if (openaiApiKey) {
+              dispatch('loadmodels'); // This is for OpenAI models
+          } else {
+              dispatch('clearmodels');
+          }
+      }
+  }
+  
+  function handleGeminiApiKeyChange() {
+      dispatch('clearerrors');
+      if (activeMode === 'gemini') {
+          if (geminiApiKey) {
+              dispatch('loadmodels'); // This is for Gemini models
           } else {
               dispatch('clearmodels');
           }
@@ -230,6 +253,7 @@
                 type="text"
                 id="geminiApiKey"
                 bind:value={geminiApiKey}
+                on:input={handleGeminiApiKeyChange}
                 placeholder="Enter your Gemini API key"
               />
             {:else}
@@ -237,6 +261,7 @@
                 type="password"
                 id="geminiApiKey"
                 bind:value={geminiApiKey}
+                on:input={handleGeminiApiKeyChange}
                 placeholder="Enter your Gemini API key"
               />
             {/if}
@@ -266,6 +291,7 @@
                 type="text"
                 id="openaiApiKey"
                 bind:value={openaiApiKey}
+                on:input={handleOpenAIApiKeyChange}
                 placeholder="Enter your OpenAI API key"
               />
             {:else}
@@ -273,6 +299,7 @@
                 type="password"
                 id="openaiApiKey"
                 bind:value={openaiApiKey}
+                on:input={handleOpenAIApiKeyChange}
                 placeholder="Enter your OpenAI API key"
               />
             {/if}
@@ -361,10 +388,113 @@
       </div>
       {/if}
       
-      <!-- For OpenAI and Gemini modes, LLM model choice is typically implicit or handled by fewer options not exposed here -->
-      {#if activeMode === 'openai' || activeMode === 'gemini'}
+      <!-- For OpenAI mode, show model selection -->
+      {#if activeMode === 'openai'}
       <div class="form-group">
-        <p class="info-text">LLM model selection for {activeMode === 'openai' ? 'OpenAI' : 'Gemini'} mode is typically handled by the backend or has fewer choices not exposed here.</p>
+        <label for="openai-chat-model-select">Default Chat Model (OpenAI):</label>
+        {#if !openaiApiKey}
+          <p class="info-text">Set OpenAI API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="openai-chat-model-select"
+            bind:value={chatModelId}
+            on:change={handleChatModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="" disabled={chatModelId !== ""}>Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used in Chat and Write views (via OpenAI).</p>
+      </div>
+
+      <div class="form-group">
+        <label for="openai-story-processing-model-select">Story Processing Model (OpenAI):</label>
+        {#if !openaiApiKey}
+          <p class="info-text">Set OpenAI API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="openai-story-processing-model-select"
+            bind:value={storyProcessingModelId}
+            on:change={handleStoryModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used for extracting Codex entries (via OpenAI).</p>
+      </div>
+      {/if}
+      
+      <!-- For Gemini mode, show model selection -->
+      {#if activeMode === 'gemini'}
+      <div class="form-group">
+        <label for="gemini-chat-model-select">Default Chat Model (Gemini):</label>
+        {#if !geminiApiKey}
+          <p class="info-text">Set Gemini API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="gemini-chat-model-select"
+            bind:value={chatModelId}
+            on:change={handleChatModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="" disabled={chatModelId !== ""}>Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used in Chat and Write views (via Gemini).</p>
+      </div>
+
+      <div class="form-group">
+        <label for="gemini-story-processing-model-select">Story Processing Model (Gemini):</label>
+        {#if !geminiApiKey}
+          <p class="info-text">Set Gemini API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="gemini-story-processing-model-select"
+            bind:value={storyProcessingModelId}
+            on:change={handleStoryModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used for extracting Codex entries (via Gemini).</p>
       </div>
       {/if}
 

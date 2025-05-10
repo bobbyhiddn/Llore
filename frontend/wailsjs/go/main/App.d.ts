@@ -10,7 +10,13 @@ export function CreateNewVault(arg1:string):Promise<string>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
 
+export function FetchGeminiModels():Promise<Array<llm.OpenRouterModel>>;
+
+export function FetchOpenAIModels():Promise<Array<llm.OpenRouterModel>>;
+
 export function FetchOpenRouterModelsWithKey(arg1:string):Promise<Array<llm.OpenRouterModel>>;
+
+export function GenerateLLMContent(arg1:string,arg2:string):Promise<string>;
 
 export function GenerateMissingEmbeddings():Promise<void>;
 
