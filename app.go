@@ -442,9 +442,9 @@ func isValidFilename(filename string) bool {
 
 // ImportStoryTextAndFile saves story text to a file and processes it for codex entries
 // If providedFilename is not empty, it will be used instead of generating a filename
-func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]database.CodexEntry, error) {
+func (a *App) ImportStoryTextAndFile(text string, providedFilename string) (ProcessStoryResult, error) {
 	if a.db == nil {
-		return nil, fmt.Errorf("no vault is currently loaded")
+		return ProcessStoryResult{}, fmt.Errorf("no vault is currently loaded")
 	}
 
 	filename := "story.txt"
@@ -483,12 +483,12 @@ func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]da
 	// Ensure Library directory exists
 	libraryDir := filepath.Join(a.dbPath, "Library")
 	if err := os.MkdirAll(libraryDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create Library directory: %w", err)
+		return ProcessStoryResult{}, fmt.Errorf("failed to create Library directory: %w", err)
 	}
 	// Save the file
 	filePath := filepath.Join(libraryDir, filename)
 	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
-		return nil, fmt.Errorf("failed to save story file: %w", err)
+		return ProcessStoryResult{}, fmt.Errorf("failed to save story file: %w", err)
 	}
 
 	// Update library files cache
@@ -497,31 +497,24 @@ func (a *App) ImportStoryTextAndFile(text string, providedFilename string) ([]da
 	}
 
 	// Process the story into codex entries
-	result, err := a.ProcessStory(text) // Now returns ProcessStoryResult
+	result, err := a.ProcessStory(text) // This already returns ProcessStoryResult
 	if err != nil {
-		return nil, fmt.Errorf("failed to process story into codex entries: %w", err)
+		return ProcessStoryResult{}, fmt.Errorf("failed to process story into codex entries: %w", err)
 	}
 
-	// Use counts from the result struct
+	// Log summary of the import operation
 	newCount := len(result.NewEntries)
 	updatedCount := len(result.UpdatedEntries)
-	totalProcessed := newCount + updatedCount
-
-	// Log summary of the import operation
-	log.Printf("Import complete. Processed %d entries: %d new, %d updated.",
-		totalProcessed, newCount, updatedCount)
+	log.Printf("Import of file '%s' complete. Processed entries: %d new, %d updated.",
+		filename, newCount, updatedCount)
 
 	if updatedCount > 0 {
 		log.Printf("Note: %d entries already existed and were updated with merged content.", updatedCount)
 	}
 
-	// Combine new and updated entries for the return value (as the function signature still expects []database.CodexEntry)
-	// TODO: Consider changing ImportStoryTextAndFile return type to ProcessStoryResult in the future if needed.
-	allEntries := append(result.NewEntries, result.UpdatedEntries...)
-
-	return allEntries, nil
+	// Return the ProcessStoryResult directly
+	return result, nil
 }
-
 // ReadLibraryFile reads the content of a file from the vault's Library folder
 func (a *App) ReadLibraryFile(filename string) (string, error) {
 	if a.db == nil {
