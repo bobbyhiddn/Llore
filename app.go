@@ -20,9 +20,10 @@ import (
 	"sync"
 	"time"
 
-	// Import OpenAI and Gemini SDKs
-	"github.com/sashabaranov/go-openai"
-	"google.golang.org/genai" // Corrected new SDK import path
+	// Import official OpenAI and Gemini SDKs
+	openai "github.com/openai/openai-go" // Official OpenAI SDK
+	"github.com/openai/openai-go/option" // OpenAI SDK options
+	"google.golang.org/genai"            // Corrected new SDK import path
 )
 
 // ProcessStoryResult holds the separated lists of new, updated, and existing entries.
@@ -309,6 +310,14 @@ func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
 		} else {
 			chosenProvider = embeddings.NewGeminiEmbeddingProvider(cfg.GeminiApiKey)
 		}
+	case "openai":
+		if cfg.OpenAIAPIKey == "" {
+			errProv = fmt.Errorf("OpenAI API key missing for 'openai' mode")
+		} else {
+			// Use the new OpenAIEmbeddingProvider.
+			// The default model "text-embedding-3-small" will be used as defined in the provider.
+			chosenProvider, errProv = embeddings.NewOpenAIEmbeddingProvider(cfg.OpenAIAPIKey)
+		}
 	case "openrouter":
 		// For 'openrouter' mode, embeddings might still use Gemini or local,
 		// depending on your backend logic. Current code defaults to Gemini if key available.
@@ -425,24 +434,26 @@ func (a *App) FetchOpenAIModels() ([]llm.OpenRouterModel, error) {
 		return nil, fmt.Errorf("OpenAI API key not set")
 	}
 
-	// Create a new OpenAI client
-	client := openai.NewClient(cfg.OpenAIAPIKey)
+	// Create a new OpenAI client with the API key
+	client := openai.NewClient(
+		option.WithAPIKey(cfg.OpenAIAPIKey),
+	)
 
 	// Fetch the list of models
-	modelList, err := client.ListModels(context.Background())
+	modelList, err := client.Models.List(context.Background())
 	if err != nil {
 		log.Printf("Error fetching OpenAI models: %v", err)
 		return nil, fmt.Errorf("failed to fetch OpenAI models: %w", err)
 	}
 
-	// Filter for chat completion models
+	// Filter for chat completion models (typically GPT models)
 	var models []llm.OpenRouterModel
-	for _, model := range modelList.Models {
+	for _, model := range modelList.Data {
 		// Only include GPT models that support chat completions
-		if strings.Contains(model.ID, "gpt") && !strings.Contains(model.ID, "instruct") {
+		if strings.HasPrefix(model.ID, "gpt") && !strings.Contains(model.ID, "instruct") && !strings.Contains(model.ID, "vision") {
 			models = append(models, llm.OpenRouterModel{
 				ID:   model.ID,
-				Name: model.ID, // OpenAI doesn't provide friendly names, so use the ID
+				Name: model.ID, // Use ID as name as friendly names aren't always distinct or present
 			})
 		}
 	}
@@ -539,7 +550,7 @@ func (a *App) FetchGeminiModels() ([]llm.OpenRouterModel, error) {
 			sdkModelID := strings.TrimPrefix(model.Name, "models/")
 
 			// Ensure the prefix was actually removed and we have a non-empty ID
-			if sdkModelID != "" && sdkModelID != model.Name { 
+			if sdkModelID != "" && sdkModelID != model.Name {
 				openRouterModels = append(openRouterModels, llm.OpenRouterModel{
 					ID:   sdkModelID,
 					Name: model.DisplayName,
@@ -573,31 +584,34 @@ func (a *App) GenerateLLMContent(prompt, modelID string) (string, error) {
 		if cfg.OpenAIAPIKey == "" {
 			return "", fmt.Errorf("OpenAI API key not set. Cannot use OpenAI LLM")
 		}
-		client := openai.NewClient(cfg.OpenAIAPIKey)
+		client := openai.NewClient(
+		option.WithAPIKey(cfg.OpenAIAPIKey),
+	)
 		// If modelID is empty, choose a default from available OpenAI models
 		effectiveModelID := modelID
 		if effectiveModelID == "" {
-			effectiveModelID = openai.GPT3Dot5Turbo // A sensible default
+			effectiveModelID = "gpt-3.5-turbo" // Using string literal for safety with openai-go v0.1.0-beta.10
 			log.Printf("No modelID provided for OpenAI, defaulting to %s", effectiveModelID)
 		}
 		log.Printf("Sending prompt to OpenAI model %s", effectiveModelID)
-		resp, err := client.CreateChatCompletion(
+		
+		// Create a chat completion using the official SDK
+		completion, err := client.Chat.Completions.New(
 			context.Background(),
-			openai.ChatCompletionRequest{
+			openai.ChatCompletionNewParams{
 				Model: effectiveModelID,
-				Messages: []openai.ChatCompletionMessage{
-					{Role: openai.ChatMessageRoleUser, Content: prompt},
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.UserMessage(prompt),
 				},
-				// MaxTokens: 2048, // Optional: Control response length
 			},
 		)
 		if err != nil {
 			return "", fmt.Errorf("OpenAI chat completion error: %w", err)
 		}
-		if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		if len(completion.Choices) == 0 || completion.Choices[0].Message.Content == "" {
 			return "", fmt.Errorf("OpenAI returned no choices or empty content")
 		}
-		return resp.Choices[0].Message.Content, nil
+		return completion.Choices[0].Message.Content, nil
 
 	case "gemini":
 		if cfg.GeminiApiKey == "" {
@@ -967,7 +981,7 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
 	if processingModelID == "" {
 		switch cfg.ActiveMode {
 		case "openai":
-			processingModelID = openai.GPT3Dot5Turbo
+			processingModelID = "gpt-3.5-turbo" // Using string literal
 			log.Printf("Warning: StoryProcessingModelID not set for OpenAI mode, using default '%s'", processingModelID)
 		case "gemini":
 			processingModelID = "gemini-1.0-pro"
@@ -1203,7 +1217,7 @@ func (a *App) GetAIResponseWithContext(query string, modelID string) (string, er
 		if modelID == "" {        // If still empty, apply mode-specific default
 			switch cfg.ActiveMode {
 			case "openai":
-				modelID = openai.GPT3Dot5Turbo
+				modelID = "gpt-3.5-turbo" // Using string literal
 			case "gemini":
 				modelID = "gemini-1.0-pro"
 			case "openrouter", "local":
@@ -1334,7 +1348,7 @@ func (a *App) ProcessAndSaveTextAsEntries(textToProcess string) (int, error) {
 	if processingModelID == "" {
 		switch cfg.ActiveMode {
 		case "openai":
-			processingModelID = openai.GPT3Dot5Turbo
+			processingModelID = "gpt-3.5-turbo" // Using string literal
 		case "gemini":
 			processingModelID = "gemini-1.0-pro"
 		case "openrouter", "local":
