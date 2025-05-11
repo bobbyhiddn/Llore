@@ -17,7 +17,12 @@ type OpenRouterConfig struct {
 	APIKey                 string `json:"openrouter_api_key"`
 	ChatModelID            string `json:"chat_model_id,omitempty"`
 	StoryProcessingModelID string `json:"story_processing_model_id,omitempty"`
-	GeminiApiKey           string `json:"gemini_api_key,omitempty"` // Added for embeddings
+	GeminiApiKey           string `json:"gemini_api_key,omitempty"`
+
+	// New fields for different modes
+	ActiveMode             string `json:"active_mode,omitempty"`    // "local", "openrouter", "openai", "gemini"
+	OpenAIAPIKey           string `json:"openai_api_key,omitempty"`
+	LocalEmbeddingModelName string `json:"local_embedding_model_name,omitempty"`
 }
 
 type OpenRouterCache struct {

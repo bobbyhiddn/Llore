@@ -15,11 +15,11 @@
   import {
     // Keep all backend functions needed by App or passed down
     GetAllEntries, CreateEntry, UpdateEntry, DeleteEntry,
-    GenerateOpenRouterContent, SelectVaultFolder, CreateNewVault, SwitchVault,
+    SelectVaultFolder, CreateNewVault, SwitchVault,
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
-    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
-    GetAIResponseWithContext, // Added for RAG-based codex generation
+    FetchOpenRouterModelsWithKey, FetchOllamaModels, GetSettings, SaveSettings, SaveAPIKeyOnly, // Added FetchOllamaModels
+    GetAIResponseWithContext, FetchOpenAIModels, FetchGeminiModels, // Added new model fetchers
   } from '@wailsjs/go/main/App';
 
   // --- Core App State ---
@@ -36,6 +36,9 @@
   let chatModelId: string = ''; // Default chat model
   let storyProcessingModelId: string = ''; // Default story processing model
   let geminiApiKey: string = ''; // Gemini API key
+  let activeMode: string = 'openrouter'; // Default processing mode
+  let openaiApiKey: string = ''; // OpenAI API key
+  let localEmbeddingModelName: string = ''; // Local embedding model name
   let modelList: llm.OpenRouterModel[] = [];
   let isModelListLoading = false;
   let modelListError = '';
@@ -92,6 +95,9 @@
     chat_model_id: string;
     story_processing_model_id: string;
     gemini_api_key: string;
+    active_mode: string;
+    openai_api_key: string;
+    local_embedding_model_name: string;
   }
 
   // --- Initialization ---
@@ -257,15 +263,35 @@
       chatModelId = settings.chat_model_id || '';
       storyProcessingModelId = settings.story_processing_model_id || '';
       geminiApiKey = settings.gemini_api_key || '';
-      console.log("Settings loaded:", { keySet: !!openrouterApiKey, chatM: chatModelId, storyM: storyProcessingModelId, geminiKeySet: !!geminiApiKey });
-      // If API key is present, trigger model list load
-      if (openrouterApiKey) {
-        await loadModelList();
-      } else {
-        // Clear models if key is not set
-        modelList = [];
-        modelListError = '';
-      }
+      activeMode = settings.active_mode || 'openrouter'; // Default to openrouter if not set
+      openaiApiKey = settings.openai_api_key || '';
+      localEmbeddingModelName = settings.local_embedding_model_name || '';
+      
+      console.log("Settings loaded:", { 
+        keySet: !!openrouterApiKey, 
+        chatM: chatModelId, 
+        storyM: storyProcessingModelId, 
+        geminiKeySet: !!geminiApiKey,
+        activeMode,
+        openaiKeySet: !!openaiApiKey,
+        localModelName: localEmbeddingModelName
+      });
+      
+      // Load model list based on active mode, but preserve our loaded settings
+      const currentChatModel = chatModelId;
+      const currentStoryModel = storyProcessingModelId;
+      
+      await loadModelListForMode();
+      
+      // Ensure our loaded settings are preserved after model list load
+      if (currentChatModel) chatModelId = currentChatModel;
+      if (currentStoryModel) storyProcessingModelId = currentStoryModel;
+      
+      console.log('Final settings after model list load:', {
+        chatModelId,
+        storyProcessingModelId,
+        activeMode
+      });
     } catch (err) {
       settingsErrorMsg = `Error loading settings: ${err}`;
       console.error("Settings load error:", err);
@@ -273,49 +299,183 @@
       isLoading = false;
     }
   }
+  
+  // This function is defined later in the file
+  
+  // Load model list based on active mode
+  async function loadModelListForMode(modeToLoadForParam?: string) {
+    console.log("Loading model list for mode:", activeMode);
+    const modeToUse = modeToLoadForParam || activeMode;
+    console.log("App.svelte: Loading model list for effective mode:", modeToUse);
+    
+    isModelListLoading = true;
+    modelListError = '';
+    let newModelList: llm.OpenRouterModel[] = []; // Fetch into a temporary list
 
-  async function handleSaveSettings(event: CustomEvent<OpenRouterConfig>) {
-    console.log("Attempting to save settings...");
-    isLoading = true;
+    try {
+      if (modeToUse === 'openrouter' || modeToUse === 'hybrid') { 
+        // Both openrouter and hybrid modes use OpenRouter for LLM
+        if (openrouterApiKey) {
+          console.log("Fetching OpenRouter models for " + modeToUse + " mode...");
+          newModelList = await FetchOpenRouterModelsWithKey(openrouterApiKey) || [];
+        } else {
+          modelListError = 'Set OpenRouter API Key in Settings for ' + modeToUse + ' LLM mode.';
+        }
+      } else if (modeToUse === 'local') {
+        console.log("Fetching Ollama models for local mode...");
+        newModelList = await FetchOllamaModels() || [];
+        if (newModelList.length === 0) {
+          modelListError = 'No local Ollama models found. Ensure Ollama is running and models are pulled.';
+        }
+      } else if (modeToUse === 'openai') {
+        if (openaiApiKey) {
+          newModelList = await FetchOpenAIModels() || [];
+        } else {
+          modelListError = 'Set OpenAI API Key in Settings for OpenAI mode.';
+        }
+      } else if (modeToUse === 'gemini') {
+        if (geminiApiKey) {
+          newModelList = await FetchGeminiModels() || [];
+        } else {
+          modelListError = 'Set Gemini API Key in Settings for Gemini mode.';
+        }
+      }
+      modelList = newModelList; // Assign the fetched list in one go
+
+      // Default model selection in App.svelte's state.
+      // This runs on initial load, after save, or when SettingsView requests a model list update.
+      // It should only set defaults if the current selection is invalid or unset for the *App's activeMode*.
+      if (modeToUse === activeMode) { // Only default if we are loading models for the App's actual activeMode
+        let currentAppChatModel = chatModelId;
+        let currentAppStoryModel = storyProcessingModelId;
+
+        if (modelList.length > 0) {
+            const chatModelIsValid = modelList.some(m => m.id === currentAppChatModel);
+            const storyModelIsValid = modelList.some(m => m.id === currentAppStoryModel);
+
+            if (!currentAppChatModel || !chatModelIsValid) {
+                chatModelId = modelList.find(m=>m.id) ? modelList[0].id : '';
+            }
+            if (!currentAppStoryModel || !storyModelIsValid) {
+                storyProcessingModelId = modelList.find(m=>m.id) ? modelList[0].id : '';
+            }
+        } else {
+            chatModelId = '';
+            storyProcessingModelId = '';
+        }
+      } else {
+        // If loading models for a mode different from App's activeMode (e.g., SettingsView browsing),
+        // App.svelte doesn't change its own chatModelId/storyProcessingModelId.
+        // The new modelList is just passed to SettingsView.
+      }
+      console.log(`App.svelte: Model list updated for mode '${modeToUse}'. Models count: ${modelList.length}. App Chat: ${chatModelId}, App Story: ${storyProcessingModelId}`);
+
+    } catch (err) {
+      console.error(`Error fetching models for mode ${modeToUse}:`, err);
+      modelListError = `Failed to load models for ${modeToUse} mode: ${err}`;
+      modelList = []; // Clear list on error
+      // If loading for App's activeMode, clear model selections
+      if (modeToUse === activeMode) {
+        chatModelId = '';
+        storyProcessingModelId = '';
+      }
+    } finally {
+      isModelListLoading = false;
+    }
+  }
+  
+  // Handler functions for SettingsView events
+  async function handleLoadModels(event?: CustomEvent<{ modeToLoadFor?: string }>) {
+    const modeForList = event?.detail?.modeToLoadFor || activeMode;
+    await loadModelListForMode(modeForList);
+  }
+  
+  function handleClearModels() {
+    modelList = [];
+    modelListError = '';
+  }
+
+  function handleClearErrors() {
     settingsErrorMsg = '';
     settingsSaveMsg = '';
-    const settingsToSave = event.detail;
+  }
+  
+  function handleSettingsError(event: CustomEvent<string>) {
+    settingsErrorMsg = event.detail;
+  }
+
+  async function handleSaveSettings(event: CustomEvent<OpenRouterConfig>) {
+    console.log("Saving settings...", event.detail);
+    isLoading = true;
+    settingsSaveMsg = '';
+    settingsErrorMsg = '';
     try {
-      await SaveSettings(settingsToSave);
+      // Update local state
+      openrouterApiKey = event.detail.openrouter_api_key;
+      chatModelId = event.detail.chat_model_id;
+      storyProcessingModelId = event.detail.story_processing_model_id;
+      geminiApiKey = event.detail.gemini_api_key;
+      activeMode = event.detail.active_mode;
+      openaiApiKey = event.detail.openai_api_key;
+      localEmbeddingModelName = event.detail.local_embedding_model_name;
+
+      // Save to backend
+      await SaveSettings({
+        openrouter_api_key: openrouterApiKey,
+        chat_model_id: chatModelId,
+        story_processing_model_id: storyProcessingModelId,
+        gemini_api_key: geminiApiKey,
+        active_mode: activeMode,
+        openai_api_key: openaiApiKey,
+        local_embedding_model_name: localEmbeddingModelName
+      });
+      
       settingsSaveMsg = 'Settings saved successfully!';
       console.log("Settings saved successfully");
-      // Update local state after successful save
-      openrouterApiKey = settingsToSave.openrouter_api_key;
-      chatModelId = settingsToSave.chat_model_id;
-      storyProcessingModelId = settingsToSave.story_processing_model_id;
-      geminiApiKey = settingsToSave.gemini_api_key;
-      // Reload models if API key might have changed
-      if (openrouterApiKey) {
-          await loadModelList();
-      } else {
-          modelList = []; // Clear models if key removed
-          modelListError = '';
-      }
+      
+      // Load model list based on active mode
+      await loadModelListForMode();
     } catch (err) {
       settingsErrorMsg = `Error saving settings: ${err}`;
       console.error("Settings save error:", err);
     } finally {
       isLoading = false;
+      // Clear success message after 3 seconds
+      if (settingsSaveMsg) {
+        setTimeout(() => { settingsSaveMsg = ''; }, 3000);
+      }
     }
   }
 
    // Handle API key save from ChatView modal
-  async function handleApiKeySaved(event: CustomEvent<string>) {
-      const newApiKey = event.detail;
-      console.log("App.svelte received api key saved event");
-      openrouterApiKey = newApiKey;
-      settingsSaveMsg = 'API Key updated!'; // Provide feedback
-      // Reload models
-      if (openrouterApiKey) {
-          await loadModelList();
+  async function handleApiKeySaved(event: CustomEvent<{key: string, mode: string}>) {
+      const {key: newApiKey, mode: keyMode} = event.detail;
+      console.log(`App.svelte received api key saved event for mode: ${keyMode}`);
+      
+      // Update the appropriate API key based on the mode
+      if (keyMode === 'openrouter' || keyMode === 'local') {
+          openrouterApiKey = newApiKey;
+      } else if (keyMode === 'openai') {
+          openaiApiKey = newApiKey;
+      } else if (keyMode === 'gemini') {
+          geminiApiKey = newApiKey;
       } else {
-          modelList = [];
-          modelListError = '';
+          console.warn(`Unknown mode for API key: ${keyMode}`);
+          return;
+      }
+      
+      // Save the API key to backend
+      try {
+          // Save only the API key that was updated
+          await SaveAPIKeyOnly(newApiKey);
+          
+          settingsSaveMsg = `${keyMode.toUpperCase()} API Key updated!`; // Provide feedback
+          
+          // Reload models based on active mode
+          await loadModelListForMode();
+      } catch (err) {
+          settingsErrorMsg = `Error saving API key: ${err}`;
+          console.error("API key save error:", err);
       }
   }
 
@@ -325,7 +485,7 @@
       console.log("API key not set, skipping model list load.");
       modelListError = 'Set OpenRouter API Key in Settings first.';
       modelList = [];
-      // Don't clear selected models here, let components handle defaults
+      // Don't clear selected models if API key is missing, they might have been valid with a previous key.
       return;
     }
     console.log("Attempting to load models using key...");
@@ -333,22 +493,51 @@
     modelListError = '';
     try {
       const fetchedModels: llm.OpenRouterModel[] = await FetchOpenRouterModelsWithKey(openrouterApiKey);
+      console.log("Raw fetched models:", fetchedModels);
       modelList = fetchedModels || [];
-      // Set default models if they are not set or invalid
-      if (!chatModelId || !modelList.some(m => m.id === chatModelId)) {
-          chatModelId = modelList.length > 0 ? modelList[0].id : '';
+      
+      // Preserve what was loaded from settings or previously saved by the user
+      const currentConfiguredChatModel = chatModelId; 
+      const currentConfiguredStoryModel = storyProcessingModelId;
+
+      const chatModelExistsInFetchedList = modelList.some(m => m.id === currentConfiguredChatModel);
+      const storyModelExistsInFetchedList = modelList.some(m => m.id === currentConfiguredStoryModel);
+      
+      console.log("Configured Chat Model:", currentConfiguredChatModel, "Exists in fetched list:", chatModelExistsInFetchedList);
+      console.log("Configured Story Model:", currentConfiguredStoryModel, "Exists in fetched list:", storyModelExistsInFetchedList);
+      
+      // Handle Chat Model
+      if (currentConfiguredChatModel && !chatModelExistsInFetchedList) {
+        // If a chat model was configured but is not in the fetched list, keep it and warn.
+        console.warn(`Configured chat model '${currentConfiguredChatModel}' not found in the latest fetched list. It will be kept, but may not be available or valid. Please verify in Settings.`);
+        // chatModelId remains currentConfiguredChatModel
+      } else if (!currentConfiguredChatModel && modelList.length > 0) {
+        // Only set a default if no chat model was configured at all.
+        chatModelId = modelList[0].id;
+        console.log("No chat model was configured. Setting default chat model to:", chatModelId);
       }
-      if (!storyProcessingModelId || !modelList.some(m => m.id === storyProcessingModelId)) {
-          // Maybe choose a different default for story processing? Or same as chat?
-          storyProcessingModelId = modelList.length > 0 ? modelList[0].id : '';
+      // If currentConfiguredChatModel exists in the list, chatModelId is already correctly set.
+
+      // Handle Story Processing Model
+      if (currentConfiguredStoryModel && !storyModelExistsInFetchedList) {
+        // If a story model was configured but is not in the fetched list, keep it and warn.
+        console.warn(`Configured story processing model '${currentConfiguredStoryModel}' not found in the latest fetched list. It will be kept, but may not be available or valid. Please verify in Settings.`);
+        // storyProcessingModelId remains currentConfiguredStoryModel
+      } else if (!currentConfiguredStoryModel && modelList.length > 0) {
+        // Only set a default if no story model was configured at all.
+        storyProcessingModelId = modelList[0].id;
+        console.log("No story processing model was configured. Setting default story model to:", storyProcessingModelId);
       }
-      console.log(`Fetched ${modelList.length} models. Defaults set: Chat=${chatModelId}, Story=${storyProcessingModelId}`);
+      // If currentConfiguredStoryModel exists in the list, storyProcessingModelId is already correctly set.
+      
+      console.log(`Fetched ${modelList.length} models. Final active selections: Chat=${chatModelId}, Story=${storyProcessingModelId}`);
     } catch (err) {
       console.error("Error fetching models:", err);
       modelListError = 'Failed to load models: ' + err;
       modelList = [];
-      chatModelId = ''; // Clear selection on error
-      storyProcessingModelId = '';
+      // On error fetching models, do not clear previously configured model IDs.
+      // They might still be valid if the API error is temporary.
+      console.warn("Failed to fetch model list. Previously configured models will be kept but might not be valid or available.");
     } finally {
       isModelListLoading = false;
     }
@@ -386,6 +575,7 @@
   async function handleSaveEntry(event: CustomEvent<{ entryData: database.CodexEntry, isEditing: boolean }>) {
     const { entryData, isEditing: wasEditing } = event.detail;
     console.log(`handleSaveEntry called. WasEditing: ${wasEditing}`);
+    console.log(`Entry data:`, entryData);
     
     // Important: Create local copies of state to avoid reactivity issues
     let tempCurrentEntry = currentEntry;
@@ -397,11 +587,12 @@
     codexErrorMsg = '';
     
     try {
-      if (wasEditing) {
+      // For existing entries (with ID > 0), use UpdateEntry
+      if (wasEditing && entryData.id > 0) {
         console.log("Attempting to update entry:", entryData.id);
-        await UpdateEntry(entryData); // Assumes entryData includes the ID
+        await UpdateEntry(entryData);
         console.log("UpdateEntry returned successfully for:", entryData.id);
-        alert('Entry updated successfully!'); // Simple feedback for now
+        alert('Entry updated successfully!');
         
         // Refresh entries list
         await loadEntries(); 
@@ -414,7 +605,9 @@
         // Update state in a specific order
         tempCurrentEntry = updatedEntry;
         tempIsEditing = !!updatedEntry;
-      } else {
+      } 
+      // For new entries (ID = 0 or wasEditing = false), use CreateEntry
+      else {
         console.log("Attempting to create entry:", entryData.name);
         const newEntry = await CreateEntry(entryData.name, entryData.type, entryData.content);
         console.log("CreateEntry returned successfully. New ID:", newEntry.id);
@@ -717,20 +910,16 @@
       
       // Save to library with the provided filename
       // This function both saves the file and processes it for codex entries
-      const entries = await ImportStoryTextAndFile(content, filename);
+      const result = await ImportStoryTextAndFile(content, filename);
       
       // Refresh library files to ensure the new file appears in the list
       await refreshLibraryFiles();
       
       // Show success message
       if (storyImportViewRef) {
-        // Since ImportStoryTextAndFile already processes the story,
-        // we don't need to call ProcessStory separately
         storyImportViewRef.showImportSuccess({
-          // New entries have ID > 0, updated entries have ID === 0
-          // This was reversed in the previous code
-          newEntries: entries.filter(e => e.id === 0) || [],
-          updatedEntries: entries.filter(e => e.id > 0) || []
+          newEntries: result.newEntries || [],
+          updatedEntries: result.updatedEntries || []
         });
       }
 
@@ -949,33 +1138,35 @@
   {:else if mode === 'settings'}
     <SettingsView
       bind:this={settingsViewRef}
-      bind:isLoading
-      bind:settingsSaveMsg
-      bind:settingsErrorMsg
       initialApiKey={openrouterApiKey}
       initialChatModelId={chatModelId}
       initialStoryProcessingModelId={storyProcessingModelId}
       initialGeminiApiKey={geminiApiKey}
-      bind:modelList
-      bind:isModelListLoading
-      bind:modelListError
-      on:back={() => setModeAndUpdate(null)}
+      initialActiveMode={activeMode}
+      initialOpenAIAPIKey={openaiApiKey}
+      initialLocalEmbeddingModelName={localEmbeddingModelName}
+      {modelList}
+      isModelListLoading={isModelListLoading}
+      modelListError={modelListError}
+      isLoading={isLoading}
+      settingsSaveMsg={settingsSaveMsg}
+      settingsErrorMsg={settingsErrorMsg}
+      on:loadmodels={handleLoadModels}
+      on:clearmodels={handleClearModels}
       on:savesettings={handleSaveSettings}
-      on:loadmodels={loadModelList}
-      on:clearmodels={() => { modelList = []; modelListError = ''; }}
-      on:error={(e) => settingsErrorMsg = e.detail}
-      on:clearerrors={() => { settingsErrorMsg = ''; settingsSaveMsg = ''; }}
+      on:clearerrors={handleClearErrors}
+      on:error={handleSettingsError}
+      on:back={() => setModeAndUpdate(null)}
     />
   {:else if mode === 'write'}
     <WriteView
-       bind:isLoading
-       chatModelId={chatModelId}
-       on:back={() => setModeAndUpdate(null)}
-       on:filesaved={handleWriteFileSaved}
-       on:loading={handleWriteLoading}
-       on:error={handleGenericError}
-       initialContent={writeViewInitialContent}
-       initialFilename={writeViewInitialFilename}
+      chatModelId={chatModelId}
+      on:back={() => setModeAndUpdate(null)}
+      on:filesaved={handleWriteFileSaved}
+      on:loading={handleWriteLoading}
+      on:error={handleGenericError}
+      initialContent={writeViewInitialContent}
+      initialFilename={writeViewInitialFilename}
     />
   {/if}
 

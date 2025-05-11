@@ -1,15 +1,24 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import { llm } from '@wailsjs/go/models'; // Import namespace
+  import { llm } from '@wailsjs/go/models';
+  import { FetchOllamaModels } from '@wailsjs/go/main/App';
+
+  type ProviderMode = 'openrouter' | 'openai' | 'gemini' | 'hybrid' | 'local';
 
   // Props
-  export let initialApiKey: string = '';
+  export let initialApiKey: string = ''; // This is OpenRouter API Key
   export let initialChatModelId: string = '';
   export let initialStoryProcessingModelId: string = '';
-  export let initialGeminiApiKey: string = ''; // Added for Gemini key
+  export let initialGeminiApiKey: string = '';
+  export let initialActiveMode: string = 'openrouter';
+  export let initialOpenAIAPIKey: string = '';
+  export let initialLocalEmbeddingModelName: string = ''; // This is Ollama model tag for local mode
   export let modelList: llm.OpenRouterModel[] = [];
   export let isModelListLoading: boolean = false;
   export let modelListError: string = '';
+  export let embeddingModelList: llm.OpenRouterModel[] = [];
+  export let isEmbeddingModelListLoading: boolean = false;
+  export let embeddingModelListError: string = '';
   export let isLoading: boolean = false; // General loading state from parent
   export let settingsSaveMsg: string = ''; // Passed from parent
   export let settingsErrorMsg: string = ''; // Passed from parent
@@ -18,81 +27,240 @@
   let openrouterApiKey: string = '';
   let chatModelId: string = '';
   let storyProcessingModelId: string = '';
-  let geminiApiKey: string = ''; // Added for Gemini key
-  let showApiKey = false;
-  let showGeminiKey = false; // Added for Gemini key visibility
+  let geminiApiKey: string = '';
+  let activeMode: string = '';
+  let openaiApiKey: string = '';
+  let localEmbeddingModelName: string = ''; // For Ollama model tag
+  let showOpenRouterKey = false; // Renamed for clarity
+  let showGeminiKey = false;
+  let showOpenAIKey = false;
+  
+  // Store provider-specific model selections
+  type ModelSelections = { chat: string; story: string };
+  
+  let providerModels: Record<ProviderMode, ModelSelections> = {
+    openrouter: { chat: '', story: '' },
+    openai: { chat: '', story: '' },
+    gemini: { chat: '', story: '' },
+    hybrid: { chat: '', story: '' },
+    local: { chat: '', story: '' }
+  };
 
   const dispatch = createEventDispatcher();
 
-  // Initialize local state from props on mount and when props change
+  // Initialize local state from props on mount
   onMount(() => {
     openrouterApiKey = initialApiKey;
     chatModelId = initialChatModelId;
     storyProcessingModelId = initialStoryProcessingModelId;
-    geminiApiKey = initialGeminiApiKey; // Initialize Gemini key
-    // Request model list load if API key is present but list is empty
-    if (openrouterApiKey && modelList.length === 0 && !isModelListLoading) {
-        dispatch('loadmodels');
-    }
+    geminiApiKey = initialGeminiApiKey;
+    activeMode = initialActiveMode || 'openrouter'; // Default to openrouter
+    openaiApiKey = initialOpenAIAPIKey;
+    localEmbeddingModelName = initialLocalEmbeddingModelName;
+
+    // Initialize the current mode's model selections
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode] = {
+      chat: initialChatModelId,
+      story: initialStoryProcessingModelId
+    };
+
+    // Request model list load if relevant API key is present and mode requires it
+    handleModeSpecificModelLoad();
   });
 
-  // $: if (initialApiKey !== openrouterApiKey && !isLoading) openrouterApiKey = initialApiKey;
-  // Only update local model IDs from props if the user hasn't interacted
-  $: if (initialChatModelId !== chatModelId && !userChangedChatModel) chatModelId = initialChatModelId;
-  $: if (initialStoryProcessingModelId !== storyProcessingModelId && !userChangedStoryModel) storyProcessingModelId = initialStoryProcessingModelId;
-
+  // Keep local model IDs in sync with props if user hasn't changed them
   let userChangedChatModel = false;
   let userChangedStoryModel = false;
 
+  $: if (initialChatModelId !== chatModelId && !userChangedChatModel) chatModelId = initialChatModelId;
+  $: if (initialStoryProcessingModelId !== storyProcessingModelId && !userChangedStoryModel) storyProcessingModelId = initialStoryProcessingModelId;
+
+
   function handleChatModelChange(event: Event) {
+    const newValue = (event.target as HTMLSelectElement).value;
+    if (newValue === '') return;
+    
     userChangedChatModel = true;
-    chatModelId = (event.target as HTMLSelectElement).value;
+    chatModelId = newValue;
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode].chat = chatModelId;
   }
 
   function handleStoryModelChange(event: Event) {
+    const newValue = (event.target as HTMLSelectElement).value;
+    if (newValue === '') return;
+    
     userChangedStoryModel = true;
-    storyProcessingModelId = (event.target as HTMLSelectElement).value;
+    storyProcessingModelId = newValue;
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode].story = storyProcessingModelId;
+  }
+
+  async function onActiveModeChange() {
+    // Save current model selections for the previous mode
+    if (chatModelId || storyProcessingModelId) {
+      const previousMode = activeMode as ProviderMode;
+      providerModels[previousMode] = {
+        chat: chatModelId,
+        story: storyProcessingModelId
+      };
+    }
+    
+    // Clear current models and errors
+    dispatch('clearmodels');
+    dispatch('clearerrors');
+    
+    // Reset selections before loading new models
+    chatModelId = '';
+    storyProcessingModelId = '';
+    userChangedChatModel = false;
+    userChangedStoryModel = false;
+
+    // Load models for the new mode
+    await handleModeSpecificModelLoad();
+
+    // After models are loaded, restore saved selections if they exist
+    const currentMode = activeMode as ProviderMode;
+    const savedModels = providerModels[currentMode];
+    if (savedModels && modelList.length > 0) {
+      // Only restore if the saved model still exists in the new list
+      if (savedModels.chat && modelList.some(m => m.id === savedModels.chat)) {
+        chatModelId = savedModels.chat;
+      }
+      if (savedModels.story && modelList.some(m => m.id === savedModels.story)) {
+        storyProcessingModelId = savedModels.story;
+      }
+    }
+  }
+
+  async function handleModeSpecificModelLoad() {
+    // Clear any existing models first
+    dispatch('clearmodels');
+    
+    // Load models based on active mode
+    if (activeMode === 'openrouter' || activeMode === 'local') {
+      if (openrouterApiKey && !isModelListLoading) {
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
+      }
+    } else if (activeMode === 'openai') {
+      if (openaiApiKey && !isModelListLoading) {
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
+      }
+    } else if (activeMode === 'gemini') {
+      if (geminiApiKey && !isModelListLoading) {
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
+      }
+    }
+
+    // Load embedding models if in local mode
+    if (activeMode === 'local') {
+      await loadEmbeddingModels();
+    }
+  }
+
+  async function loadEmbeddingModels() {
+    isEmbeddingModelListLoading = true;
+    embeddingModelListError = '';
+    try {
+      embeddingModelList = await FetchOllamaModels() || [];
+      if (embeddingModelList.length === 0) {
+        embeddingModelListError = 'No local Ollama models found for embeddings. Ensure Ollama is running and models are pulled.';
+      }
+    } catch (err: any) {
+      embeddingModelListError = `Error loading embedding models: ${err.message}`;
+      embeddingModelList = [];
+    } finally {
+      isEmbeddingModelListLoading = false;
+    }
   }
 
   function goBack() {
     dispatch('back');
   }
 
-  function saveSettings() {
-    // Basic validation
-    if (!openrouterApiKey) {
-        dispatch('error', 'OpenRouter API Key cannot be empty if you want to use AI features.');
-        // Allow saving empty key if user intends to disable AI? Or enforce?
-        // For now, let's allow saving an empty key but maybe warn.
-    }
-     if (openrouterApiKey && (!chatModelId || !storyProcessingModelId)) {
-         if (modelList.length > 0) {
-             // If models are loaded, prompt user to select models if key is present
-             dispatch('error', 'Please select both a Chat Model and a Story Processing Model.');
-             return; // Prevent saving if models are available but not selected
-         }
-         // If models haven't loaded (e.g., bad key), allow saving the key itself.
-     }
+  async function saveSettings() {
+    dispatch('clearerrors');
+    let hasError = false;
+    let errorMessages: string[] = [];
 
+    if (activeMode === 'openai' && !openaiApiKey) {
+        errorMessages.push('OpenAI API Key is required for OpenAI mode.');
+        hasError = true;
+    }
+    if ((activeMode === 'gemini' || (activeMode === 'openrouter' && geminiApiKey)) && !geminiApiKey) {
+      if (activeMode === 'gemini'){
+        errorMessages.push('Gemini API Key is required for Gemini mode.');
+        hasError = true;
+      }
+    }
+    if ((activeMode === 'openrouter' || activeMode === 'local') && !openrouterApiKey) {
+        errorMessages.push('OpenRouter API Key is required for OpenRouter/Local LLM mode.');
+        hasError = true;
+    }
+    if (activeMode === 'local' && !localEmbeddingModelName) {
+        errorMessages.push('Ollama Embedding Model Tag is required for Local mode.');
+        hasError = true;
+    }
+
+    if ((activeMode === 'openrouter' || activeMode === 'local') && openrouterApiKey) {
+        if (modelList.length > 0 && (!chatModelId || !storyProcessingModelId)) {
+            errorMessages.push('Please select both a Chat Model and a Story Processing Model.');
+            hasError = true;
+        }
+    }
+
+    if (hasError) {
+        dispatch('error', errorMessages.join(' '));
+        return;
+    }
+
+    // Save settings
     dispatch('savesettings', {
       openrouter_api_key: openrouterApiKey,
       chat_model_id: chatModelId,
       story_processing_model_id: storyProcessingModelId,
-      gemini_api_key: geminiApiKey
+      gemini_api_key: geminiApiKey,
+      active_mode: activeMode,
+      openai_api_key: openaiApiKey,
+      local_embedding_model_name: localEmbeddingModelName
     });
+
+    // After saving, refresh the model list
+    await handleModeSpecificModelLoad();
   }
 
-  // Function to trigger model list loading, typically after API key is entered/changed
-  async function handleApiKeyChange() {
-      // Clear previous errors/messages when key changes
+  // Functions to trigger model list loading after API keys are entered/changed
+  function handleOpenRouterApiKeyChange() {
       dispatch('clearerrors');
-      // If key is present, trigger model load
-      if (openrouterApiKey) {
-          dispatch('loadmodels');
-      } else {
-          // If key is cleared, clear model list and errors locally? Or let parent handle?
-          // Parent should handle clearing model list based on dispatched event.
-          dispatch('clearmodels'); // Ask parent to clear models
+      if (activeMode === 'openrouter' || activeMode === 'local') {
+          if (openrouterApiKey) {
+              dispatch('loadmodels'); // This is for OpenRouter models
+          } else {
+              dispatch('clearmodels');
+          }
+      }
+  }
+  
+  function handleOpenAIApiKeyChange() {
+      dispatch('clearerrors');
+      if (activeMode === 'openai') {
+          if (openaiApiKey) {
+              dispatch('loadmodels'); // This is for OpenAI models
+          } else {
+              dispatch('clearmodels');
+          }
+      }
+  }
+  
+  function handleGeminiApiKeyChange() {
+      dispatch('clearerrors');
+      if (activeMode === 'gemini') {
+          if (geminiApiKey) {
+              dispatch('loadmodels'); // This is for Gemini models
+          } else {
+              dispatch('clearmodels');
+          }
       }
   }
 
@@ -103,160 +271,360 @@
   <h2>Settings</h2>
   <div class="settings-container">
     <form on:submit|preventDefault={saveSettings}>
+
+      <!-- Active Processing Mode Selector -->
       <div class="form-group">
-        <label for="apiKey">OpenRouter API Key:</label>
+        <label for="activeModeSelect">Active Processing Mode:</label>
+        <select id="activeModeSelect" bind:value={activeMode} on:change={onActiveModeChange}>
+          <option value="openrouter">OpenRouter LLM + Gemini Embeddings</option>
+          <option value="openai">OpenAI LLM & OpenAI Embeddings</option>
+          <option value="gemini">Gemini LLM & Gemini Embeddings</option>
+          <option value="hybrid">OpenRouter LLM + Ollama Embeddings (Hybrid)</option>
+          <option value="local">Ollama LLM & Embeddings (Offline Mode)</option>
+        </select>
+        <p class="help-text">Determines services for LLM and Embeddings. Backend decides embedding source for "OpenRouter" mode.</p>
+      </div>
+      
+      <!-- OpenRouter API Key - Show for openrouter and hybrid modes -->
+      {#if activeMode === 'openrouter' || activeMode === 'hybrid'}
+      <div class="form-group">
+        <label for="openrouterApiKey">OpenRouter API Key:</label>
         <div class="api-key-input">
-          {#if showApiKey}
+          {#if showOpenRouterKey}
             <input
               type="text"
-              id="apiKey"
+              id="openrouterApiKey"
               bind:value={openrouterApiKey}
-              on:change={handleApiKeyChange}
-              placeholder="Enter your OpenRouter API key (e.g., sk-...)"
-              autofocus
+              on:input={handleOpenRouterApiKeyChange} 
+              placeholder="Enter your OpenRouter API key"
             />
           {:else}
             <input
               type="password"
-              id="apiKey"
+              id="openrouterApiKey"
               bind:value={openrouterApiKey}
-              on:change={handleApiKeyChange}
+              on:input={handleOpenRouterApiKeyChange} 
               placeholder="Enter your OpenRouter API key"
-              autofocus
             />
           {/if}
           <button
             type="button"
             class="toggle-visibility"
-            on:click={() => showApiKey = !showApiKey}
-            title={showApiKey ? "Hide API Key" : "Show API Key"}
+            on:click={() => (showOpenRouterKey = !showOpenRouterKey)}
+            title={showOpenRouterKey ? "Hide API Key" : "Show API Key"}
           >
-            {#if showApiKey}👁️{:else}👁️‍🗨️{/if}
+            {showOpenRouterKey ? "👁️" : "👁️‍🗨️"}
           </button>
         </div>
-         <p class="help-text">Get your key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>. Required for AI features.</p>
+        {#if activeMode === 'openrouter'}
+          <p class="help-text">Used for LLM features in 'OpenRouter' mode. Get from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>.</p>
+        {:else if activeMode === 'hybrid'}
+          <p class="help-text">Used for LLM features in 'Hybrid' mode (Ollama provides embeddings). Get from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>.</p>
+        {/if}
       </div>
+      {/if}
 
-      <!-- Gemini API Key Input -->
+      <!-- Gemini API Key Input - Show for 'gemini' mode (LLM & Embeddings) AND 'openrouter' mode (for potential Gemini embeddings via backend) -->
+      {#if activeMode === 'gemini' || activeMode === 'openrouter'}
       <div class="form-group">
-          <label for="geminiApiKey">Gemini API Key (for embeddings):</label>
+          <label for="geminiApiKey">Gemini API Key:</label>
           <div class="api-key-input">
-              {#if showGeminiKey}
-                  <input
-                      type="text"
-                      id="geminiApiKey"
-                      bind:value={geminiApiKey}
-                      placeholder="Enter your Gemini API key (e.g., AIza...)"
-                  />
-              {:else}
-                  <input
-                      type="password"
-                      id="geminiApiKey"
-                      bind:value={geminiApiKey}
-                      placeholder="Enter your Gemini API key"
-                  />
-              {/if}
-              <button
-                  type="button"
-                  class="toggle-visibility"
-                  on:click={() => showGeminiKey = !showGeminiKey}
-                  title={showGeminiKey ? "Hide Gemini Key" : "Show Gemini Key"}
-              >
-                  {#if showGeminiKey}👁️{:else}👁️‍🗨️{/if}
-              </button>
+            {#if showGeminiKey}
+              <input
+                type="text"
+                id="geminiApiKey"
+                bind:value={geminiApiKey}
+                on:input={handleGeminiApiKeyChange}
+                placeholder="Enter your Gemini API key"
+              />
+            {:else}
+              <input
+                type="password"
+                id="geminiApiKey"
+                bind:value={geminiApiKey}
+                on:input={handleGeminiApiKeyChange}
+                placeholder="Enter your Gemini API key"
+              />
+            {/if}
+            <button
+                type="button"
+                class="toggle-visibility"
+                on:click={() => showGeminiKey = !showGeminiKey}
+                title={showGeminiKey ? "Hide Gemini Key" : "Show Gemini Key"}
+            >
+                {showGeminiKey ? "👁️" : "👁️‍🗨️"}
+            </button>
           </div>
           <p class="help-text">
-              Required for intelligent search & context features. Get your API key from
-              <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
+              {#if activeMode === 'gemini'}Required for Gemini LLM and Embeddings.{:else if activeMode === 'openrouter'}May be used by backend for embeddings in OpenRouter mode.{/if}
+              Get from <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
           </p>
       </div>
-      <!-- End Gemini API Key Input -->
+      {/if}
 
+      <!-- OpenAI API Key Input - Show only for 'openai' mode -->
+      {#if activeMode === 'openai'}
       <div class="form-group">
-        <label for="chat-model-select">Default Chat Model:</label>
+          <label for="openaiApiKey">OpenAI API Key:</label>
+          <div class="api-key-input">
+            {#if showOpenAIKey}
+              <input
+                type="text"
+                id="openaiApiKey"
+                bind:value={openaiApiKey}
+                on:input={handleOpenAIApiKeyChange}
+                placeholder="Enter your OpenAI API key"
+              />
+            {:else}
+              <input
+                type="password"
+                id="openaiApiKey"
+                bind:value={openaiApiKey}
+                on:input={handleOpenAIApiKeyChange}
+                placeholder="Enter your OpenAI API key"
+              />
+            {/if}
+            <button
+                type="button"
+                class="toggle-visibility"
+                on:click={() => showOpenAIKey = !showOpenAIKey}
+                title={showOpenAIKey ? "Hide API Key" : "Show API Key"}
+            >
+                {showOpenAIKey ? "👁️" : "👁️‍🗨️"}
+            </button>
+          </div>
+          <p class="help-text">
+              Required for OpenAI LLM and Embeddings. Get from
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI API Keys</a>.
+          </p>
+      </div>
+      {/if}
+
+      <!-- Local Embedding Model Input (Ollama Tag) - Show only for 'local' mode -->
+      {#if activeMode === 'local'}
+        <div class="form-group">
+          <label for="local-embedding-model-name">Ollama Embedding Model:</label>
+          {#if isEmbeddingModelListLoading}
+            <div class="loading-text">Loading embedding models...</div>
+          {:else if embeddingModelListError}
+            <div class="error-text">{embeddingModelListError}</div>
+            <input
+              type="text"
+              id="local-embedding-model-name"
+              bind:value={localEmbeddingModelName}
+              placeholder="e.g. nomic-embed-text"
+            />
+          {:else}
+            <select
+              id="local-embedding-model-name"
+              bind:value={localEmbeddingModelName}
+              disabled={isEmbeddingModelListLoading}
+            >
+              <option value="">Select an embedding model</option>
+              {#each embeddingModelList as model}
+                <option value={model.id}>{model.name || model.id}</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Model selection fields - show for modes that use OpenRouter or Ollama models -->
+      {#if activeMode === 'openrouter' || activeMode === 'hybrid' || activeMode === 'local'}
+      <div class="form-group">
+        <label for="chat-model-select">
+          Default Chat Model 
+          {#if activeMode === 'openrouter'}(OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(OpenRouter){/if}
+          {#if activeMode === 'local'}(Ollama){/if}:
+        </label>
         {#if !openrouterApiKey}
-           <p class="info-text">Set API Key to load models.</p>
+           <p class="info-text">Set OpenRouter API Key to load models.</p>
         {:else if isModelListLoading}
           <span>Loading models...</span>
         {:else if modelListError}
           <span class="error-inline">{modelListError}</span>
         {:else if modelList.length === 0}
-           <span class="info-text">No models found or API key invalid.</span>
-           <select
-             id="chat-model-select"
-             value={chatModelId}
-             on:change={handleChatModelChange}
-             disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
-           >
-             <option value="" disabled selected>Select a model</option>
-             {#each modelList as model}
-               <option value={model.id}>{model.name}</option>
-             {/each}
-           </select>
+           <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
         {:else}
           <select
             id="chat-model-select"
             value={chatModelId}
             on:change={handleChatModelChange}
-            disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+            disabled={isModelListLoading}
           >
-            <option value="" disabled selected>Select a model</option>
-            {#each modelList as model}
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
           </select>
         {/if}
-         <p class="help-text">Model used in the main Chat view and Write mode chat.</p>
+         <p class="help-text">
+          Model used in Chat and Write views 
+          {#if activeMode === 'openrouter'}(via OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(via OpenRouter){/if}
+          {#if activeMode === 'local'}(via local Ollama){/if}.
+        </p>
       </div>
 
       <div class="form-group">
-        <label for="story-processing-model-select">Story Processing Model:</label>
+        <label for="story-processing-model-select">
+          Story Processing Model 
+          {#if activeMode === 'openrouter'}(OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(OpenRouter){/if}
+          {#if activeMode === 'local'}(Ollama){/if}:
+        </label>
          {#if !openrouterApiKey}
-           <p class="info-text">Set API Key to load models.</p>
+           <p class="info-text">Set OpenRouter API Key to load models.</p>
         {:else if isModelListLoading}
           <span>Loading models...</span>
         {:else if modelListError}
           <span class="error-inline">{modelListError}</span>
          {:else if modelList.length === 0}
-           <span class="info-text">No models found or API key invalid.</span>
-           <select
-             id="story-processing-model-select"
-             value={storyProcessingModelId}
-             on:change={handleStoryModelChange}
-             disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
-           >
-             <option value="" disabled selected>Select a model</option>
-             {#each modelList as model}
-               <option value={model.id}>{model.name}</option>
-             {/each}
-           </select>
-        {:else}
+           <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+         {:else}
           <select
             id="story-processing-model-select"
             value={storyProcessingModelId}
             on:change={handleStoryModelChange}
-            disabled={isModelListLoading || !openrouterApiKey || modelList.length === 0}
+            disabled={isModelListLoading}
           >
-            <option value="" disabled selected>Select a model</option>
-            {#each modelList as model}
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
           </select>
         {/if}
-         <p class="help-text">Model used for extracting Codex entries from stories.</p>
+         <p class="help-text">
+          Model used for extracting Codex entries 
+          {#if activeMode === 'openrouter'}(via OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(via OpenRouter){/if}
+          {#if activeMode === 'local'}(via local Ollama){/if}.
+        </p>
       </div>
+      {/if}
+      
+      <!-- For OpenAI mode, show model selection -->
+      {#if activeMode === 'openai'}
+      <div class="form-group">
+        <label for="openai-chat-model-select">Default Chat Model (OpenAI):</label>
+        {#if !openaiApiKey}
+          <p class="info-text">Set OpenAI API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="openai-chat-model-select"
+            value={chatModelId}
+            on:change={handleChatModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used in Chat and Write views (via OpenAI).</p>
+      </div>
+
+      <div class="form-group">
+        <label for="openai-story-processing-model-select">Story Processing Model (OpenAI):</label>
+        {#if !openaiApiKey}
+          <p class="info-text">Set OpenAI API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="openai-story-processing-model-select"
+            value={storyProcessingModelId}
+            on:change={handleStoryModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used for extracting Codex entries (via OpenAI).</p>
+      </div>
+      {/if}
+      
+      <!-- For Gemini mode, show model selection -->
+      {#if activeMode === 'gemini'}
+      <div class="form-group">
+        <label for="gemini-chat-model-select">Default Chat Model (Gemini):</label>
+        {#if !geminiApiKey}
+          <p class="info-text">Set Gemini API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="gemini-chat-model-select"
+            value={chatModelId}
+            on:change={handleChatModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used in Chat and Write views (via Gemini).</p>
+      </div>
+
+      <div class="form-group">
+        <label for="gemini-story-processing-model-select">Story Processing Model (Gemini):</label>
+        {#if !geminiApiKey}
+          <p class="info-text">Set Gemini API Key to load models.</p>
+        {:else if isModelListLoading}
+          <span>Loading models...</span>
+        {:else if modelListError}
+          <span class="error-inline">{modelListError}</span>
+        {:else if modelList.length === 0}
+          <span class="info-text">No models found or API key invalid. Refresh or check key.</span>
+        {:else}
+          <select
+            id="gemini-story-processing-model-select"
+            value={storyProcessingModelId}
+            on:change={handleStoryModelChange}
+            disabled={isModelListLoading}
+          >
+            <option value="">Select a model</option>
+            {#each modelList as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <p class="help-text">Model used for extracting Codex entries (via Gemini).</p>
+      </div>
+      {/if}
 
       <button type="submit" disabled={isLoading}>
           {#if isLoading}Saving...{:else}Save Settings{/if}
       </button>
-
-      {#if settingsSaveMsg}
-        <p class="success-message">{settingsSaveMsg}</p>
-      {/if}
-      {#if settingsErrorMsg}
-        <p class="error-message">{settingsErrorMsg}</p>
-      {/if}
     </form>
+    
+    {#if settingsSaveMsg}
+      <p class="success-message">{settingsSaveMsg}</p>
+    {/if}
+    {#if settingsErrorMsg}
+      <p class="error-message">{settingsErrorMsg}</p>
+    {/if}
   </div>
 </section>
 
@@ -301,8 +669,14 @@
   }
 
   .form-group {
-    margin-bottom: 1rem; /* Space below each group */
+    margin-bottom: 1.25rem; /* Increased space below each group */
+    padding-bottom: 1rem; /* Space before potential border */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05); /* Subtle separator */
   }
+  .form-group:last-of-type {
+      border-bottom: none; /* No border for the last group before buttons */
+  }
+
 
   label {
     display: block;
@@ -332,6 +706,8 @@
   select {
       /* Appearance for dropdown */
       appearance: none;
+      -webkit-appearance: none; /* Safari and Chrome */
+      -moz-appearance: none; /* Firefox */
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='%23a0a0a0' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 0.75rem center;
@@ -340,9 +716,10 @@
   }
    select:disabled {
        opacity: 0.5;
+       background-color: rgba(255,255,255,0.02);
    }
 
-  .api-key-input input {
+  .api-key-input input { /* Specific to inputs within .api-key-input */
     padding-right: 3.5rem; /* Space for button */
   }
 
@@ -351,11 +728,12 @@
     outline: none;
     border-color: var(--accent-primary);
     background-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.2); /* Accent focus ring */
   }
 
   .toggle-visibility {
     position: absolute;
-    right: 0.5rem; /* Position inside the input */
+    right: 0.25rem; /* Position inside the input */
     top: 50%;
     transform: translateY(-50%);
     background: none;
@@ -363,17 +741,23 @@
     color: var(--text-secondary);
     cursor: pointer;
     padding: 0.5rem;
-    font-size: 1.2rem;
+    font-size: 1.2rem; /* Make icon slightly larger */
     line-height: 1;
+    border-radius: 4px; /* Add slight rounding */
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .toggle-visibility:hover {
     color: var(--text-primary);
+    background-color: rgba(255,255,255,0.1); /* Subtle hover */
   }
 
   .help-text {
       font-size: 0.85rem;
       color: var(--text-secondary);
       margin-top: 0.5rem;
+      line-height: 1.4;
   }
    .help-text a {
        color: var(--accent-secondary);
@@ -387,9 +771,11 @@
       font-size: 0.9rem;
       color: var(--text-secondary);
       margin-top: 0.5rem;
-      padding: 0.5rem;
+      padding: 0.75rem 1rem; /* More padding */
       background: rgba(255, 255, 255, 0.03);
-      border-radius: 4px;
+      border-radius: 6px; /* Match inputs */
+      border: 1px solid rgba(255,255,255,0.07); /* Subtle border */
+      line-height: 1.5;
   }
 
   button[type="submit"] {
@@ -402,16 +788,21 @@
     cursor: pointer;
     transition: all 0.3s ease;
     margin-top: 1rem; /* Space above save button */
+    min-width: 150px; /* Ensure decent width */
   }
 
   button[type="submit"]:hover:not(:disabled) {
     background: var(--accent-secondary);
     transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15); /* More pronounced shadow */
   }
 
   button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+    background: var(--bg-secondary) !important; /* More muted disabled bg */
+    box-shadow: none !important;
+    transform: none !important;
   }
 
   .error-message, .success-message {
@@ -419,6 +810,7 @@
     border-radius: 8px;
     margin-top: 1rem;
     font-size: 0.9rem;
+    text-align: center; /* Center messages */
   }
 
   .error-message {
@@ -429,6 +821,8 @@
    .error-inline {
       color: var(--error-color);
       font-size: 0.9rem;
+      display: block; /* Make it block for better spacing */
+      margin-top: 0.5rem;
   }
 
   .success-message {

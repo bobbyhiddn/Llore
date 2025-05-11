@@ -10,7 +10,15 @@ export function CreateNewVault(arg1:string):Promise<string>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
 
+export function FetchGeminiModels():Promise<Array<llm.OpenRouterModel>>;
+
+export function FetchOllamaModels():Promise<Array<llm.OpenRouterModel>>;
+
+export function FetchOpenAIModels():Promise<Array<llm.OpenRouterModel>>;
+
 export function FetchOpenRouterModelsWithKey(arg1:string):Promise<Array<llm.OpenRouterModel>>;
+
+export function GenerateLLMContent(arg1:string,arg2:string):Promise<string>;
 
 export function GenerateMissingEmbeddings():Promise<void>;
 
@@ -22,9 +30,11 @@ export function GetAllEntries():Promise<Array<database.CodexEntry>>;
 
 export function GetCurrentVaultPath():Promise<string>;
 
+export function GetEmbedding(arg1:number):Promise<Array<string>>;
+
 export function GetSettings():Promise<llm.OpenRouterConfig>;
 
-export function ImportStoryTextAndFile(arg1:string,arg2:string):Promise<Array<database.CodexEntry>>;
+export function ImportStoryTextAndFile(arg1:string,arg2:string):Promise<main.ProcessStoryResult>;
 
 export function ListChatLogs():Promise<Array<string>>;
 
