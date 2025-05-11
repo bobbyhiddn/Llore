@@ -1,9 +1,9 @@
 package main
 
 import (
-	ragcontext "Llore/internal/context" // Added for RAG context building (aliased)
+	ragcontext "Llore/internal/context"
 	"Llore/internal/database"
-	"Llore/internal/embeddings" // Added for RAG embeddings
+	"Llore/internal/embeddings"
 	"Llore/internal/llm"
 	"Llore/internal/vault"
 	"context"
@@ -43,6 +43,57 @@ var (
 type embeddingRequest struct {
 	entryID int64
 	text    string
+}
+
+// GetEmbedding retrieves embedding providers for a codex entry
+func (a *App) GetEmbedding(entryID int64) ([]string, error) {
+	if a.embeddingService == nil {
+		return nil, fmt.Errorf("embedding service not initialized")
+	}
+
+	// Get all providers that have embeddings for this entry
+	providers := make([]string, 0)
+
+	// First verify the entry exists
+	var exists bool
+	err := a.db.QueryRow("SELECT EXISTS(SELECT 1 FROM codex_entries WHERE id = ?)", entryID).Scan(&exists)
+	if err != nil {
+		log.Printf("Error checking if entry %d exists: %v", entryID, err)
+		return nil, fmt.Errorf("failed to check entry existence: %w", err)
+	}
+	if !exists {
+		log.Printf("Entry %d does not exist", entryID)
+		return nil, fmt.Errorf("entry does not exist")
+	}
+
+	// Query database for all embeddings of this entry
+	rows, err := a.db.Query(`
+		SELECT DISTINCT vector_version 
+		FROM codex_embeddings 
+		WHERE codex_entry_id = ?`, entryID)
+	if err != nil {
+		log.Printf("Error querying embeddings for entry %d: %v", entryID, err)
+		return nil, fmt.Errorf("failed to query embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var vectorVersion string
+		if err := rows.Scan(&vectorVersion); err != nil {
+			log.Printf("Error scanning vector_version for entry %d: %v", entryID, err)
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		log.Printf("Found embedding with vector_version '%s' for entry %d", vectorVersion, entryID)
+		providers = append(providers, vectorVersion)
+	}
+
+	if len(providers) == 0 {
+		log.Printf("No embeddings found for entry %d", entryID)
+		return nil, fmt.Errorf("no embeddings found for entry")
+	}
+
+	log.Printf("Found %d embeddings for entry %d: %v", len(providers), entryID, providers)
+	return providers, nil
 }
 
 // GetAllEntries retrieves all codex entries from the SQLite database

@@ -30,6 +30,8 @@ export function GetAllEntries():Promise<Array<database.CodexEntry>>;
 
 export function GetCurrentVaultPath():Promise<string>;
 
+export function GetEmbedding(arg1:number):Promise<Array<string>>;
+
 export function GetSettings():Promise<llm.OpenRouterConfig>;
 
 export function ImportStoryTextAndFile(arg1:string,arg2:string):Promise<main.ProcessStoryResult>;

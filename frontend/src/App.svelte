@@ -303,76 +303,98 @@
   // This function is defined later in the file
   
   // Load model list based on active mode
-  async function loadModelListForMode() {
+  async function loadModelListForMode(modeToLoadForParam?: string) {
     console.log("Loading model list for mode:", activeMode);
-    // Reset model list first to ensure UI refreshes
-    modelList = [];
+    const modeToUse = modeToLoadForParam || activeMode;
+    console.log("App.svelte: Loading model list for effective mode:", modeToUse);
     
     isModelListLoading = true;
     modelListError = '';
-    try {
-      if (activeMode === 'openrouter' || activeMode === 'hybrid') { // OpenRouter or hybrid mode
-        // For OpenRouter/hybrid mode, preserve existing model selections
-        const currentChatModel = chatModelId;
-        const currentStoryModel = storyProcessingModelId;
+    let newModelList: llm.OpenRouterModel[] = []; // Fetch into a temporary list
 
+    try {
+      if (modeToUse === 'openrouter' || modeToUse === 'hybrid') { 
+        // Both openrouter and hybrid modes use OpenRouter for LLM
         if (openrouterApiKey) {
-          console.log("Fetching OpenRouter models for " + activeMode + " mode...");
-          modelList = await FetchOpenRouterModelsWithKey(openrouterApiKey) || [];
+          console.log("Fetching OpenRouter models for " + modeToUse + " mode...");
+          newModelList = await FetchOpenRouterModelsWithKey(openrouterApiKey) || [];
         } else {
-          modelListError = 'Set OpenRouter API Key in Settings for ' + activeMode + ' LLM mode.';
-          modelList = [];
+          modelListError = 'Set OpenRouter API Key in Settings for ' + modeToUse + ' LLM mode.';
         }
-      } else if (activeMode === 'local') { // Local Ollama models
-        console.log("Fetching Ollama models...");
-        modelList = await FetchOllamaModels() || [];
-        if (modelList.length === 0) modelListError = 'No local Ollama models found. Ensure Ollama is running and models are pulled.';
-      } else if (activeMode === 'openai') {
+      } else if (modeToUse === 'local') {
+        console.log("Fetching Ollama models for local mode...");
+        newModelList = await FetchOllamaModels() || [];
+        if (newModelList.length === 0) {
+          modelListError = 'No local Ollama models found. Ensure Ollama is running and models are pulled.';
+        }
+      } else if (modeToUse === 'openai') {
         if (openaiApiKey) {
-          modelList = await FetchOpenAIModels() || [];
+          newModelList = await FetchOpenAIModels() || [];
         } else {
           modelListError = 'Set OpenAI API Key in Settings for OpenAI mode.';
-          modelList = [];
         }
-      } else if (activeMode === 'gemini') {
+      } else if (modeToUse === 'gemini') {
         if (geminiApiKey) {
-          modelList = await FetchGeminiModels() || [];
+          newModelList = await FetchGeminiModels() || [];
         } else {
           modelListError = 'Set Gemini API Key in Settings for Gemini mode.';
-          modelList = [];
         }
       }
-      
-      // Default model selection if list is populated and no model is selected
-      if (modelList.length > 0) {
-        if (!chatModelId && modelList.find(m => m.id)) chatModelId = modelList[0].id;
-        if (!storyProcessingModelId && modelList.find(m => m.id)) storyProcessingModelId = modelList[0].id;
+      modelList = newModelList; // Assign the fetched list in one go
+
+      // Default model selection in App.svelte's state.
+      // This runs on initial load, after save, or when SettingsView requests a model list update.
+      // It should only set defaults if the current selection is invalid or unset for the *App's activeMode*.
+      if (modeToUse === activeMode) { // Only default if we are loading models for the App's actual activeMode
+        let currentAppChatModel = chatModelId;
+        let currentAppStoryModel = storyProcessingModelId;
+
+        if (modelList.length > 0) {
+            const chatModelIsValid = modelList.some(m => m.id === currentAppChatModel);
+            const storyModelIsValid = modelList.some(m => m.id === currentAppStoryModel);
+
+            if (!currentAppChatModel || !chatModelIsValid) {
+                chatModelId = modelList.find(m=>m.id) ? modelList[0].id : '';
+            }
+            if (!currentAppStoryModel || !storyModelIsValid) {
+                storyProcessingModelId = modelList.find(m=>m.id) ? modelList[0].id : '';
+            }
+        } else {
+            chatModelId = '';
+            storyProcessingModelId = '';
+        }
       } else {
-        // If model list is empty after trying to load, clear selections
+        // If loading models for a mode different from App's activeMode (e.g., SettingsView browsing),
+        // App.svelte doesn't change its own chatModelId/storyProcessingModelId.
+        // The new modelList is just passed to SettingsView.
+      }
+      console.log(`App.svelte: Model list updated for mode '${modeToUse}'. Models count: ${modelList.length}. App Chat: ${chatModelId}, App Story: ${storyProcessingModelId}`);
+
+    } catch (err) {
+      console.error(`Error fetching models for mode ${modeToUse}:`, err);
+      modelListError = `Failed to load models for ${modeToUse} mode: ${err}`;
+      modelList = []; // Clear list on error
+      // If loading for App's activeMode, clear model selections
+      if (modeToUse === activeMode) {
         chatModelId = '';
         storyProcessingModelId = '';
       }
-    } catch (err) {
-      console.error(`Error fetching models for mode ${activeMode}:`, err);
-      modelListError = `Failed to load models for ${activeMode} mode: ${err}`;
-      modelList = [];
-      chatModelId = ''; // Clear selections on error too
-      storyProcessingModelId = '';
     } finally {
       isModelListLoading = false;
     }
   }
   
   // Handler functions for SettingsView events
-  async function handleLoadModels() {
-    await loadModelListForMode();
+  async function handleLoadModels(event?: CustomEvent<{ modeToLoadFor?: string }>) {
+    const modeForList = event?.detail?.modeToLoadFor || activeMode;
+    await loadModelListForMode(modeForList);
   }
   
   function handleClearModels() {
     modelList = [];
     modelListError = '';
   }
-  
+
   function handleClearErrors() {
     settingsErrorMsg = '';
     settingsSaveMsg = '';

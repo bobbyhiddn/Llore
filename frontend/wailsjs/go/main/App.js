@@ -54,6 +54,10 @@ export function GetCurrentVaultPath() {
   return window['go']['main']['App']['GetCurrentVaultPath']();
 }
 
+export function GetEmbedding(arg1) {
+  return window['go']['main']['App']['GetEmbedding'](arg1);
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { database } from '@wailsjs/go/models'; // Import namespace
+  import { GetEmbedding } from '@wailsjs/go/main/App';
 
   // Props from parent (App.svelte)
   export let entries: database.CodexEntry[] = [];
@@ -43,10 +44,25 @@
   
   const dispatch = createEventDispatcher();
   
-  // Function to force reset the editing state
-  function forceResetState() {
-    console.log('Forcing state reset');
-    dispatch('resetstate');
+  // Function to display embeddings for current entry
+  async function displayEmbeddings() {
+    if (currentEntry && currentEntry.id) {
+      try {
+        const providers = await GetEmbedding(currentEntry.id);
+        console.log(`Retrieved embedding providers for entry ${currentEntry.id}:`, providers);
+        // Format provider info for display
+        if (providers && providers.length > 0) {
+          alert(`Entry has embeddings from:\n${providers.join('\n')}`);
+        } else {
+          alert('No embeddings found for this entry');
+        }
+      } catch (error: any) {
+        console.error('Error getting embedding:', error);
+        // Show the specific error message from the backend
+        const errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
+        alert(errorMessage);
+      }
+    }
   }
 
   function handleEntrySelect(entry: database.CodexEntry) {
@@ -201,31 +217,29 @@
 
           <button
             type="button"
-            class="generate-btn"
-            disabled={isLoading || isGenerating}
-            on:click={handleGenerateContent}
+            class="delete-btn"
+            on:click={handleDeleteEntry}
+            disabled={!currentEntry || isLoading || isGenerating}
           >
-            {#if isGenerating}Generating...{:else}Generate Content (AI){/if}
+            Delete
           </button>
 
-          {#if isEditing}
-            <button
-              type="button"
-              class="delete-btn"
-              disabled={isLoading || isGenerating}
-              on:click={handleDeleteEntry}
-            >
-              Delete Entry
-            </button>
-          {/if}
-          
-          <!-- Debug button to help diagnose the issue -->
           <button
             type="button"
-            class="debug-btn"
-            on:click={forceResetState}
+            class="generate-btn"
+            on:click={handleGenerateContent}
+            disabled={!selectedModel || isLoading || isGenerating}
           >
-            Reset UI State
+            {#if isGenerating}Generating...{:else}Generate Content{/if}
+          </button>
+
+          <button
+            type="button"
+            class="embedding-btn"
+            on:click={displayEmbeddings}
+            disabled={!currentEntry}
+          >
+            Display Embeddings
           </button>
         </div>
 
@@ -233,6 +247,9 @@
           <p class="error-message">{errorMsg}</p>
         {/if}
       </form>
+
+
+
     {:else}
       <div class="empty-state">
         <p>Select an entry to edit or create a new one</p>
@@ -378,11 +395,11 @@
   }
   .generate-btn:hover:not(:disabled) { background: #74b9ff; } /* Lighter blue */
 
-  .debug-btn {
-    background: #9b59b6; /* Purple for debug */
+  .embedding-btn {
+    background: #6c5ce7; /* Purple for embeddings */
     color: white;
   }
-  .debug-btn:hover:not(:disabled) { background: #8e44ad; } /* Darker purple */
+  .embedding-btn:hover:not(:disabled) { background: #8c7ae6; } /* Lighter purple */
 
   .new-entry-btn {
     background: var(--success-color); /* Green for new */

@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import { llm } from '@wailsjs/go/models'; // Import namespace
+  import { llm } from '@wailsjs/go/models';
+  import { FetchOllamaModels } from '@wailsjs/go/main/App';
+
+  type ProviderMode = 'openrouter' | 'openai' | 'gemini' | 'hybrid' | 'local';
 
   // Props
   export let initialApiKey: string = ''; // This is OpenRouter API Key
@@ -13,6 +16,9 @@
   export let modelList: llm.OpenRouterModel[] = [];
   export let isModelListLoading: boolean = false;
   export let modelListError: string = '';
+  export let embeddingModelList: llm.OpenRouterModel[] = [];
+  export let isEmbeddingModelListLoading: boolean = false;
+  export let embeddingModelListError: string = '';
   export let isLoading: boolean = false; // General loading state from parent
   export let settingsSaveMsg: string = ''; // Passed from parent
   export let settingsErrorMsg: string = ''; // Passed from parent
@@ -28,6 +34,17 @@
   let showOpenRouterKey = false; // Renamed for clarity
   let showGeminiKey = false;
   let showOpenAIKey = false;
+  
+  // Store provider-specific model selections
+  type ModelSelections = { chat: string; story: string };
+  
+  let providerModels: Record<ProviderMode, ModelSelections> = {
+    openrouter: { chat: '', story: '' },
+    openai: { chat: '', story: '' },
+    gemini: { chat: '', story: '' },
+    hybrid: { chat: '', story: '' },
+    local: { chat: '', story: '' }
+  };
 
   const dispatch = createEventDispatcher();
 
@@ -40,6 +57,13 @@
     activeMode = initialActiveMode || 'openrouter'; // Default to openrouter
     openaiApiKey = initialOpenAIAPIKey;
     localEmbeddingModelName = initialLocalEmbeddingModelName;
+
+    // Initialize the current mode's model selections
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode] = {
+      chat: initialChatModelId,
+      story: initialStoryProcessingModelId
+    };
 
     // Request model list load if relevant API key is present and mode requires it
     handleModeSpecificModelLoad();
@@ -54,44 +78,100 @@
 
 
   function handleChatModelChange(event: Event) {
+    const newValue = (event.target as HTMLSelectElement).value;
+    if (newValue === '') return;
+    
     userChangedChatModel = true;
-    chatModelId = (event.target as HTMLSelectElement).value;
-    console.log("Chat model changed to:", chatModelId);
+    chatModelId = newValue;
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode].chat = chatModelId;
   }
 
   function handleStoryModelChange(event: Event) {
+    const newValue = (event.target as HTMLSelectElement).value;
+    if (newValue === '') return;
+    
     userChangedStoryModel = true;
-    storyProcessingModelId = (event.target as HTMLSelectElement).value;
+    storyProcessingModelId = newValue;
+    const currentMode = activeMode as ProviderMode;
+    providerModels[currentMode].story = storyProcessingModelId;
   }
 
-  function onActiveModeChange() {
-    dispatch('clearmodels'); // Clear any existing model list from other modes
-    chatModelId = ''; // Reset selected models
+  async function onActiveModeChange() {
+    // Save current model selections for the previous mode
+    if (chatModelId || storyProcessingModelId) {
+      const previousMode = activeMode as ProviderMode;
+      providerModels[previousMode] = {
+        chat: chatModelId,
+        story: storyProcessingModelId
+      };
+    }
+    
+    // Clear current models and errors
+    dispatch('clearmodels');
+    dispatch('clearerrors');
+    
+    // Reset selections before loading new models
+    chatModelId = '';
     storyProcessingModelId = '';
-    userChangedChatModel = false; // Reset user interaction flags for models
+    userChangedChatModel = false;
     userChangedStoryModel = false;
-    handleModeSpecificModelLoad();
-    dispatch('clearerrors'); // Clear save/error messages
+
+    // Load models for the new mode
+    await handleModeSpecificModelLoad();
+
+    // After models are loaded, restore saved selections if they exist
+    const currentMode = activeMode as ProviderMode;
+    const savedModels = providerModels[currentMode];
+    if (savedModels && modelList.length > 0) {
+      // Only restore if the saved model still exists in the new list
+      if (savedModels.chat && modelList.some(m => m.id === savedModels.chat)) {
+        chatModelId = savedModels.chat;
+      }
+      if (savedModels.story && modelList.some(m => m.id === savedModels.story)) {
+        storyProcessingModelId = savedModels.story;
+      }
+    }
   }
 
-  function handleModeSpecificModelLoad() {
-    // This function triggers loading of LLM models based on the active mode
+  async function handleModeSpecificModelLoad() {
     // Clear any existing models first
     dispatch('clearmodels');
     
     // Load models based on active mode
-    if (activeMode === 'openrouter' || activeMode === 'local') { // 'local' uses OpenRouter for LLM
+    if (activeMode === 'openrouter' || activeMode === 'local') {
       if (openrouterApiKey && !isModelListLoading) {
-        dispatch('loadmodels'); // This event is for OpenRouter models
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
       }
     } else if (activeMode === 'openai') {
       if (openaiApiKey && !isModelListLoading) {
-        dispatch('loadmodels'); // This will now load OpenAI models
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
       }
     } else if (activeMode === 'gemini') {
       if (geminiApiKey && !isModelListLoading) {
-        dispatch('loadmodels'); // This will now load Gemini models
+        dispatch('loadmodels', { modeToLoadFor: activeMode });
       }
+    }
+
+    // Load embedding models if in local mode
+    if (activeMode === 'local') {
+      await loadEmbeddingModels();
+    }
+  }
+
+  async function loadEmbeddingModels() {
+    isEmbeddingModelListLoading = true;
+    embeddingModelListError = '';
+    try {
+      embeddingModelList = await FetchOllamaModels() || [];
+      if (embeddingModelList.length === 0) {
+        embeddingModelListError = 'No local Ollama models found for embeddings. Ensure Ollama is running and models are pulled.';
+      }
+    } catch (err: any) {
+      embeddingModelListError = `Error loading embedding models: ${err.message}`;
+      embeddingModelList = [];
+    } finally {
+      isEmbeddingModelListLoading = false;
     }
   }
 
@@ -99,7 +179,8 @@
     dispatch('back');
   }
 
-  function saveSettings() {
+  async function saveSettings() {
+    dispatch('clearerrors');
     let hasError = false;
     let errorMessages: string[] = [];
 
@@ -107,14 +188,7 @@
         errorMessages.push('OpenAI API Key is required for OpenAI mode.');
         hasError = true;
     }
-    // For "gemini" mode, Gemini API key is crucial (for both LLM and embeddings if Gemini is the LLM)
-    // For "openrouter" mode, if backend logic uses Gemini for embeddings, this key is also needed.
     if ((activeMode === 'gemini' || (activeMode === 'openrouter' && geminiApiKey)) && !geminiApiKey) {
-      // A bit complex: If activeMode is "gemini", geminiApiKey is essential.
-      // If activeMode is "openrouter", geminiApiKey might be used by backend for embeddings.
-      // For simplicity, let's check if gemini is chosen or if it's openrouter *and* user provided a gemini key, then it must be valid.
-      // The backend handles the actual logic of which embedding provider to use.
-      // Here, we primarily validate required fields for the *selected mode*.
       if (activeMode === 'gemini'){
         errorMessages.push('Gemini API Key is required for Gemini mode.');
         hasError = true;
@@ -129,13 +203,11 @@
         hasError = true;
     }
 
-    // Model validation for OpenRouter-based LLM modes
     if ((activeMode === 'openrouter' || activeMode === 'local') && openrouterApiKey) {
         if (modelList.length > 0 && (!chatModelId || !storyProcessingModelId)) {
-            errorMessages.push('Please select both a Chat Model and a Story Processing Model for OpenRouter.');
+            errorMessages.push('Please select both a Chat Model and a Story Processing Model.');
             hasError = true;
         }
-        // If models haven't loaded (e.g., bad key), allow saving the key itself without model selection.
     }
 
     if (hasError) {
@@ -143,6 +215,7 @@
         return;
     }
 
+    // Save settings
     dispatch('savesettings', {
       openrouter_api_key: openrouterApiKey,
       chat_model_id: chatModelId,
@@ -152,6 +225,9 @@
       openai_api_key: openaiApiKey,
       local_embedding_model_name: localEmbeddingModelName
     });
+
+    // After saving, refresh the model list
+    await handleModeSpecificModelLoad();
   }
 
   // Functions to trigger model list loading after API keys are entered/changed
@@ -326,16 +402,31 @@
 
       <!-- Local Embedding Model Input (Ollama Tag) - Show only for 'local' mode -->
       {#if activeMode === 'local'}
-      <div class="form-group">
-          <label for="localEmbeddingModelName">Ollama Embedding Model Tag:</label>
-          <input 
-              type="text" 
-              id="localEmbeddingModelName" 
-              bind:value={localEmbeddingModelName} 
-              placeholder="e.g., nomic-embed-text"
-          />
-          <p class="help-text">Exact tag of an Ollama model pulled locally (e.g., 'nomic-embed-text'). Ensure Ollama is running.</p>
-      </div>
+        <div class="form-group">
+          <label for="local-embedding-model-name">Ollama Embedding Model:</label>
+          {#if isEmbeddingModelListLoading}
+            <div class="loading-text">Loading embedding models...</div>
+          {:else if embeddingModelListError}
+            <div class="error-text">{embeddingModelListError}</div>
+            <input
+              type="text"
+              id="local-embedding-model-name"
+              bind:value={localEmbeddingModelName}
+              placeholder="e.g. nomic-embed-text"
+            />
+          {:else}
+            <select
+              id="local-embedding-model-name"
+              bind:value={localEmbeddingModelName}
+              disabled={isEmbeddingModelListLoading}
+            >
+              <option value="">Select an embedding model</option>
+              {#each embeddingModelList as model}
+                <option value={model.id}>{model.name || model.id}</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
       {/if}
 
       <!-- Model selection fields - show for modes that use OpenRouter or Ollama models -->
@@ -358,11 +449,11 @@
         {:else}
           <select
             id="chat-model-select"
-            bind:value={chatModelId}
+            value={chatModelId}
             on:change={handleChatModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={chatModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
@@ -394,11 +485,11 @@
          {:else}
           <select
             id="story-processing-model-select"
-            bind:value={storyProcessingModelId}
+            value={storyProcessingModelId}
             on:change={handleStoryModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
@@ -428,11 +519,11 @@
         {:else}
           <select
             id="openai-chat-model-select"
-            bind:value={chatModelId}
+            value={chatModelId}
             on:change={handleChatModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={chatModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
@@ -454,11 +545,11 @@
         {:else}
           <select
             id="openai-story-processing-model-select"
-            bind:value={storyProcessingModelId}
+            value={storyProcessingModelId}
             on:change={handleStoryModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
@@ -483,11 +574,11 @@
         {:else}
           <select
             id="gemini-chat-model-select"
-            bind:value={chatModelId}
+            value={chatModelId}
             on:change={handleChatModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={chatModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
@@ -509,11 +600,11 @@
         {:else}
           <select
             id="gemini-story-processing-model-select"
-            bind:value={storyProcessingModelId}
+            value={storyProcessingModelId}
             on:change={handleStoryModelChange}
             disabled={isModelListLoading}
           >
-            <option value="" disabled={storyProcessingModelId !== ""}>Select a model</option>
+            <option value="">Select a model</option>
             {#each modelList as model (model.id)}
               <option value={model.id}>{model.name}</option>
             {/each}
