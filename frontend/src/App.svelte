@@ -18,7 +18,7 @@
     SelectVaultFolder, CreateNewVault, SwitchVault,
     GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
     SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
-    FetchOpenRouterModelsWithKey, GetSettings, SaveSettings, SaveAPIKeyOnly,
+    FetchOpenRouterModelsWithKey, FetchOllamaModels, GetSettings, SaveSettings, SaveAPIKeyOnly, // Added FetchOllamaModels
     GetAIResponseWithContext, FetchOpenAIModels, FetchGeminiModels, // Added new model fetchers
   } from '@wailsjs/go/main/App';
 
@@ -311,26 +311,22 @@
     isModelListLoading = true;
     modelListError = '';
     try {
-      if (activeMode === 'openrouter' || activeMode === 'local') {
-        // For OpenRouter and local modes, preserve existing model selections
+      if (activeMode === 'openrouter' || activeMode === 'hybrid') { // OpenRouter or hybrid mode
+        // For OpenRouter/hybrid mode, preserve existing model selections
         const currentChatModel = chatModelId;
         const currentStoryModel = storyProcessingModelId;
-        
+
         if (openrouterApiKey) {
+          console.log("Fetching OpenRouter models for " + activeMode + " mode...");
           modelList = await FetchOpenRouterModelsWithKey(openrouterApiKey) || [];
         } else {
-          modelListError = 'Set OpenRouter API Key in Settings for OpenRouter/Local LLM mode.';
+          modelListError = 'Set OpenRouter API Key in Settings for ' + activeMode + ' LLM mode.';
           modelList = [];
         }
-        
-        // If we're in local mode, ensure we keep the original selections
-        if (activeMode === 'local' && modelList.length > 0) {
-          console.log('Preserving model selections in local mode:');
-          console.log('Chat model:', currentChatModel);
-          console.log('Story model:', currentStoryModel);
-          if (currentChatModel) chatModelId = currentChatModel;
-          if (currentStoryModel) storyProcessingModelId = currentStoryModel;
-        }
+      } else if (activeMode === 'local') { // Local Ollama models
+        console.log("Fetching Ollama models...");
+        modelList = await FetchOllamaModels() || [];
+        if (modelList.length === 0) modelListError = 'No local Ollama models found. Ensure Ollama is running and models are pulled.';
       } else if (activeMode === 'openai') {
         if (openaiApiKey) {
           modelList = await FetchOpenAIModels() || [];

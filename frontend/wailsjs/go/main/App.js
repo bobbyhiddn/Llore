@@ -18,6 +18,10 @@ export function FetchGeminiModels() {
   return window['go']['main']['App']['FetchGeminiModels']();
 }
 
+export function FetchOllamaModels() {
+  return window['go']['main']['App']['FetchOllamaModels']();
+}
+
 export function FetchOpenAIModels() {
   return window['go']['main']['App']['FetchOpenAIModels']();
 }

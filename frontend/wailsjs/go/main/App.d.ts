@@ -12,6 +12,8 @@ export function DeleteEntry(arg1:number):Promise<void>;
 
 export function FetchGeminiModels():Promise<Array<llm.OpenRouterModel>>;
 
+export function FetchOllamaModels():Promise<Array<llm.OpenRouterModel>>;
+
 export function FetchOpenAIModels():Promise<Array<llm.OpenRouterModel>>;
 
 export function FetchOpenRouterModelsWithKey(arg1:string):Promise<Array<llm.OpenRouterModel>>;

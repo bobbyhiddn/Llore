@@ -297,10 +297,19 @@ func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
 	var errProv error
 
 	switch cfg.ActiveMode {
-	case "local", "codex":
+	case "local":
+		// Pure Ollama mode for both LLM and embeddings (offline mode)
 		providerName := cfg.LocalEmbeddingModelName
 		if providerName == "" {
 			errProv = fmt.Errorf("Ollama model name (LocalEmbeddingModelName) not set in config for 'local' mode. Please set it in Settings")
+		} else {
+			chosenProvider, errProv = embeddings.NewLocalEmbeddingProvider(providerName)
+		}
+	case "hybrid":
+		// Hybrid mode: OpenRouter LLM + Ollama embeddings
+		providerName := cfg.LocalEmbeddingModelName
+		if providerName == "" {
+			errProv = fmt.Errorf("Ollama model name (LocalEmbeddingModelName) not set in config for 'hybrid' mode. Please set it in Settings")
 		} else {
 			chosenProvider, errProv = embeddings.NewLocalEmbeddingProvider(providerName)
 		}
@@ -392,12 +401,17 @@ func (a *App) initializeLLM(cfg llm.OpenRouterConfig, vaultPath string) error {
 	// Common llm.Init for OpenRouter cache, which might be generally useful
 	// or could be made specific to OpenRouter mode.
 	// For now, let's assume it's mainly for OpenRouter's cache.
-	if cfg.ActiveMode == "openrouter" || cfg.ActiveMode == "local" {
+	if cfg.ActiveMode == "openrouter" || cfg.ActiveMode == "hybrid" {
 		if err := llm.Init(vaultPath); err != nil {
 			log.Printf("Warning: Failed to initialize LLM package (OpenRouter cache) for vault '%s': %v", vaultPath, err)
 		}
+	} else if cfg.ActiveMode == "local" {
+		// Initialize Ollama cache if needed
+		if err := llm.Init(vaultPath); err != nil {
+			log.Printf("Warning: Failed to initialize LLM package (Ollama cache) for vault '%s': %v", vaultPath, err)
+		}
 	} else {
-		log.Printf("Skipping OpenRouter cache initialization for ActiveMode: %s", cfg.ActiveMode)
+		log.Printf("Skipping OpenRouter/Ollama cache initialization for ActiveMode: %s", cfg.ActiveMode)
 	}
 
 	// Log API key status for each mode
@@ -414,16 +428,33 @@ func (a *App) initializeLLM(cfg llm.OpenRouterConfig, vaultPath string) error {
 		} else {
 			log.Println("Gemini API key is set. Gemini LLM client will be created on demand.")
 		}
-	case "openrouter", "local":
+	case "openrouter", "hybrid":
 		if cfg.APIKey == "" { // APIKey here is OpenRouter API Key
-			log.Println("OpenRouter API key not set. OpenRouter/Local LLM features will be disabled.")
+			log.Println("OpenRouter API key not set. OpenRouter LLM features will be disabled.")
 		} else {
 			log.Println("OpenRouter API key is set.")
+		}
+	case "local":
+		if cfg.LocalEmbeddingModelName == "" {
+			log.Println("Ollama model name not set. Local Ollama LLM features will be disabled.")
+		} else {
+			log.Printf("Ollama model name is set to '%s' for local mode.", cfg.LocalEmbeddingModelName)
 		}
 	default:
 		log.Printf("LLM for ActiveMode '%s' not specifically handled for client initialization.", cfg.ActiveMode)
 	}
 	return nil
+}
+
+// FetchOllamaModels returns a list of available local Ollama models.
+func (a *App) FetchOllamaModels() ([]llm.OpenRouterModel, error) {
+	log.Println("App.FetchOllamaModels called")
+	models, err := llm.FetchOllamaModels()
+	if err != nil {
+		log.Printf("Error fetching Ollama models from app: %v", err)
+		return nil, fmt.Errorf("failed to fetch local Ollama models: %w. Ensure Ollama is running and accessible", err)
+	}
+	return models, nil
 }
 
 // FetchOpenAIModels returns a list of available OpenAI models.
@@ -658,15 +689,32 @@ func (a *App) GenerateLLMContent(prompt, modelID string) (string, error) {
 		}
 		return "", fmt.Errorf("gemini response was empty or not in expected format")
 
-	case "openrouter", "local": // "local" for embeddings, but OpenRouter for LLM
+	case "openrouter", "hybrid": // OpenRouter for LLM in both openrouter and hybrid modes
 		if cfg.APIKey == "" { // This is OpenRouter API key
-			return "", fmt.Errorf("OpenRouter API key not set. Cannot use OpenRouter/Local LLM")
+			return "", fmt.Errorf("OpenRouter API key not set. Cannot use OpenRouter LLM")
 		}
 		if modelID == "" {
-			// This shouldn't happen if frontend is correctly sending ChatModelID/StoryProcessingModelID
-			return "", fmt.Errorf("no modelID provided for OpenRouter/Local LLM mode")
+			return "", fmt.Errorf("no modelID provided for OpenRouter LLM mode")
 		}
 		return llm.GetOpenRouterCompletion(prompt, modelID)
+	case "local": // Ollama for LLM in pure local mode
+		log.Printf("Using local Ollama model '%s' for LLM content generation.", modelID)
+		if modelID == "" {
+			return "", fmt.Errorf("no modelID provided for Local Ollama LLM mode")
+		}
+		
+		// Add warning for larger models that might take longer
+		if strings.Contains(modelID, "mistral") || strings.Contains(modelID, "llama") {
+			log.Printf("WARNING: Using a larger model (%s) which may take longer to respond. Timeout set to 5 minutes.", modelID)
+		}
+		
+		// Add extra error handling to prevent application crashes
+		response, err := llm.GetOllamaCompletion(prompt, modelID)
+		if err != nil {
+			log.Printf("ERROR: Failed to get Ollama completion: %v", err)
+			return fmt.Sprintf("[Error: Unable to get response from Ollama model '%s'. Please ensure Ollama is running and the model is pulled. Error details: %v]", modelID, err), nil
+		}
+		return response, nil
 
 	default:
 		return "", fmt.Errorf("unsupported LLM ActiveMode: %s. Please configure in Settings", cfg.ActiveMode)

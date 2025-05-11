@@ -200,16 +200,17 @@
       <div class="form-group">
         <label for="activeModeSelect">Active Processing Mode:</label>
         <select id="activeModeSelect" bind:value={activeMode} on:change={onActiveModeChange}>
-          <option value="openrouter">OpenRouter LLM + Configurable Embedding</option>
+          <option value="openrouter">OpenRouter LLM + Gemini Embeddings</option>
           <option value="openai">OpenAI LLM & OpenAI Embeddings</option>
           <option value="gemini">Gemini LLM & Gemini Embeddings</option>
-          <option value="local">Local Embeddings (Ollama) + OpenRouter LLM</option>
+          <option value="hybrid">OpenRouter LLM + Ollama Embeddings (Hybrid)</option>
+          <option value="local">Ollama LLM & Embeddings (Offline Mode)</option>
         </select>
         <p class="help-text">Determines services for LLM and Embeddings. Backend decides embedding source for "OpenRouter" mode.</p>
       </div>
       
-      <!-- OpenRouter API Key - Show for openrouter and local (LLM part) modes -->
-      {#if activeMode === 'openrouter' || activeMode === 'local'}
+      <!-- OpenRouter API Key - Show for openrouter and hybrid modes -->
+      {#if activeMode === 'openrouter' || activeMode === 'hybrid'}
       <div class="form-group">
         <label for="openrouterApiKey">OpenRouter API Key:</label>
         <div class="api-key-input">
@@ -239,7 +240,11 @@
             {showOpenRouterKey ? "👁️" : "👁️‍🗨️"}
           </button>
         </div>
-         <p class="help-text">Used for LLM features in 'OpenRouter' and 'Local' modes. Get from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>.</p>
+        {#if activeMode === 'openrouter'}
+          <p class="help-text">Used for LLM features in 'OpenRouter' mode. Get from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>.</p>
+        {:else if activeMode === 'hybrid'}
+          <p class="help-text">Used for LLM features in 'Hybrid' mode (Ollama provides embeddings). Get from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter.ai</a>.</p>
+        {/if}
       </div>
       {/if}
 
@@ -333,10 +338,15 @@
       </div>
       {/if}
 
-      <!-- OpenRouter Model selection fields - only show for modes that use OpenRouter for LLM -->
-      {#if activeMode === 'openrouter' || activeMode === 'local'}
+      <!-- Model selection fields - show for modes that use OpenRouter or Ollama models -->
+      {#if activeMode === 'openrouter' || activeMode === 'hybrid' || activeMode === 'local'}
       <div class="form-group">
-        <label for="chat-model-select">Default Chat Model (OpenRouter):</label>
+        <label for="chat-model-select">
+          Default Chat Model 
+          {#if activeMode === 'openrouter'}(OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(OpenRouter){/if}
+          {#if activeMode === 'local'}(Ollama){/if}:
+        </label>
         {#if !openrouterApiKey}
            <p class="info-text">Set OpenRouter API Key to load models.</p>
         {:else if isModelListLoading}
@@ -358,11 +368,21 @@
             {/each}
           </select>
         {/if}
-         <p class="help-text">Model used in Chat and Write views (via OpenRouter).</p>
+         <p class="help-text">
+          Model used in Chat and Write views 
+          {#if activeMode === 'openrouter'}(via OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(via OpenRouter){/if}
+          {#if activeMode === 'local'}(via local Ollama){/if}.
+        </p>
       </div>
 
       <div class="form-group">
-        <label for="story-processing-model-select">Story Processing Model (OpenRouter):</label>
+        <label for="story-processing-model-select">
+          Story Processing Model 
+          {#if activeMode === 'openrouter'}(OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(OpenRouter){/if}
+          {#if activeMode === 'local'}(Ollama){/if}:
+        </label>
          {#if !openrouterApiKey}
            <p class="info-text">Set OpenRouter API Key to load models.</p>
         {:else if isModelListLoading}
@@ -384,7 +404,12 @@
             {/each}
           </select>
         {/if}
-         <p class="help-text">Model used for extracting Codex entries (via OpenRouter).</p>
+         <p class="help-text">
+          Model used for extracting Codex entries 
+          {#if activeMode === 'openrouter'}(via OpenRouter){/if}
+          {#if activeMode === 'hybrid'}(via OpenRouter){/if}
+          {#if activeMode === 'local'}(via local Ollama){/if}.
+        </p>
       </div>
       {/if}
       
