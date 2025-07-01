@@ -1,14 +1,17 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
-  import { SaveLibraryFile, GetAIResponseWithContext } from '@wailsjs/go/main/App';
+  import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate } from '@wailsjs/go/main/App';
+  import { database } from '@wailsjs/go/models';
+  import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
+  import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
 
-  // Props
+  // --- Props ---
   export let initialContent: string = ''; // If loading existing content
   export let initialFilename: string = ''; // If loading existing content
   export let chatModelId: string = ''; // From global settings
-  // export let isLoading: boolean = false; // Global loading state from parent - Handled by internal isSaving flag now
-  
+  export let templateType: string = 'blank';
+
   // Local State for Editor and Content
   let writeContent: string = ''; // Initialized in onMount
   let renderedWriteHtml = '';
@@ -37,9 +40,48 @@
   let writeSaveSuccess: string = '';
   let isSaveAsOperation: boolean = false;
 
+  // --- New State ---
+  let codexEntries: database.CodexEntry[] = [];
+  let codexSearchTerm: string = '';
+  let showCodexPanel: boolean = true; // Or make it a tab
+
+  let showDropMenu = false;
+  let dropMenuX = 0;
+  let dropMenuY = 0;
+  let droppedEntry: database.CodexEntry | null = null;
+  let dropCursorPosition: number = 0;
+  let isWeaving = false;
+
+  // --- New State for Autocomplete ---
+  let showAutocomplete = false;
+  let autocompleteX = 0;
+  let autocompleteY = 0;
+  let autocompleteItems: database.CodexEntry[] = [];
+  let autocompleteQuery = '';
+  let autocompleteTriggerPos = 0;
+  let autocompleteMenuRef: AutocompleteMenu;
+
+  // --- New State ---
+  let showSaveTemplateModal = false;
+  let newTemplateName = '';
+
 
   const dispatch = createEventDispatcher();
-  const marked = new Marked({ gfm: true, breaks: true }); // Enable GFM and line breaks
+  const marked = new Marked({ gfm: true, breaks: true });
+
+  // Custom renderer for links
+  const renderer = new marked.Renderer();
+  const originalLinkRenderer = renderer.link;
+  renderer.link = (href, title, text) => {
+    if (href?.startsWith('codex://entry/')) {
+      const entryId = href.substring('codex://entry/'.length);
+      // Render as a span with special styling and a data attribute
+      return `<span class="codex-mention" data-entry-id="${entryId}" title="Codex Entry: ${text}">${text}</span>`;
+    }
+    // Fallback to default renderer for other links
+    return originalLinkRenderer.call(renderer, href, title, text);
+  };
+  marked.use({ renderer });
 
   // --- Debounced Markdown Rendering ---
   let renderTimeout: number;
@@ -61,7 +103,7 @@
   }
 
   // --- Lifecycle ---
-  onMount(() => {
+  onMount(async () => {
       writeContent = initialContent;
       baselineContentForDirtyCheck = initialContent;
       currentDocumentFilename = initialFilename;
@@ -72,6 +114,13 @@
       // Focus editor on mount if in edit or split mode
       if (editorMode === 'edit' || editorMode === 'split') {
           markdownTextareaElement?.focus();
+      }
+
+      // Fetch codex entries for the panel
+      try {
+        codexEntries = await GetAllEntries() || [];
+      } catch (err) {
+        dispatch('error', 'Failed to load Codex entries for reference panel.');
       }
   });
 
@@ -381,12 +430,171 @@
     });
   }
 
+  // --- New Drag and Drop Handlers ---
+  function handleDragStart(event: DragEvent, entry: database.CodexEntry) {
+    event.dataTransfer?.setData('application/json', JSON.stringify(entry));
+  }
+
+  function handleDrop(event: DragEvent) {
+    event.preventDefault();
+    const entryData = event.dataTransfer?.getData('application/json');
+    if (!entryData) return;
+
+    droppedEntry = JSON.parse(entryData);
+    dropMenuX = event.clientX;
+    dropMenuY = event.clientY;
+    
+    // Calculate cursor position in textarea
+    const target = event.target as HTMLTextAreaElement;
+    dropCursorPosition = target.selectionStart; // Or more complex logic to find char under cursor
+    
+    showDropMenu = true;
+  }
+
+  function handleDropMenuAction(event: CustomEvent<'reference' | 'weave'>) {
+    const action = event.detail;
+    showDropMenu = false;
+    if (!droppedEntry) return;
+
+    if (action === 'reference') {
+      const referenceText = `[@${droppedEntry.name}](codex://entry/${droppedEntry.id})`;
+      insertTextAt(referenceText, dropCursorPosition);
+    } else if (action === 'weave') {
+      performLloreWeaving();
+    }
+  }
+
+  // --- New "Weaving" Function ---
+  async function performLloreWeaving() {
+    if (!droppedEntry) return;
+    isWeaving = true;
+    dispatch('loading', true);
+    let weavingIndicator = '... weaving ...';
+    insertTextAt(weavingIndicator, dropCursorPosition);
+
+    try {
+      const generatedText = await WeaveEntryIntoText(
+        droppedEntry, 
+        writeContent.replace(weavingIndicator, ''), // Send content without the indicator
+        dropCursorPosition,
+        templateType
+      );
+
+      // Replace indicator with generated text
+      writeContent = writeContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`);
+    } catch(err) {
+      dispatch('error', `Llore-weaving failed: ${err}`);
+      writeContent = writeContent.replace(weavingIndicator, ''); // Remove indicator on error
+    } finally {
+      isWeaving = false;
+      dispatch('loading', false);
+    }
+  }
+
+  // Helper to insert text at a specific position
+  function insertTextAt(text: string, position: number) {
+    writeContent = writeContent.slice(0, position) + text + writeContent.slice(position);
+  }
+
+  // Computed property for filtered codex entries
+  $: filteredCodexEntries = codexSearchTerm 
+    ? codexEntries.filter(e => e.name.toLowerCase().includes(codexSearchTerm.toLowerCase()))
+    : codexEntries;
+
+  // Function to get cursor coordinates
+  function getCursorXY() {
+    // This is a simplified approach. A real implementation might use a library
+    // or a hidden div to get precise coordinates.
+    const ta = markdownTextareaElement;
+    const style = window.getComputedStyle(ta);
+    const lineHeight = parseFloat(style.lineHeight);
+    const textUptoCursor = ta.value.substring(0, ta.selectionStart);
+    const lines = textUptoCursor.split('\n');
+    const currentLine = lines[lines.length - 1];
+    
+    // Estimate position
+    const rect = ta.getBoundingClientRect();
+    autocompleteX = rect.left + (currentLine.length * 8) + 15; // 8 is a rough char width
+    autocompleteY = rect.top + (lines.length * lineHeight) + 5;
+  }
+
+  function handleWriteViewKeydown(event: KeyboardEvent) {
+    if (showAutocomplete) {
+      autocompleteMenuRef.handleKeyDown(event);
+      return; // Let the menu handle key events
+    }
+    // ... (keep existing keydown logic for Ctrl+B/I/S and Tab)
+  }
+  
+  function handleWriteViewInput(event: Event) {
+    const ta = event.target as HTMLTextAreaElement;
+    const cursorPos = ta.selectionStart;
+    const textBeforeCursor = ta.value.substring(0, cursorPos);
+
+    const atMatch = textBeforeCursor.match(/@(\w*)$/);
+
+    if (atMatch) {
+      autocompleteTriggerPos = atMatch.index!;
+      autocompleteQuery = atMatch[1].toLowerCase();
+      
+      autocompleteItems = codexEntries.filter(e =>
+        e.name.toLowerCase().startsWith(autocompleteQuery)
+      );
+
+      if (autocompleteItems.length > 0) {
+        getCursorXY();
+        showAutocomplete = true;
+      } else {
+        showAutocomplete = false;
+      }
+    } else {
+      showAutocomplete = false;
+    }
+  }
+
+  function handleAutocompleteSelect(event: CustomEvent<database.CodexEntry>) {
+    const entry = event.detail;
+    const referenceText = `[@${entry.name}](codex://entry/${entry.id}) `;
+    
+    // Replace from the '@' trigger position
+    const textBefore = writeContent.substring(0, autocompleteTriggerPos);
+    const textAfter = writeContent.substring(autocompleteTriggerPos + autocompleteQuery.length + 1);
+    
+    writeContent = textBefore + referenceText + textAfter;
+    showAutocomplete = false;
+    
+    // Move cursor after the inserted text
+    requestAnimationFrame(() => {
+      if (!markdownTextareaElement) return;
+      const newCursorPos = autocompleteTriggerPos + referenceText.length;
+      markdownTextareaElement.focus();
+      markdownTextareaElement.selectionStart = newCursorPos;
+      markdownTextareaElement.selectionEnd = newCursorPos;
+    });
+  }
+  // --- New Function ---
+  async function handleSaveAsTemplate() {
+    if (!newTemplateName.trim()) {
+      // You can show an error in the modal
+      return;
+    }
+    try {
+      await SaveTemplate(newTemplateName, writeContent);
+      alert(`Template '${newTemplateName}.md' saved successfully!`);
+      showSaveTemplateModal = false;
+      newTemplateName = '';
+    } catch (err) {
+      alert(`Failed to save template: ${err}`);
+    }
+  }
 </script>
 
 <button class="back-btn" on:click={goBack}>← Back to Mode Choice</button>
 
 <div class="write-view-main-content">
+  <!-- LEFT COLUMN: Chat and Tools -->
   <div class="left-column">
+    <!-- ... (existing chat and save tools) ... -->
     <div class="write-chat-panel">
       <h3>Contextual Chat</h3>
       <div class="chat-messages-area" bind:this={writeChatDisplayElement}>
@@ -423,6 +631,7 @@
             Save {#if isDirty && currentDocumentFilename}*{/if}
           </button>
           <button class="save-as-btn" on:click={() => openSaveModal(true)} disabled={isSaving}>Save As...</button>
+          <button class="template-btn" on:click={() => showSaveTemplateModal = true} disabled={isSaving}>Save as Template</button>
         </div>
         <div class="doc-info">
           <span>Chars: {charCount}</span>
@@ -432,7 +641,9 @@
     </div>
   </div>
 
+  <!-- CENTER COLUMN: Editor -->
   <div class="center-column">
+    <!-- ... (existing editor toolbar) ... -->
     <div class="editor-toolbar">
       <div class="view-mode-toggles">
         <button class:active={editorMode === 'edit'} on:click={() => editorMode = 'edit'} title="Edit mode">📝 Edit</button>
@@ -450,27 +661,10 @@
         bind:this={markdownTextareaElement}
         placeholder="Start writing your masterpiece (Markdown supported)..."
         style="display: {editorMode === 'preview' ? 'none' : 'block'}"
-        on:keydown={(e) => {
-            // Basic Ctrl+B and Ctrl+I for bold/italic
-            if (e.ctrlKey || e.metaKey) {
-                if (e.key === 'b') { e.preventDefault(); applyMarkdownFormat('bold'); }
-                if (e.key === 'i') { e.preventDefault(); applyMarkdownFormat('italic'); }
-                if (e.key === 's') { e.preventDefault(); handleDirectSave(); }
-            }
-            // Handle Tab for indentation (basic version)
-            if (e.key === 'Tab') {
-                e.preventDefault();
-                const start = markdownTextareaElement.selectionStart;
-                const end = markdownTextareaElement.selectionEnd;
-                const text = markdownTextareaElement.value;
-                // Insert tab character
-                writeContent = text.substring(0, start) + '\t' + text.substring(end);
-                // Move cursor after tab
-                requestAnimationFrame(() => {
-                    markdownTextareaElement.selectionStart = markdownTextareaElement.selectionEnd = start + 1;
-                });
-            }
-        }}
+        on:drop={handleDrop}
+        on:dragover|preventDefault
+        on:keydown={handleWriteViewKeydown}
+        on:input={handleWriteViewInput}
       ></textarea>
       <div 
         class="markdown-preview-container"
@@ -481,7 +675,28 @@
     </div>
   </div>
 
+  <!-- RIGHT COLUMN: Codex Reference & AI Tools -->
   <div class="right-column-toolbar">
+    <div class="tool-section codex-reference-panel">
+      <h4>Codex Reference</h4>
+      <input type="search" placeholder="Search Codex..." bind:value={codexSearchTerm} class="codex-search"/>
+      <div class="codex-entry-list">
+        {#each filteredCodexEntries as entry (entry.id)}
+          <div 
+            class="codex-item"
+            role="button"
+            tabindex="0"
+            draggable="true"
+            on:dragstart={(e) => handleDragStart(e, entry)}
+            on:keydown={(e) => { if (e.key === 'Enter') handleDragStart(e, entry); }}
+          >
+            <strong>{entry.name}</strong>
+            <span>({entry.type})</span>
+          </div>
+        {/each}
+      </div>
+    </div>
+    <!-- ... (existing formatting and AI action tools) ... -->
     <div class="tool-section">
       <h4>Formatting</h4>
       <div class="formatting-buttons">
@@ -505,7 +720,27 @@
   </div>
 </div>
 
+<!-- Drop Context Menu (new) -->
+{#if showDropMenu}
+  <DropContextMenu x={dropMenuX} y={dropMenuY} on:action={handleDropMenuAction} />
+  <!-- Click outside to close -->
+  <div class="overlay" role="button" tabindex="0" on:click={() => showDropMenu = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showDropMenu = false; }}></div>
+{/if}
+
 <!-- Save Modal -->
+<!-- Add the Autocomplete Menu component -->
+{#if showAutocomplete}
+  <AutocompleteMenu
+    bind:this={autocompleteMenuRef}
+    items={autocompleteItems}
+    x={autocompleteX}
+    y={autocompleteY}
+    on:select={handleAutocompleteSelect}
+  />
+  <!-- Overlay to close autocomplete on click outside -->
+  <div class="overlay" role="button" tabindex="0" on:click={() => showAutocomplete = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showAutocomplete = false; }}></div>
+{/if}
+
 {#if showWriteSaveModal}
   <div class="modal-backdrop">
     <div class="modal save-write-modal">
@@ -528,7 +763,76 @@
   </div>
 {/if}
 
+<!-- Add the new modal -->
+{#if showSaveTemplateModal}
+  <div class="modal-backdrop">
+    <div class="modal save-template-modal">
+      <h3>Save as Template</h3>
+      <p>Save the current document's content as a reusable template.</p>
+      <label for="template-name">Template Name:</label>
+      <input id="template-name" type="text" bind:value={newTemplateName} placeholder="e.g., Character Deep Dive" />
+      <div class="modal-buttons">
+        <button on:click={handleSaveAsTemplate} disabled={!newTemplateName.trim()}>Save Template</button>
+        <button on:click={() => showSaveTemplateModal = false}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
+  /* NEW STYLES for rendered @mentions */
+  .markdown-preview :global(.codex-mention) {
+    background-color: rgba(109, 94, 217, 0.2); /* Use accent color but subtle */
+    color: var(--accent-secondary);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-weight: 500;
+    cursor: help; /* Indicate it's interactive */
+    border-bottom: 1px dotted var(--accent-secondary);
+  }
+  /* ... (keep most existing styles) ... */
+
+  /* NEW STYLES for Codex Reference Panel */
+  .codex-reference-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%; /* Or set a max-height */
+  }
+
+  .codex-search {
+    width: 100%;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+  }
+
+  .codex-entry-list {
+    flex-grow: 1;
+    overflow-y: auto;
+  }
+
+  .codex-item {
+    padding: 0.5rem;
+    border-radius: 4px;
+    cursor: grab;
+    margin-bottom: 0.25rem;
+    border: 1px solid transparent;
+  }
+  .codex-item:hover {
+    background-color: var(--bg-hover-medium);
+    border-color: var(--border-color-strong);
+  }
+  .codex-item span { color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.5rem; }
+
+  /* Overlay for closing the context menu */
+  .overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 1000;
+  }
   :global(body) {
     font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif);
     color: var(--text-primary, #e0e0e0); /* Light text for dark theme */
@@ -717,6 +1021,14 @@
   }
   .save-btn:disabled, .save-as-btn:disabled {
     opacity: 0.5;
+  }
+  .template-btn {
+    /* Style it differently, maybe with a different color */
+    background-color: #fdcb6e !important; /* A gold/yellow color */
+    color: #2d3436 !important;
+  }
+  .template-btn:hover:not(:disabled) {
+    background-color: #ffeaa7 !important;
   }
 
   .center-column {

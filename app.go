@@ -667,8 +667,8 @@ func (a *App) GenerateLLMContent(prompt, modelID string) (string, error) {
 			return "", fmt.Errorf("OpenAI API key not set. Cannot use OpenAI LLM")
 		}
 		client := openai.NewClient(
-		option.WithAPIKey(cfg.OpenAIAPIKey),
-	)
+			option.WithAPIKey(cfg.OpenAIAPIKey),
+		)
 		// If modelID is empty, choose a default from available OpenAI models
 		effectiveModelID := modelID
 		if effectiveModelID == "" {
@@ -676,7 +676,7 @@ func (a *App) GenerateLLMContent(prompt, modelID string) (string, error) {
 			log.Printf("No modelID provided for OpenAI, defaulting to %s", effectiveModelID)
 		}
 		log.Printf("Sending prompt to OpenAI model %s", effectiveModelID)
-		
+
 		// Create a chat completion using the official SDK
 		completion, err := client.Chat.Completions.New(
 			context.Background(),
@@ -753,12 +753,12 @@ func (a *App) GenerateLLMContent(prompt, modelID string) (string, error) {
 		if modelID == "" {
 			return "", fmt.Errorf("no modelID provided for Local Ollama LLM mode")
 		}
-		
+
 		// Add warning for larger models that might take longer
 		if strings.Contains(modelID, "mistral") || strings.Contains(modelID, "llama") {
 			log.Printf("WARNING: Using a larger model (%s) which may take longer to respond. Timeout set to 5 minutes.", modelID)
 		}
-		
+
 		// Add extra error handling to prevent application crashes
 		response, err := llm.GetOllamaCompletion(prompt, modelID)
 		if err != nil {
@@ -938,6 +938,104 @@ func (a *App) SaveLibraryFile(filename string, content string) error {
 
 	log.Printf("Successfully saved library file: %s", filePath)
 	return nil
+}
+
+// ListTemplates returns a list of .md files in the vault's Templates folder
+func (a *App) ListTemplates() ([]string, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("no vault is currently loaded")
+	}
+	templatesPath := filepath.Join(a.dbPath, "Templates")
+	entries, err := os.ReadDir(templatesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Templates directory does not exist, creating it: %s", templatesPath)
+			if err := os.MkdirAll(templatesPath, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create Templates directory: %w", err)
+			}
+			return []string{}, nil // Return empty list after creating
+		}
+		return nil, fmt.Errorf("failed to read Templates directory: %w", err)
+	}
+
+	files := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+			files = append(files, entry.Name())
+		}
+	}
+	return files, nil
+}
+
+// SaveTemplate writes content to a specified file in the vault's Templates folder
+func (a *App) SaveTemplate(filename string, content string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	// Basic validation
+	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
+		return fmt.Errorf("invalid template filename")
+	}
+	if !strings.HasSuffix(filename, ".md") {
+		filename += ".md"
+	}
+
+	filePath := filepath.Join(a.dbPath, "Templates", filename)
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write template file %s: %w", filename, err)
+	}
+	log.Printf("Successfully saved template file: %s", filePath)
+	return nil
+}
+
+// WeaveEntryIntoText is the core "Llore-weaving" function.
+func (a *App) WeaveEntryIntoText(droppedEntry database.CodexEntry, documentText string, cursorPosition int, templateType string) (string, error) {
+	log.Printf("Weaving entry '%s' into a '%s' document.", droppedEntry.Name, templateType)
+
+	var goal string
+	// Determine the AI's goal based on context
+	switch templateType {
+	case "character-sheet":
+		if droppedEntry.Type == "Character" {
+			goal = fmt.Sprintf("The user dropped Character '%s' onto this character sheet. Generate a new 'Relationships' section describing a plausible connection (e.g., friend, family, rival, mentor) between the sheet's character and the dropped character.", droppedEntry.Name)
+		} else { // Handle Artifact, Location, etc.
+			goal = fmt.Sprintf("The user dropped the %s '%s' onto this character sheet. Generate a new section describing how the character acquired, uses, or is connected to this %s.", droppedEntry.Type, droppedEntry.Name, droppedEntry.Type)
+		}
+	case "chapter":
+		goal = fmt.Sprintf("The user dropped the %s '%s' into this narrative scene. Weave its introduction or a mention of it naturally into the story at the cursor position. It could be a character noticing it, interacting with it, or thinking about it.", droppedEntry.Type, droppedEntry.Name)
+	default: // Generic fallback for blank documents or unknown templates
+		goal = fmt.Sprintf("The user dropped the %s '%s' into their document. Based on the surrounding text, intelligently integrate this information. This could be a new descriptive sentence, a new paragraph, or an expansion of an existing idea.", droppedEntry.Type, droppedEntry.Name)
+	}
+
+	// Prepare the document with a cursor marker
+	if cursorPosition > len(documentText) {
+		cursorPosition = len(documentText)
+	}
+	docWithCursor := documentText[:cursorPosition] + "<<CURSOR>>" + documentText[cursorPosition:]
+
+	// Construct the master prompt
+	prompt := fmt.Sprintf(
+		"SYSTEM: You are an expert fiction writing assistant. Your task is to seamlessly weave a new codex entry into an existing draft. Your response must be ONLY the text to be inserted. Do not include explanations.\n\n"+
+			"GOAL: %s\n\n"+
+			"DROPPED ENTRY DETAILS:\n- Name: %s\n- Type: %s\n- Content: %s\n\n"+
+			"DOCUMENT CONTEXT (with cursor position):\n---\n%s\n---\n\n"+
+			"GENERATED TEXT TO INSERT:",
+		goal,
+		droppedEntry.Name,
+		droppedEntry.Type,
+		droppedEntry.Content,
+		docWithCursor,
+	)
+
+	// Use the existing RAG function to get the completion
+	cfg := llm.GetConfig()
+	modelID := cfg.ChatModelID // Or a more powerful model if desired for this task
+	if modelID == "" {
+		return "", fmt.Errorf("no chat model configured in settings")
+	}
+
+	return a.GetAIResponseWithContext(prompt, modelID)
 }
 
 // --- Chat Log Management ---
