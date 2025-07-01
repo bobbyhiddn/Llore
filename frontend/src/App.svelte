@@ -11,6 +11,7 @@
   import ChatView from './components/ChatView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import WriteView from './components/WriteView.svelte'; // Assuming WriteView is in components
+  import WriteHub from './components/WriteHub.svelte'; // Import the new hub
 
   import {
     // Keep all backend functions needed by App or passed down
@@ -88,6 +89,14 @@
   // Variables for WriteView initial content when opening from library
   let writeViewInitialContent: string = '';
   let writeViewInitialFilename: string = '';
+
+  // NEW state to manage the Write mode's view
+  let currentWriteView: 'hub' | 'editor' = 'hub';
+  let writeViewProps = {
+    initialContent: '',
+    initialFilename: '',
+    templateType: 'blank'
+  };
 
   // --- Interfaces --- (Keep if needed globally, or move to models.ts if applicable)
   interface OpenRouterConfig {
@@ -240,6 +249,7 @@
          }
       } else if (newMode === 'write') {
         // Reset write state if necessary (handled in component)
+        currentWriteView = 'hub'; // Always start at the hub
       }
     } else {
       console.log(`Mode ${newMode} is already active.`);
@@ -1012,17 +1022,53 @@
     libraryErrorMsg = '';
     try {
       const content = await ReadLibraryFile(filename);
-      // Set the initial content and filename for WriteView
-      writeViewInitialContent = content;
-      writeViewInitialFilename = filename;
-      // Switch to write mode
-      await setModeAndUpdate('write');
+      // Set props for the editor view
+      writeViewProps = {
+        initialContent: content,
+        initialFilename: filename,
+        templateType: 'chapter' // Assume library files are chapters, or determine from metadata later
+      };
+      // Set mode to 'write' and view to 'editor'
+      mode = 'write';
+      currentWriteView = 'editor';
     } catch (err) {
       console.error(`Error reading library file ${filename} for write mode:`, err);
       libraryErrorMsg = `Error reading file: ${err}`;
       alert(libraryErrorMsg);
     } finally {
       isLoading = false;
+    }
+  }
+
+  // NEW handler for starting to write from the hub
+  function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
+    writeViewProps = {
+      initialContent: event.detail.initialContent,
+      initialFilename: '', // It's a new document
+      templateType: event.detail.templateType
+    };
+    currentWriteView = 'editor';
+  }
+
+  // NEW handler for loading a custom template
+  async function handleLoadCustomTemplate(event: CustomEvent<string>) {
+    const filename = event.detail;
+    // We need a new backend function to read a template file, let's assume it exists for now
+    // For simplicity, we can reuse ReadLibraryFile but point it to the Templates dir
+    // Let's create `ReadTemplateFile` in backend. For now, we'll imagine it.
+    // --> We will just reuse `ReadLibraryFile` but need to make the backend aware.
+    // For now, let's assume `ReadLibraryFile` can handle `Templates/file.md`
+    try {
+      const content = await ReadLibraryFile(`../Templates/${filename}`); // A bit of a hack, better to have a dedicated func
+      writeViewProps = {
+        initialContent: content,
+        initialFilename: '',
+        templateType: filename.replace('.md', '') // Use filename as template type
+      };
+      currentWriteView = 'editor';
+    } catch (err) {
+      // dispatch global error
+      handleGenericError(new CustomEvent('error', { detail: `Failed to load template: ${err}` }));
     }
   }
 
@@ -1159,15 +1205,24 @@
       on:back={() => setModeAndUpdate(null)}
     />
   {:else if mode === 'write'}
-    <WriteView
-      chatModelId={chatModelId}
-      on:back={() => setModeAndUpdate(null)}
-      on:filesaved={handleWriteFileSaved}
-      on:loading={handleWriteLoading}
-      on:error={handleGenericError}
-      initialContent={writeViewInitialContent}
-      initialFilename={writeViewInitialFilename}
-    />
+    {#if currentWriteView === 'hub'}
+      <WriteHub
+        on:startwriting={handleStartWriting}
+        on:loadtemplate={handleLoadCustomTemplate}
+        on:back={() => { mode = null; currentWriteView = 'hub'; }}
+      />
+    {:else}
+      <WriteView
+        initialContent={writeViewProps.initialContent}
+        initialFilename={writeViewProps.initialFilename}
+        templateType={writeViewProps.templateType}
+        chatModelId={chatModelId}
+        on:back={() => { currentWriteView = 'hub'; /* Go back to hub, not mode select */ }}
+        on:filesaved={handleWriteFileSaved}
+        on:loading={handleWriteLoading}
+        on:error={handleGenericError}
+      />
+    {/if}
   {/if}
 
   <!-- Global Modals -->

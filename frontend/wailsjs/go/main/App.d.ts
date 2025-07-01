@@ -40,6 +40,8 @@ export function ListChatLogs():Promise<Array<string>>;
 
 export function ListLibraryFiles():Promise<Array<string>>;
 
+export function ListTemplates():Promise<Array<string>>;
+
 export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
 
 export function MergeEntryContentDirect(arg1:database.CodexEntry,arg2:string,arg3:string):Promise<string>;
@@ -60,8 +62,12 @@ export function SaveLibraryFile(arg1:string,arg2:string):Promise<void>;
 
 export function SaveSettings(arg1:llm.OpenRouterConfig):Promise<void>;
 
+export function SaveTemplate(arg1:string,arg2:string):Promise<void>;
+
 export function SelectVaultFolder():Promise<string>;
 
 export function SwitchVault(arg1:string):Promise<void>;
 
 export function UpdateEntry(arg1:database.CodexEntry):Promise<void>;
+
+export function WeaveEntryIntoText(arg1:database.CodexEntry,arg2:string,arg3:number,arg4:string):Promise<string>;

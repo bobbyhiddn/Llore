@@ -41,10 +41,12 @@ func CreateNewVault(ctx context.Context, vaultName string) (string, error) {
 		vaultName = "LoreVault"
 	}
 	vaultPath := filepath.Join(selection, vaultName)
+	// ADD "Templates" to the list of subdirectories
 	subdirs := []string{
 		filepath.Join(vaultPath, "Library"),
 		filepath.Join(vaultPath, "Codex"),
 		filepath.Join(vaultPath, "Chat"),
+		filepath.Join(vaultPath, "Templates"), // New line
 	}
 
 	// Create the main vault directory
@@ -59,7 +61,7 @@ func CreateNewVault(ctx context.Context, vaultName string) (string, error) {
 		}
 	}
 
-	log.Printf("Created new vault at: %s", vaultPath)
+	log.Printf("Created new vault at: %s with Templates directory", vaultPath)
 	return vaultPath, nil
 }
 
@@ -76,7 +78,7 @@ func SwitchVault(path string) (string, error) {
 	}
 
 	// Verify required subdirectories exist
-	requiredDirs := []string{"Library", "Codex", "Chat"}
+	requiredDirs := []string{"Library", "Codex", "Chat", "Templates"}
 	for _, dir := range requiredDirs {
 		subdir := filepath.Join(path, dir)
 		if info, err := os.Stat(subdir); err != nil || !info.IsDir() {

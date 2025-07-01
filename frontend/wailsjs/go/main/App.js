@@ -74,6 +74,10 @@ export function ListLibraryFiles() {
   return window['go']['main']['App']['ListLibraryFiles']();
 }
 
+export function ListTemplates() {
+  return window['go']['main']['App']['ListTemplates']();
+}
+
 export function LoadChatLog(arg1) {
   return window['go']['main']['App']['LoadChatLog'](arg1);
 }
@@ -114,6 +118,10 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SaveTemplate(arg1, arg2) {
+  return window['go']['main']['App']['SaveTemplate'](arg1, arg2);
+}
+
 export function SelectVaultFolder() {
   return window['go']['main']['App']['SelectVaultFolder']();
 }
@@ -124,4 +132,8 @@ export function SwitchVault(arg1) {
 
 export function UpdateEntry(arg1) {
   return window['go']['main']['App']['UpdateEntry'](arg1);
+}
+
+export function WeaveEntryIntoText(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['WeaveEntryIntoText'](arg1, arg2, arg3, arg4);
 }
