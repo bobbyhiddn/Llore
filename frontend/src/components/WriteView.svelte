@@ -73,13 +73,11 @@
   const renderer = new marked.Renderer();
   const originalLinkRenderer = renderer.link;
   renderer.link = (href, title, text) => {
-    if (href?.startsWith('codex://entry/')) {
+    if (href && href.startsWith('codex://entry/')) {
       const entryId = href.substring('codex://entry/'.length);
-      // Render as a span with special styling and a data attribute
       return `<span class="codex-mention" data-entry-id="${entryId}" title="Codex Entry: ${text}">${text}</span>`;
     }
-    // Fallback to default renderer for other links
-    return originalLinkRenderer.call(renderer, href, title, text);
+    return false; // Returning false tells marked to use the default renderer
   };
   marked.use({ renderer });
 
@@ -304,12 +302,15 @@
 
   // Direct Save (used by "Save" button in tools if filename exists)
   async function handleDirectSave() {
-      if (!currentDocumentFilename) {
-          openSaveModal(false); // If no filename, open modal as if it's the first save
-          return;
-      }
-      filenameForSaveModal = currentDocumentFilename; // Ensure modal uses current filename
-      await doSave();
+    console.log("handleDirectSave called");
+    if (!currentDocumentFilename) {
+        console.log("currentDocumentFilename is empty, opening save modal");
+        openSaveModal(false); // If no filename, open modal as if it's the first save
+        return;
+    }
+    filenameForSaveModal = currentDocumentFilename; // Ensure modal uses current filename
+    console.log("Calling doSave for", filenameForSaveModal);
+    await doSave();
   }
 
   // Actual save logic, called by modal or direct save
@@ -688,7 +689,12 @@
             tabindex="0"
             draggable="true"
             on:dragstart={(e) => handleDragStart(e, entry)}
-            on:keydown={(e) => { if (e.key === 'Enter') handleDragStart(e, entry); }}
+            on:keydown={(e) => {
+              if (e.key === 'Enter') {
+                const referenceText = `[@${entry.name}](codex://entry/${entry.id})`;
+                insertTextAt(referenceText, markdownTextareaElement.selectionStart);
+              }
+            }}
           >
             <strong>{entry.name}</strong>
             <span>({entry.type})</span>
@@ -724,7 +730,7 @@
 {#if showDropMenu}
   <DropContextMenu x={dropMenuX} y={dropMenuY} on:action={handleDropMenuAction} />
   <!-- Click outside to close -->
-  <div class="overlay" role="button" tabindex="0" on:click={() => showDropMenu = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showDropMenu = false; }}></div>
+  <div class="overlay" role="button" tabindex="0" on:click={() => showDropMenu = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showDropMenu = false; }} />
 {/if}
 
 <!-- Save Modal -->
@@ -738,7 +744,7 @@
     on:select={handleAutocompleteSelect}
   />
   <!-- Overlay to close autocomplete on click outside -->
-  <div class="overlay" role="button" tabindex="0" on:click={() => showAutocomplete = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showAutocomplete = false; }}></div>
+  <div class="overlay" role="button" tabindex="0" on:click={() => showAutocomplete = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showAutocomplete = false; }} />
 {/if}
 
 {#if showWriteSaveModal}
