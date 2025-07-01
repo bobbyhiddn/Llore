@@ -1,151 +1,501 @@
-Of course. I'm excited too! This is where Llore can make a leap from a great tool to an essential one. Let's build a comprehensive, step-by-step implementation plan. We'll go from the backend foundations to the frontend UI, paying close attention to the workflow and aesthetic you've envisioned.
+Of course! It's fantastic that you're pushing the vision even further. The idea of "weaving" not just *entities* but also *narrative concepts* is brilliant and elevates the AI from a lore-keeper to a true co-author.
 
-Here is your feature-complete implementation plan for the new, template-driven, Llore-weaving `Write` mode.
+Let's address the save functionality first, as that's a critical bug fix, and then design the implementation for the new "Narrative Weaving" feature.
 
 ---
 
-### **Phase 1: Backend Foundations & Vault Structure**
+### **Part 1: Fixing the Save/Save As Functionality**
 
-First, we need to add the necessary backend functions and update the vault structure.
+The issue likely stems from how the state is being managed between the parent (`App.svelte`) and the child (`WriteView.svelte`), especially around the new `writeViewProps`. Let's create a more robust and explicit state management flow.
 
-#### 1.1. Update Vault Structure
+#### **The Problem:**
 
-In `internal/vault/vault.go`, we'll add a `Templates` directory to every vault.
+The `WriteView` component was initialized with props but then managed its own `writeContent`. When saving, it didn't have a reliable way to communicate its "dirtiness" or current state back up to the parent `App` component, which orchestrates file operations. The `isDirty` flag logic also needs to be more tightly controlled.
 
-**File: `/internal/vault/vault.go` (Revision)**
+#### **The Solution: A Centralized and Event-Driven Approach**
 
-```go
-// ... (keep existing code)
+We'll make the parent `App.svelte` the single source of truth for the document's content and filename. `WriteView.svelte` will emit events when changes happen.
 
-// CreateNewVault creates a new vault folder with the required structure.
-func CreateNewVault(ctx context.Context, vaultName string) (string, error) {
-	// ... (keep existing selection logic)
+**Step 1.1: Revise State Management in `App.svelte`**
 
-	if vaultName == "" {
-		vaultName = "LoreVault"
-	}
-	vaultPath := filepath.Join(selection, vaultName)
-	// ADD "Templates" to the list of subdirectories
-	subdirs := []string{
-		filepath.Join(vaultPath, "Library"),
-		filepath.Join(vaultPath, "Codex"),
-		filepath.Join(vaultPath, "Chat"),
-		filepath.Join(vaultPath, "Templates"), // New line
-	}
+We will store the active document's state directly in `App.svelte`.
 
-	// ... (rest of the function remains the same)
-	log.Printf("Created new vault at: %s with Templates directory", vaultPath)
-	return vaultPath, nil
-}
+**File: `/frontend/src/App.svelte` (Revision)**
 
-// ... (keep existing code)
+```svelte
+<script lang="ts">
+  // ... (imports)
+
+  // -- NEW/REVISED State for Active Document --
+  let activeDocument = {
+    content: '',
+    filename: '',
+    templateType: 'blank',
+    isDirty: false
+  };
+
+  // REVISE handler for starting to write from the hub
+  function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
+    activeDocument = {
+      content: event.detail.initialContent,
+      filename: '', // New document
+      templateType: event.detail.templateType,
+      isDirty: false // It's a fresh document/template
+    };
+    currentWriteView = 'editor';
+  }
+
+  // REVISE handler for editing a file from the library
+  async function handleEditInWriteMode(event: CustomEvent<string>) {
+    // ... (loading logic)
+    try {
+      const content = await ReadLibraryFile(filename);
+      activeDocument = {
+        content: content,
+        filename: filename,
+        templateType: 'chapter', // Assumption, can be improved later
+        isDirty: false
+      };
+      mode = 'write';
+      currentWriteView = 'editor';
+    } 
+    // ... (finally block)
+  }
+
+  // NEW handler for content changes from WriteView
+  function handleContentUpdate(event: CustomEvent<string>) {
+    const newContent = event.detail;
+    if (activeDocument.content !== newContent) {
+      activeDocument.content = newContent;
+      activeDocument.isDirty = true;
+    }
+  }
+
+  // NEW handler for Save/Save As events from WriteView
+  async function handleSaveRequest(event: CustomEvent<{ filename: string, isSaveAs: boolean }>) {
+    const { filename, isSaveAs } = event.detail;
+    
+    // Use a reference to the WriteView to call back with status
+    // (Assuming `bind:this={writeViewRef}` is added to WriteView)
+    writeViewRef?.setSavingState(true, ''); // Start saving, clear previous messages
+
+    try {
+      await SaveLibraryFile(filename, activeDocument.content);
+      
+      // Update app state on successful save
+      activeDocument.filename = filename;
+      activeDocument.isDirty = false;
+      
+      // Notify WriteView of success
+      writeViewRef?.setSavingState(false, `File '${filename}' saved successfully!`);
+
+      // Notify App of file list change
+      dispatch('filesaved', filename);
+
+    } catch (err) {
+      const errorMsg = `Failed to save file: ${err}`;
+      console.error("Save Error in App.svelte:", err);
+      writeViewRef?.setSavingState(false, '', errorMsg); // Send error back to view
+    }
+  }
+
+</script>
+
+<!-- ... (main view logic) ... -->
+{:else if mode === 'write'}
+  {#if currentWriteView === 'hub'}
+    <!-- ... WriteHub component ... -->
+  {:else}
+    <WriteView
+      bind:this={writeViewRef} <!-- Bind the component instance -->
+      documentContent={activeDocument.content}
+      documentFilename={activeDocument.filename}
+      isDocumentDirty={activeDocument.isDirty}
+      templateType={activeDocument.templateType}
+      on:updatecontent={handleContentUpdate}
+      on:saverequest={handleSaveRequest}
+      {...} <!-- other props and event handlers -->
+    />
+  {/if}
+{/if}
 ```
-*(Also ensure `SwitchVault` checks for this new directory for robustness).*
+
+**Step 1.2: Refactor `WriteView.svelte` to be a "Dumb" Component**
+
+`WriteView` will now receive its content as a prop and emit events when things change. It no longer manages the core save logic itself.
+
+**File: `/frontend/src/components/WriteView.svelte` (Major Revision)**
+
+```svelte
+<script lang="ts">
+  // --- REVISED Props ---
+  export let documentContent: string = '';
+  export let documentFilename: string = '';
+  export let isDocumentDirty: boolean = false;
+  export let templateType: string = 'blank';
+  // ... (other props like chatModelId)
+
+  // --- REMOVE Local State for Content/Dirty/Filename ---
+  // let writeContent = ''; // REMOVED
+  // let isDirty = false; // REMOVED
+  // let currentDocumentFilename = ''; // REMOVED
+  
+  // --- Local State for UI/Modals ---
+  let isSaving = false;
+  let writeSaveError = '';
+  let writeSaveSuccess = '';
+  // ... (keep state for modals, editorMode, etc.)
+
+  // --- REVISED Logic ---
+  // No more need for a `scheduleRender` or reactive `$: {}` block for content.
+  // The parent will pass down the new rendered HTML when content changes.
+  $: renderedWriteHtml = marked.parse(documentContent || '');
+  $: updateCounts(documentContent);
+
+  // REVISE event handlers
+  function handleDirectSave() {
+    if (!documentFilename) {
+      openSaveModal(false); // Still need to prompt for name if it's a new doc
+    } else {
+      // Dispatch a request to the parent to save with the current filename
+      dispatch('saverequest', { filename: documentFilename, isSaveAs: false });
+    }
+  }
+
+  function doSaveFromModal() {
+    // This function now only dispatches the save request with the new filename
+    if (!filenameForSaveModal.trim()) {
+      writeSaveError = 'Filename cannot be empty.';
+      return;
+    }
+    let finalFilename = filenameForSaveModal.trim();
+    if (!finalFilename.toLowerCase().endsWith('.md')) finalFilename += '.md';
+    
+    dispatch('saverequest', { filename: finalFilename, isSaveAs: isSaveAsOperation });
+  }
+
+  // NEW functions to be called by parent App.svelte
+  export function setSavingState(saving: boolean, successMsg: string = '', errorMsg: string = '') {
+    isSaving = saving;
+    writeSaveSuccess = successMsg;
+    writeSaveError = errorMsg;
+    
+    if (successMsg) {
+      setTimeout(() => {
+        writeSaveSuccess = '';
+        if (showWriteSaveModal) showWriteSaveModal = false;
+      }, 2000);
+    }
+  }
+</script>
+
+<!-- REVISE the textarea to emit its content changes -->
+<textarea
+  class="markdown-input"
+  value={documentContent}
+  on:input={(e) => dispatch('updatecontent', (e.target as HTMLTextAreaElement).value)}
+  {...}
+></textarea>
+
+<!-- REVISE the Save buttons to use the new logic -->
+<div class="save-buttons">
+  <button class="save-btn" on:click={handleDirectSave} disabled={isSaving || !isDocumentDirty}>
+    Save {#if isDocumentDirty && documentFilename}*{/if}
+  </button>
+  <!-- ... -->
+</div>
+
+<!-- REVISE Save Modal to call the new function -->
+<div class="modal-buttons">
+  <button on:click={doSaveFromModal} disabled={isSaving || !filenameForSaveModal.trim()}>
+    {#if isSaving}Saving...{:else}Save{/if}
+  </button>
+  <!-- ... -->
+</div>
+```
+
+This change creates a clear, one-way data flow (`App` -> `WriteView`) and an event-driven flow for changes (`WriteView` -> `App`), which is much more robust and fixes the save functionality.
 
 # Notes
 [x] - Completed feature
 
-#### 1.2. Add New Backend Functions
+---
 
-In `/app.go`, we will add three new methods to be exposed to the frontend.
+### **Part 2: Implementing "Narrative Weaving"**
 
-**File: `/app.go` (Additions)**
+This is an exciting new feature. It's an extension of "Llore-Weaving" but focused on writing concepts instead of Codex entities.
+
+**Step 2.1: Define Narrative Nodes**
+
+These will be the concepts the user can weave. They are purely a frontend concept for now, used to generate specific AI prompts.
+
+In `WriteView.svelte`, define this structure:
+
+**File: `/frontend/src/components/WriteView.svelte` (Addition)**
+
+```svelte
+<script lang="ts">
+  // ...
+
+  const narrativeNodes = [
+    { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
+    { type: 'exposition', label: 'Exposition', description: 'Explain background or world details.', icon: '🌍' },
+    { type: 'dialogue', label: 'Dialogue', description: 'Write a conversation between characters.', icon: '💬' },
+    { type: 'description', label: 'Description', description: 'Describe a character, object, or scene.', icon: '🎨' },
+    { type: 'introspection', label: 'Introspection', description: 'Explore a character\'s internal thoughts.', icon: '🧠' },
+  ];
+</script>
+```
+
+**Step 2.2: Create a Codex Selection Modal**
+
+When a user initiates a narrative weave, we need to prompt them to optionally attach Codex entries for context.
+
+**File: `/frontend/src/components/CodexSelectorModal.svelte` (New)**
+
+```svelte
+<script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+  import type { database } from '@wailsjs/go/models';
+
+  export let allEntries: database.CodexEntry[];
+  export let nodeType: string;
+
+  let selectedEntries: database.CodexEntry[] = [];
+  let searchTerm = '';
+  const dispatch = createEventDispatcher();
+
+  $: filteredEntries = searchTerm
+    ? allEntries.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    : allEntries;
+
+  function toggleSelection(entry: database.CodexEntry) {
+    const index = selectedEntries.findIndex(e => e.id === entry.id);
+    if (index > -1) {
+      selectedEntries.splice(index, 1);
+    } else {
+      selectedEntries = [...selectedEntries, entry];
+    }
+    selectedEntries = selectedEntries; // Force Svelte reactivity
+  }
+
+  function handleWeave() {
+    dispatch('weave', { selectedEntries });
+  }
+</script>
+
+<div class="modal-backdrop" on:click={() => dispatch('close')}>
+  <div class="modal codex-selector-modal" on:click|stopPropagation>
+    <h3>Attach Codex Entries for '{nodeType}'</h3>
+    <p>Select entries to provide specific context for the AI. This is optional.</p>
+    <input type="search" bind:value={searchTerm} placeholder="Search entries..."/>
+    <div class="entry-list">
+      {#each filteredEntries as entry (entry.id)}
+        <div 
+          class="entry-item" 
+          class:selected={selectedEntries.some(e => e.id === entry.id)}
+          on:click={() => toggleSelection(entry)}
+        >
+          {entry.name} ({entry.type})
+        </div>
+      {/each}
+    </div>
+    <div class="modal-actions">
+      <button on:click={() => dispatch('close')}>Cancel</button>
+      <button class="primary" on:click={handleWeave}>
+        Weave with {selectedEntries.length} entries
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Styles for the modal, similar to other modals but with a list */
+  .entry-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--border-color-medium); border-radius: 6px; margin: 1rem 0; }
+  .entry-item { padding: 0.5rem; cursor: pointer; border-bottom: 1px solid var(--border-color-light); }
+  .entry-item:hover { background: var(--bg-hover-light); }
+  .entry-item.selected { background: var(--accent-primary); color: white; font-weight: bold; }
+</style>
+```
+
+**Step 2.3: Integrate Narrative Weaving into `WriteView.svelte` (Continued)**
+
+We will now add the final pieces of logic to `WriteView.svelte`: the new "Narrative Tools" UI, the handler that triggers the flow, and the prompt engineering that makes this feature so powerful.
+
+**File: `/frontend/src/components/WriteView.svelte` (Additions & Revisions)**
+
+```svelte
+<script lang="ts">
+  // ... (all previous imports and state) ...
+  import CodexSelectorModal from './CodexSelectorModal.svelte';
+
+  // --- New State for Narrative Weaving (as defined before) ---
+  let showCodexSelector = false;
+  let activeNarrativeNode: { type: string, label: string } | null = null;
+  let narrativeWeaveCursorPos = 0;
+
+  // ... (all existing script logic) ...
+
+  // NEW: The core function that is called after the user selects their context entries (or none)
+  async function handleNarrativeWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[] }>) {
+    const { selectedEntries } = event.detail;
+    showCodexSelector = false;
+    
+    if (!activeNarrativeNode) return;
+
+    isWeaving = true; // Use the same flag as Llore-weaving
+    dispatch('loading', true);
+    const weavingIndicator = `... weaving ${activeNarrativeNode.label.toLowerCase()} ...`;
+    insertTextAt(weavingIndicator, narrativeWeaveCursorPos);
+
+    try {
+      // Step 1: Call a new backend function for this specific task
+      const generatedText = await WeaveNarrativeNode(
+        activeNarrativeNode.type,
+        documentContent.replace(weavingIndicator, ''), // Send clean content
+        narrativeWeaveCursorPos,
+        selectedEntries,
+        templateType // Pass the document's template type for more context
+      );
+      
+      // Step 2: Replace the indicator with the AI's response
+      writeContent = writeContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`);
+
+    } catch (err) {
+      dispatch('error', `Narrative Weaving failed: ${err}`);
+      writeContent = writeContent.replace(weavingIndicator, ''); // Clean up on error
+    } finally {
+      isWeaving = false;
+      dispatch('loading', false);
+      activeNarrativeNode = null; // Reset for next use
+    }
+  }
+
+</script>
+
+<!-- ... (existing main layout) ... -->
+<div class="right-column-toolbar">
+    <!-- ... (existing Formatting and AI Actions sections) ... -->
+    
+    <!-- NEW: Narrative Tools Section -->
+    <div class="tool-section">
+      <h4>Narrative Weaving</h4>
+      <div class="narrative-node-buttons">
+        {#each narrativeNodes as node (node.type)}
+          <button on:click={() => openNarrativeWeave(node)} title={node.description}>
+            <span class="icon">{node.icon}</span> {node.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+</div>
+
+<!-- ... (existing modals) ... -->
+
+<!-- NEW: Codex Selector Modal for Narrative Weaving -->
+{#if showCodexSelector}
+  <CodexSelectorModal
+    allEntries={codexEntries}
+    nodeType={activeNarrativeNode?.label || ''}
+    on:close={() => showCodexSelector = false}
+    on:weave={handleNarrativeWeave}
+  />
+{/if}
+
+<style>
+  /* ... (all existing styles) ... */
+
+  /* NEW STYLES for Narrative Tools */
+  .narrative-node-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .narrative-node-buttons button {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: left;
+    /* Uses the existing .tool-section button styles */
+  }
+
+  .narrative-node-buttons .icon {
+    font-size: 1.1rem;
+    width: 1.5em;
+    text-align: center;
+    display: inline-block;
+  }
+</style>
+```
+
+**Step 2.4: Create the `WeaveNarrativeNode` Backend Function**
+
+This is the new AI brain for this feature. It's similar to `WeaveEntryIntoText` but is structured to handle writing concepts instead of just entities.
+
+**File: `/app.go` (Addition)**
 
 ```go
-// Add these new functions to your App struct in app.go
+// Add this new function to your App struct in app.go
 
-// ListTemplates returns a list of .md files in the vault's Templates folder
-func (a *App) ListTemplates() ([]string, error) {
-	if a.db == nil {
-		return nil, fmt.Errorf("no vault is currently loaded")
-	}
-	templatesPath := filepath.Join(a.dbPath, "Templates")
-	entries, err := os.ReadDir(templatesPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("Templates directory does not exist, creating it: %s", templatesPath)
-			if err := os.MkdirAll(templatesPath, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create Templates directory: %w", err)
-			}
-			return []string{}, nil // Return empty list after creating
+// WeaveNarrativeNode generates text for a specific writing concept (narrative, dialogue, etc.)
+func (a *App) WeaveNarrativeNode(nodeType string, documentText string, cursorPosition int, attachedEntries []database.CodexEntry, templateType string) (string, error) {
+	log.Printf("Weaving narrative node '%s' with %d attached entries.", nodeType, len(attachedEntries))
+
+	// Step 1: Build the context from attached entries
+	var attachedContext strings.Builder
+	if len(attachedEntries) > 0 {
+		attachedContext.WriteString("The user has attached the following codex entries for specific context:\n")
+		for _, entry := range attachedEntries {
+			attachedContext.WriteString(fmt.Sprintf("- %s (%s): %s\n", entry.Name, entry.Type, entry.Content))
 		}
-		return nil, fmt.Errorf("failed to read Templates directory: %w", err)
+	} else {
+		attachedContext.WriteString("The user did not attach any specific codex entries.")
 	}
 
-	files := make([]string, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			files = append(files, entry.Name())
-		}
-	}
-	return files, nil
-}
-
-// SaveTemplate writes content to a specified file in the vault's Templates folder
-func (a *App) SaveTemplate(filename string, content string) error {
-	if a.db == nil {
-		return fmt.Errorf("no vault is currently loaded")
-	}
-	// Basic validation
-	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
-		return fmt.Errorf("invalid template filename")
-	}
-	if !strings.HasSuffix(filename, ".md") {
-		filename += ".md"
-	}
-
-	filePath := filepath.Join(a.dbPath, "Templates", filename)
-	err := os.WriteFile(filePath, []byte(content), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write template file %s: %w", filename, err)
-	}
-	log.Printf("Successfully saved template file: %s", filePath)
-	return nil
-}
-
-
-// WeaveEntryIntoText is the core "Llore-weaving" function.
-func (a *App) WeaveEntryIntoText(droppedEntry database.CodexEntry, documentText string, cursorPosition int, templateType string) (string, error) {
-	log.Printf("Weaving entry '%s' into a '%s' document.", droppedEntry.Name, templateType)
-
+	// Step 2: Define the primary goal based on the nodeType
 	var goal string
-	// Determine the AI's goal based on context
-	switch templateType {
-	case "character-sheet":
-		if droppedEntry.Type == "Character" {
-			goal = fmt.Sprintf("The user dropped Character '%s' onto this character sheet. Generate a new 'Relationships' section describing a plausible connection (e.g., friend, family, rival, mentor) between the sheet's character and the dropped character.", droppedEntry.Name)
-		} else { // Handle Artifact, Location, etc.
-			goal = fmt.Sprintf("The user dropped the %s '%s' onto this character sheet. Generate a new section describing how the character acquired, uses, or is connected to this %s.", droppedEntry.Type, droppedEntry.Name, droppedEntry.Type)
-		}
-	case "chapter":
-		goal = fmt.Sprintf("The user dropped the %s '%s' into this narrative scene. Weave its introduction or a mention of it naturally into the story at the cursor position. It could be a character noticing it, interacting with it, or thinking about it.", droppedEntry.Type, droppedEntry.Name)
-	default: // Generic fallback for blank documents or unknown templates
-		goal = fmt.Sprintf("The user dropped the %s '%s' into their document. Based on the surrounding text, intelligently integrate this information. This could be a new descriptive sentence, a new paragraph, or an expansion of an existing idea.", droppedEntry.Type, droppedEntry.Name)
+	switch nodeType {
+	case "narrative":
+		goal = "Write a paragraph of narrative action or events that logically follows the text before the cursor. Advance the plot or the current scene."
+	case "exposition":
+		goal = "Write a paragraph of exposition that provides background information, world-building details, or context relevant to the scene. It should feel natural, not like an info-dump."
+	case "dialogue":
+		goal = "Write a snippet of dialogue between characters. If characters are mentioned in the attached context or surrounding text, use their established voices. If not, create plausible dialogue for the scene."
+	case "description":
+		goal = "Write a descriptive paragraph. If context entries are attached, describe them. Otherwise, describe the scene, atmosphere, or a character's appearance based on the surrounding text."
+	case "introspection":
+		goal = "Write a paragraph of a character's internal thoughts or feelings. Use the surrounding text to infer which character is the point-of-view character and what they might be thinking."
+	default:
+		goal = "Continue writing the document from the cursor, maintaining the established tone and style."
 	}
 
-	// Prepare the document with a cursor marker
-	if cursorPosition > len(documentText) {
-		cursorPosition = len(documentText)
+	// Step 3: Prepare the document context
+	// Take a larger slice of text around the cursor for better context awareness
+	const contextWindow = 2000 // characters before the cursor
+	start := cursorPosition - contextWindow
+	if start < 0 {
+		start = 0
 	}
-	docWithCursor := documentText[:cursorPosition] + "<<CURSOR>>" + documentText[cursorPosition:]
-
+	docContext := documentText[start:cursorPosition]
+	
 	// Construct the master prompt
 	prompt := fmt.Sprintf(
-		"SYSTEM: You are an expert fiction writing assistant. Your task is to seamlessly weave a new codex entry into an existing draft. Your response must be ONLY the text to be inserted. Do not include explanations.\n\n"+
-			"GOAL: %s\n\n"+
-			"DROPPED ENTRY DETAILS:\n- Name: %s\n- Type: %s\n- Content: %s\n\n"+
-			"DOCUMENT CONTEXT (with cursor position):\n---\n%s\n---\n\n"+
-			"GENERATED TEXT TO INSERT:",
+		"SYSTEM: You are an expert fiction writing assistant. Your task is to generate a block of text based on a specific narrative goal. Your entire response must be ONLY the generated text itself.\n\n"+
+			"NARRATIVE GOAL: %s\n\n"+
+			"ATTACHED CODEX CONTEXT:\n%s\n\n"+
+			"DOCUMENT CONTEXT (the text immediately preceding the insertion point):\n---\n...%s\n---\n\n"+
+			"GENERATED TEXT:",
 		goal,
-		droppedEntry.Name,
-		droppedEntry.Type,
-		droppedEntry.Content,
-		docWithCursor,
+		attachedContext.String(),
+		docContext,
 	)
 
-	// Use the existing RAG function to get the completion
+	// Step 4: Call the LLM
+	// We use GetAIResponseWithContext so it also benefits from the general RAG search,
+	// creating a powerful two-layered context system (user-guided + automatic).
 	cfg := llm.GetConfig()
-	modelID := cfg.ChatModelID // Or a more powerful model if desired for this task
+	modelID := cfg.ChatModelID
 	if modelID == "" {
 		return "", fmt.Errorf("no chat model configured in settings")
 	}
@@ -155,870 +505,31 @@ func (a *App) WeaveEntryIntoText(droppedEntry database.CodexEntry, documentText 
 
 ```
 
-# Notes
-[x] - Completed feature
+**Step 2.5: Update Wails Bindings**
+
+After adding the new `WeaveNarrativeNode` function to `app.go`, you will need to regenerate the Wails frontend bindings. The easiest way to do this is to simply run `wails build` or `wails dev`. Wails will automatically detect the new public method and update the files in `frontend/wailsjs/`.
 
 ---
 
-### **Phase 2: Frontend "Writing Hub"**
+### **Final Workflow & Aesthetic Polish**
 
-We'll create a new "hub" to act as the entry point for `Write` mode.
+With these changes, the workflow is now complete and intuitive:
 
-#### 2.1. Create `WriteHub.svelte`
+1.  **Saving:** `WriteView` is now a controlled component. It displays content passed from `App` and emits events on user input. `App` handles the state logic (`isDirty`) and file operations, then notifies `WriteView` of the result. This is a much more stable pattern.
 
-This is a new file.
+2.  **Narrative Weaving UI:** The right-hand toolbar now has a dedicated "Narrative Weaving" section. The buttons are clear, use icons for quick recognition, and have tooltips. This makes the feature immediately accessible.
 
-**File: `/frontend/src/components/WriteHub.svelte` (New)**
+3.  **Narrative Weaving Flow:**
+    *   The writer clicks a narrative concept (e.g., "Dialogue").
+    *   The `CodexSelectorModal` appears, allowing them to optionally "tag" the generation with specific characters or lore. This is a powerful, user-guided form of context injection.
+    *   They click "Weave," and the backend constructs a highly specific, goal-oriented prompt.
+    *   The AI generates the content, which is then inserted into the editor.
 
-```svelte
-<script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
-  import { ListTemplates } from '@wailsjs/go/main/App';
+#### **Aesthetic Considerations:**
 
-  const dispatch = createEventDispatcher();
+*   **Loading States:** The use of `isWeaving` and `isSaving` flags should be tied to subtle UI feedback. For example, when `isWeaving` is true, you could add a class to the `textarea` that gives it a soft, pulsing border in the accent color, and the "weaving..." text at the cursor provides clear feedback.
+*   **Modals:** The modals (`CodexSelectorModal`, `DropContextMenu`) should follow the established dark, professional theme. The provided CSS achieves this. They appear instantly and are positioned intelligently relative to the user's action (mouse position).
+*   **Buttons:** The new tool buttons are styled consistently with the rest of the application, using icons to improve scannability and a clean, minimalist design. The save buttons now visually communicate their state (e.g., green for "Save", purple/blue for "Save As," yellow for "Save as Template").
+*   **Clarity:** The entire process is designed to be explicit. The user is prompted for a filename when needed, asked for context entries, and shown clear status messages. This avoids ambiguity and makes the powerful features feel reliable.
 
-  let customTemplates: string[] = [];
-  let isLoading = true;
-
-  onMount(async () => {
-    try {
-      customTemplates = await ListTemplates() || [];
-    } catch (err) {
-      console.error("Failed to load templates:", err);
-      // You could dispatch an error event here
-    } finally {
-      isLoading = false;
-    }
-  });
-  
-  // Hardcoded built-in templates
-  const builtInTemplates = [
-    { name: 'Chapter', description: 'A standard prose template for writing scenes and chapters.', content: '# Chapter Title\n\n', type: 'chapter' },
-    { name: 'Character Sheet', description: 'A detailed profile for a character.', content: '# Character: \n\n## Physical Description\n\n## Personality\n\n## Backstory\n\n## Relationships\n', type: 'character-sheet' },
-    { name: 'Arc Outline', description: 'A three-act structure for plotting.', content: '# Arc: \n\n## Act I: The Setup\n\n## Act II: The Confrontation\n\n## Act III: The Resolution\n', type: 'arc-outline' }
-  ];
-
-  function startWriting(content: string, templateType: string) {
-    dispatch('startwriting', { initialContent: content, templateType });
-  }
-</script>
-
-<div class="write-hub-container">
-  <h2>Start a New Document</h2>
-  <div class="options-grid">
-    <!-- Blank Document Card -->
-    <button class="option-card" on:click={() => startWriting('', 'blank')}>
-      <div class="icon">📄</div>
-      <div class="title">Blank Document</div>
-      <div class="description">Start with a clean slate.</div>
-    </button>
-    
-    <!-- Built-in Template Cards -->
-    {#each builtInTemplates as template}
-      <button class="option-card" on:click={() => startWriting(template.content, template.type)}>
-        <div class="icon">📜</div>
-        <div class="title">{template.name}</div>
-        <div class="description">{template.description}</div>
-      </button>
-    {/each}
-  </div>
-
-  {#if isLoading}
-    <p>Loading custom templates...</p>
-  {:else if customTemplates.length > 0}
-    <h3 class="custom-templates-header">Your Templates</h3>
-    <div class="custom-templates-list">
-      {#each customTemplates as templateFile}
-        <!-- In a real app, you'd fetch content on click -->
-        <button class="custom-template-item" on:click={() => dispatch('loadtemplate', templateFile)}>
-          {templateFile.replace('.md', '')}
-        </button>
-      {/each}
-    </div>
-  {/if}
-</div>
-
-<style>
-  .write-hub-container { padding: 2rem; text-align: center; }
-  h2 { color: var(--text-primary); margin-bottom: 2rem; }
-  .options-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-    max-width: 800px;
-    margin: 0 auto;
-  }
-  .option-card {
-    background: var(--bg-secondary);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
-    padding: 1.5rem;
-    text-align: left;
-    transition: all 0.3s ease;
-    cursor: pointer;
-  }
-  .option-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
-    border-color: var(--accent-primary);
-  }
-  .icon { font-size: 2rem; margin-bottom: 1rem; }
-  .title { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
-  .description { font-size: 0.9rem; color: var(--text-secondary); }
-  .custom-templates-header { margin-top: 3rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 2rem; }
-</style>
-```
-
-# Notes
-[x] - Completed feature
-
-#### 2.2. Update `App.svelte` to use the Hub
-
-**File: `/frontend/src/App.svelte` (Revision)**
-
-```svelte
-<script lang="ts">
-  // ... imports
-  import WriteHub from './components/WriteHub.svelte'; // Import the new hub
-  import { ReadLibraryFile } from '@wailsjs/go/main/App'; // Make sure this is imported
-
-  // ... other state variables
-
-  // NEW state to manage the Write mode's view
-  let currentWriteView: 'hub' | 'editor' = 'hub';
-  let writeViewProps = {
-    initialContent: '',
-    initialFilename: '',
-    templateType: 'blank'
-  };
-
-  // REVISE handleEditInWriteMode
-  async function handleEditInWriteMode(event: CustomEvent<string>) {
-    // ... (existing loading/error logic)
-    try {
-      const content = await ReadLibraryFile(filename);
-      // Set props for the editor view
-      writeViewProps = {
-        initialContent: content,
-        initialFilename: filename,
-        templateType: 'chapter' // Assume library files are chapters, or determine from metadata later
-      };
-      // Set mode to 'write' and view to 'editor'
-      mode = 'write';
-      currentWriteView = 'editor';
-    } 
-    // ... (finally block)
-  }
-  
-  // NEW handler for starting to write from the hub
-  function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
-    writeViewProps = {
-      initialContent: event.detail.initialContent,
-      initialFilename: '', // It's a new document
-      templateType: event.detail.templateType
-    };
-    currentWriteView = 'editor';
-  }
-
-  // NEW handler for loading a custom template
-  async function handleLoadCustomTemplate(event: CustomEvent<string>) {
-    const filename = event.detail;
-    // We need a new backend function to read a template file, let's assume it exists for now
-    // For simplicity, we can reuse ReadLibraryFile but point it to the Templates dir
-    // Let's create `ReadTemplateFile` in backend. For now, we'll imagine it.
-    // --> We will just reuse `ReadLibraryFile` but need to make the backend aware.
-    // For now, let's assume `ReadLibraryFile` can handle `Templates/file.md`
-    try {
-      const content = await ReadLibraryFile(`../Templates/${filename}`); // A bit of a hack, better to have a dedicated func
-      writeViewProps = {
-        initialContent: content,
-        initialFilename: '',
-        templateType: filename.replace('.md', '') // Use filename as template type
-      };
-      currentWriteView = 'editor';
-    } catch (err) {
-      // dispatch global error
-    }
-  }
-
-  // REVISE the main display logic
-</script>
-
-<!-- ... -->
-{:else if mode === 'write'}
-  {#if currentWriteView === 'hub'}
-    <WriteHub 
-      on:startwriting={handleStartWriting}
-      on:loadtemplate={handleLoadCustomTemplate}
-      on:back={() => { mode = null; currentWriteView = 'hub'; }}
-    />
-  {:else}
-    <WriteView
-      initialContent={writeViewProps.initialContent}
-      initialFilename={writeViewProps.initialFilename}
-      templateType={writeViewProps.templateType}
-      chatModelId={chatModelId}
-      on:back={() => { currentWriteView = 'hub'; /* Go back to hub, not mode select */ }}
-      on:filesaved={handleWriteFileSaved}
-      on:loading={handleWriteLoading}
-      on:error={handleGenericError}
-    />
-  {/if}
-{/if}
-<!-- ... -->
-```
-*(You will also need to add `ListTemplates`, `SaveTemplate`, and `WeaveEntryIntoText` to your Wails bindings in `frontend/wailsjs/go/main/App.js` and `App.d.ts`. A `wails build` will do this automatically.)*
-
-# Notes
-[x] - Completed feature
-
----
-
-### **Phase 3: The `WriteView` Transformation**
-
-Now we'll overhaul `WriteView.svelte` to include the Codex panel and the drag-and-drop logic.
-
-#### 3.1. Create `DropContextMenu.svelte`
-
-This small component will show our drop options.
-
-**File: `/frontend/src/components/DropContextMenu.svelte` (New)**
-
-```svelte
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  export let x: number;
-  export let y: number;
-
-  const dispatch = createEventDispatcher();
-</script>
-
-<div class="context-menu" style="left: {x}px; top: {y}px;">
-  <button on:click={() => dispatch('action', 'reference')}>
-    <span class="icon">@</span> Insert as Reference
-  </button>
-  <button on:click={() => dispatch('action', 'weave')}>
-    <span class="icon">✨</span> Weave into Document
-  </button>
-</div>
-
-<style>
-  .context-menu {
-    position: fixed;
-    z-index: 1001;
-    background: var(--bg-secondary);
-    border: 1px solid var(--accent-primary);
-    border-radius: 8px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-    padding: 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  button {
-    background: transparent;
-    border: none;
-    color: var(--text-primary);
-    padding: 0.5rem 1rem;
-    text-align: left;
-    cursor: pointer;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  button:hover { background: var(--bg-hover-medium); }
-  .icon { font-weight: bold; color: var(--accent-secondary); }
-</style>
-```
-
-# Notes
-[x] - Completed feature
-
-#### 3.2. Major Revision of `WriteView.svelte`
-
-This is the most significant change. We'll add the Codex panel, drag-and-drop listeners, and the logic to call the new backend function.
-
-**File: `/frontend/src/components/WriteView.svelte` (Major Revision)**
-
-```svelte
-<script lang="ts">
-  // ... (keep existing imports)
-  import { GetAllEntries, WeaveEntryIntoText } from '@wailsjs/go/main/App';
-  import { database } from '@wailsjs/go/models';
-  import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
-
-  // --- Props ---
-  export let templateType: string = 'blank';
-  // ... (keep other props)
-  
-  // --- New State ---
-  let codexEntries: database.CodexEntry[] = [];
-  let codexSearchTerm: string = '';
-  let showCodexPanel: boolean = true; // Or make it a tab
-
-  let showDropMenu = false;
-  let dropMenuX = 0;
-  let dropMenuY = 0;
-  let droppedEntry: database.CodexEntry | null = null;
-  let dropCursorPosition: number = 0;
-  let isWeaving = false;
-
-  onMount(async () => {
-    // ... (keep existing onMount logic)
-    
-    // Fetch codex entries for the panel
-    try {
-      codexEntries = await GetAllEntries() || [];
-    } catch (err) {
-      dispatch('error', 'Failed to load Codex entries for reference panel.');
-    }
-  });
-
-  // --- New Drag and Drop Handlers ---
-  function handleDragStart(event: DragEvent, entry: database.CodexEntry) {
-    event.dataTransfer?.setData('application/json', JSON.stringify(entry));
-  }
-
-  function handleDrop(event: DragEvent) {
-    event.preventDefault();
-    const entryData = event.dataTransfer?.getData('application/json');
-    if (!entryData) return;
-
-    droppedEntry = JSON.parse(entryData);
-    dropMenuX = event.clientX;
-    dropMenuY = event.clientY;
-    
-    // Calculate cursor position in textarea
-    const target = event.target as HTMLTextAreaElement;
-    dropCursorPosition = target.selectionStart; // Or more complex logic to find char under cursor
-    
-    showDropMenu = true;
-  }
-
-  function handleDropMenuAction(event: CustomEvent<'reference' | 'weave'>) {
-    const action = event.detail;
-    showDropMenu = false;
-    if (!droppedEntry) return;
-
-    if (action === 'reference') {
-      const referenceText = `[@${droppedEntry.name}](codex://entry/${droppedEntry.id})`;
-      insertTextAt(referenceText, dropCursorPosition);
-    } else if (action === 'weave') {
-      performLloreWeaving();
-    }
-  }
-
-  // --- New "Weaving" Function ---
-  async function performLloreWeaving() {
-    if (!droppedEntry) return;
-    isWeaving = true;
-    dispatch('loading', true);
-    let weavingIndicator = '... weaving ...';
-    insertTextAt(weavingIndicator, dropCursorPosition);
-
-    try {
-      const generatedText = await WeaveEntryIntoText(
-        droppedEntry, 
-        writeContent.replace(weavingIndicator, ''), // Send content without the indicator
-        dropCursorPosition,
-        templateType
-      );
-
-      // Replace indicator with generated text
-      writeContent = writeContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`);
-    } catch(err) {
-      dispatch('error', `Llore-weaving failed: ${err}`);
-      writeContent = writeContent.replace(weavingIndicator, ''); // Remove indicator on error
-    } finally {
-      isWeaving = false;
-      dispatch('loading', false);
-    }
-  }
-
-  // Helper to insert text at a specific position
-  function insertTextAt(text: string, position: number) {
-    writeContent = writeContent.slice(0, position) + text + writeContent.slice(position);
-  }
-
-  // Computed property for filtered codex entries
-  $: filteredCodexEntries = codexSearchTerm 
-    ? codexEntries.filter(e => e.name.toLowerCase().includes(codexSearchTerm.toLowerCase()))
-    : codexEntries;
-
-</script>
-
-<!-- The HTML needs a significant restructure -->
-
-<div class="write-view-main-content">
-  <!-- LEFT COLUMN: Chat and Tools -->
-  <div class="left-column">
-    <!-- ... (existing chat and save tools) ... -->
-  </div>
-
-  <!-- CENTER COLUMN: Editor -->
-  <div class="center-column">
-    <!-- ... (existing editor toolbar) ... -->
-    <div class="editor-container">
-      <textarea
-        class="markdown-input"
-        on:drop={handleDrop}
-        on:dragover|preventDefault
-        {...} <!-- Keep existing bindings and event handlers -->
-      ></textarea>
-      <!-- ... (existing markdown preview) ... -->
-    </div>
-  </div>
-
-  <!-- RIGHT COLUMN: Codex Reference & AI Tools -->
-  <div class="right-column-toolbar">
-    <div class="tool-section codex-reference-panel">
-      <h4>Codex Reference</h4>
-      <input type="search" placeholder="Search Codex..." bind:value={codexSearchTerm} class="codex-search"/>
-      <div class="codex-entry-list">
-        {#each filteredCodexEntries as entry (entry.id)}
-          <div 
-            class="codex-item"
-            draggable="true"
-            on:dragstart={(e) => handleDragStart(e, entry)}
-          >
-            <strong>{entry.name}</strong>
-            <span>({entry.type})</span>
-          </div>
-        {/each}
-      </div>
-    </div>
-    <!-- ... (existing formatting and AI action tools) ... -->
-  </div>
-</div>
-
-<!-- Drop Context Menu (new) -->
-{#if showDropMenu}
-  <DropContextMenu x={dropMenuX} y={dropMenuY} on:action={handleDropMenuAction} />
-  <!-- Click outside to close -->
-  <div class="overlay" on:click={() => showDropMenu = false}></div>
-{/if}
-
-<style>
-  /* ... (keep most existing styles) ... */
-
-  /* NEW STYLES for Codex Reference Panel */
-  .codex-reference-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%; /* Or set a max-height */
-  }
-
-  .codex-search {
-    width: 100%;
-    padding: 0.5rem;
-    margin-bottom: 0.75rem;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color-medium);
-    border-radius: 4px;
-    color: var(--text-primary);
-  }
-
-  .codex-entry-list {
-    flex-grow: 1;
-    overflow-y: auto;
-  }
-
-  .codex-item {
-    padding: 0.5rem;
-    border-radius: 4px;
-    cursor: grab;
-    margin-bottom: 0.25rem;
-    border: 1px solid transparent;
-  }
-  .codex-item:hover {
-    background-color: var(--bg-hover-medium);
-    border-color: var(--border-color-strong);
-  }
-  .codex-item span { color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.5rem; }
-
-  /* Overlay for closing the context menu */
-  .overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 1000;
-  }
-
-  Excellent. Let's continue with the implementation plan, picking up right where we left off. Phase 3 focused on the big `WriteView` revision. Phase 4 will handle the `@mention` functionality and finishing touches.
-
-# Notes
-[x] - Completed feature
-
----
-
-### **Phase 4: Inline Functionality and Polish**
-
-This phase brings the dynamic, in-the-flow features to life and adds the necessary aesthetic polish.
-
-#### 4.1. Implement Inline `@mention` Autocomplete
-
-We need a way to show a dropdown of Codex entries as the user types `@`.
-
-**Step 4.1.1: Create `AutocompleteMenu.svelte`**
-
-This will be a reusable component for showing the list of entries.
-
-**File: `/frontend/src/components/AutocompleteMenu.svelte` (New)**
-
-```svelte
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { database } from '@wailsjs/go/models';
-
-  export let items: database.CodexEntry[] = [];
-  export let x: number;
-  export let y: number;
-  
-  let selectedIndex = 0;
-  const dispatch = createEventDispatcher();
-
-  function selectItem(item: database.CodexEntry) {
-    dispatch('select', item);
-  }
-
-  // Allow keyboard navigation
-  export function handleKeyDown(event: KeyboardEvent) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      selectedIndex = (selectedIndex + 1) % items.length;
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      selectedIndex = (selectedIndex - 1 + items.length) % items.length;
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault();
-      if (items[selectedIndex]) {
-        selectItem(items[selectedIndex]);
-      }
-    }
-  }
-</script>
-
-<div class="autocomplete-menu" style="left: {x}px; top: {y}px;">
-  {#if items.length > 0}
-    <ul>
-      {#each items as item, i (item.id)}
-        <li class:selected={i === selectedIndex} on:mousedown={() => selectItem(item)}>
-          <strong>{item.name}</strong>
-          <span>({item.type})</span>
-        </li>
-      {/each}
-    </ul>
-  {:else}
-    <div class="no-results">No matching entries found.</div>
-  {/if}
-</div>
-
-<style>
-  .autocomplete-menu {
-    position: fixed;
-    z-index: 1002;
-    background: var(--bg-secondary);
-    border: 1px solid var(--accent-secondary);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-    max-height: 250px;
-    overflow-y: auto;
-    min-width: 200px;
-  }
-  ul { list-style: none; margin: 0; padding: 0.25rem; }
-  li {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-radius: 4px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  li:hover, li.selected {
-    background: var(--accent-primary);
-    color: white;
-  }
-  li strong { font-weight: 500; }
-  li span { font-size: 0.8rem; color: var(--text-secondary); }
-  li:hover span, li.selected span { color: rgba(255, 255, 255, 0.7); }
-  .no-results { padding: 0.75rem; color: var(--text-secondary); }
-</style>
-```
-
-# Notes
-[x] - Completed feature
-
-**Step 4.1.2: Update `WriteView.svelte` with Autocomplete Logic**
-
-**File: `/frontend/src/components/WriteView.svelte` (Additions & Revisions)**
-
-```svelte
-<script lang="ts">
-  // ... (keep all previous imports)
-  import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
-
-  // --- New State for Autocomplete ---
-  let showAutocomplete = false;
-  let autocompleteX = 0;
-  let autocompleteY = 0;
-  let autocompleteItems: database.CodexEntry[] = [];
-  let autocompleteQuery = '';
-  let autocompleteTriggerPos = 0;
-  let autocompleteMenuRef: AutocompleteMenu;
-
-  // Function to get cursor coordinates
-  function getCursorXY() {
-    // This is a simplified approach. A real implementation might use a library
-    // or a hidden div to get precise coordinates.
-    const ta = markdownTextareaElement;
-    const style = window.getComputedStyle(ta);
-    const lineHeight = parseFloat(style.lineHeight);
-    const textUptoCursor = ta.value.substring(0, ta.selectionStart);
-    const lines = textUptoCursor.split('\n');
-    const currentLine = lines[lines.length - 1];
-    
-    // Estimate position
-    const rect = ta.getBoundingClientRect();
-    autocompleteX = rect.left + (currentLine.length * 8) + 15; // 8 is a rough char width
-    autocompleteY = rect.top + (lines.length * lineHeight) + 5;
-  }
-
-  function handleWriteViewKeydown(event: KeyboardEvent) {
-    if (showAutocomplete) {
-      autocompleteMenuRef.handleKeyDown(event);
-      return; // Let the menu handle key events
-    }
-    // ... (keep existing keydown logic for Ctrl+B/I/S and Tab)
-  }
-  
-  function handleWriteViewInput(event: Event) {
-    const ta = event.target as HTMLTextAreaElement;
-    const cursorPos = ta.selectionStart;
-    const textBeforeCursor = ta.value.substring(0, cursorPos);
-
-    const atMatch = textBeforeCursor.match(/@(\w*)$/);
-
-    if (atMatch) {
-      autocompleteTriggerPos = atMatch.index!;
-      autocompleteQuery = atMatch[1].toLowerCase();
-      
-      autocompleteItems = codexEntries.filter(e => 
-        e.name.toLowerCase().startsWith(autocompleteQuery)
-      );
-
-      if (autocompleteItems.length > 0) {
-        getCursorXY();
-        showAutocomplete = true;
-      } else {
-        showAutocomplete = false;
-      }
-    } else {
-      showAutocomplete = false;
-    }
-  }
-
-  function handleAutocompleteSelect(event: CustomEvent<database.CodexEntry>) {
-    const entry = event.detail;
-    const referenceText = `[@${entry.name}](codex://entry/${entry.id}) `;
-    
-    // Replace from the '@' trigger position
-    const textBefore = writeContent.substring(0, autocompleteTriggerPos);
-    const textAfter = writeContent.substring(autocompleteTriggerPos + autocompleteQuery.length + 1);
-    
-    writeContent = textBefore + referenceText + textAfter;
-    showAutocomplete = false;
-    
-    // Move cursor after the inserted text
-    requestAnimationFrame(() => {
-      if (!markdownTextareaElement) return;
-      const newCursorPos = autocompleteTriggerPos + referenceText.length;
-      markdownTextareaElement.focus();
-      markdownTextareaElement.selectionStart = newCursorPos;
-      markdownTextareaElement.selectionEnd = newCursorPos;
-    });
-  }
-</script>
-
-<!-- ... Inside the main div ... -->
-<div class="editor-container">
-  <textarea
-    class="markdown-input"
-    on:keydown={handleWriteViewKeydown}
-    on:input={handleWriteViewInput}
-    {...} <!-- Keep existing bindings and events -->
-  ></textarea>
-  <!-- ... markdown preview ... -->
-</div>
-
-<!-- ... -->
-
-<!-- Add the Autocomplete Menu component -->
-{#if showAutocomplete}
-  <AutocompleteMenu 
-    bind:this={autocompleteMenuRef}
-    items={autocompleteItems} 
-    x={autocompleteX} 
-    y={autocompleteY}
-    on:select={handleAutocompleteSelect}
-  />
-  <!-- Overlay to close autocomplete on click outside -->
-  <div class="overlay" on:click={() => showAutocomplete = false}></div>
-{/if}
-```
-
-# Notes
-[x] - Completed feature
-
-#### 4.2. Custom Markdown Rendering for `@mentions`
-
-We need to make our `@mentions` interactive in the preview pane.
-
-**File: `/frontend/src/components/WriteView.svelte` (Revision)**
-
-```svelte
-<script lang="ts">
-  // ... (keep imports)
-  import { Marked } from 'marked';
-
-  // --- Configure marked.js ---
-  const marked = new Marked({ gfm: true, breaks: true });
-
-  // Custom renderer for links
-  const renderer = new marked.Renderer();
-  const originalLinkRenderer = renderer.link;
-  renderer.link = (href, title, text) => {
-    if (href?.startsWith('codex://entry/')) {
-      const entryId = href.substring('codex://entry/'.length);
-      // Render as a span with special styling and a data attribute
-      return `<span class="codex-mention" data-entry-id="${entryId}" title="Codex Entry: ${text}">${text}</span>`;
-    }
-    // Fallback to default renderer for other links
-    return originalLinkRenderer.call(renderer, href, title, text);
-  };
-  marked.use({ renderer });
-
-  // ... (rest of the script tag)
-</script>
-
-<!-- ... (rest of the component) ... -->
-
-<style>
-  /* ... (keep existing styles) ... */
-
-  /* NEW STYLES for rendered @mentions */
-  .markdown-preview :global(.codex-mention) {
-    background-color: rgba(109, 94, 217, 0.2); /* Use accent color but subtle */
-    color: var(--accent-secondary);
-    padding: 0.1em 0.4em;
-    border-radius: 4px;
-    font-weight: 500;
-    cursor: help; /* Indicate it's interactive */
-    border-bottom: 1px dotted var(--accent-secondary);
-  }
-</style>
-```
-*(Note: A tooltip on hover for these mentions would require more complex JS, potentially a separate `Tooltip.svelte` component that you show/hide based on `mouseover` and `mouseout` events on `.codex-mention` elements. This is a great "next step" feature.)*
-
-# Notes
-[x] - Completed feature
-
-#### 4.3. Implement "Save as Template"
-
-This adds the final piece to the template workflow.
-
-**File: `/frontend/src/components/WriteView.svelte` (Additions)**
-
-```svelte
-<script lang="ts">
-  // ... (imports)
-  import { SaveTemplate } from '@wailsjs/go/main/App';
-
-  // --- New State ---
-  let showSaveTemplateModal = false;
-  let newTemplateName = '';
-
-  // --- New Function ---
-  async function handleSaveAsTemplate() {
-    if (!newTemplateName.trim()) {
-      // You can show an error in the modal
-      return;
-    }
-    try {
-      await SaveTemplate(newTemplateName, writeContent);
-      alert(`Template '${newTemplateName}.md' saved successfully!`);
-      showSaveTemplateModal = false;
-      newTemplateName = '';
-    } catch (err) {
-      alert(`Failed to save template: ${err}`);
-    }
-  }
-</script>
-
-<!-- Add a "Save as Template" button in the .save-tools-module -->
-<div class="save-tools-module">
-  <div class="tool-section">
-    <h4>File</h4>
-    <div class="save-buttons">
-      <!-- ... existing save buttons ... -->
-      <button class="template-btn" on:click={() => showSaveTemplateModal = true} disabled={isSaving}>Save as Template</button>
-    </div>
-    <!-- ... doc info ... -->
-  </div>
-</div>
-
-<!-- Add the new modal -->
-{#if showSaveTemplateModal}
-  <div class="modal-backdrop">
-    <div class="modal save-template-modal">
-      <h3>Save as Template</h3>
-      <p>Save the current document's content as a reusable template.</p>
-      <label for="template-name">Template Name:</label>
-      <input id="template-name" type="text" bind:value={newTemplateName} placeholder="e.g., Character Deep Dive" />
-      <div class="modal-buttons">
-        <button on:click={handleSaveAsTemplate} disabled={!newTemplateName.trim()}>Save Template</button>
-        <button on:click={() => showSaveTemplateModal = false}>Cancel</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<style>
-  /* ... */
-  .template-btn {
-    /* Style it differently, maybe with a different color */
-    background-color: #fdcb6e !important; /* A gold/yellow color */
-    color: #2d3436 !important;
-  }
-  .template-btn:hover:not(:disabled) {
-    background-color: #ffeaa7 !important;
-  }
-  /* ... */
-</style>
-```
-
-# Notes
-[x] - Completed feature
-
----
-
-### **Final Review and Summary of Changes**
-
-With these phases completed, you will have a fully integrated writing workflow.
-
-1.  **Backend:**
-    *   `vault.go` updated to create a `Templates` directory.
-    *   `app.go` has three new powerful functions: `ListTemplates`, `SaveTemplate`, and the core `WeaveEntryIntoText`.
-
-2.  **Frontend Workflow:**
-    *   Clicking "Write" now takes you to a new `WriteHub.svelte` component.
-    *   The hub lets you start from a blank slate, a built-in template, or a custom template.
-    *   `App.svelte` is updated to manage this new "hub-then-editor" flow.
-
-3.  **`WriteView.svelte` Enhancements:**
-    *   **Codex Panel:** A new searchable, draggable list of all Codex entries is available in the right-hand sidebar.
-    *   **Llore-Weaving:** Dragging an entry onto the editor presents a choice: simple reference or intelligent weaving. The weaving action calls your new backend function to generate context-aware text.
-    *   **`@mentions`:** Typing `@` triggers an `AutocompleteMenu.svelte` component, allowing for quick, in-line referencing of Codex entries.
-    *   **Custom Rendering:** The Markdown preview now highlights `@mentions`, making them visually distinct and ready for future interactivity (like tooltips).
-    *   **Save as Template:** A new button and modal allow the current document to be saved as a reusable template in the vault.
-
-This plan provides a robust and feature-rich implementation that directly addresses your goals. By building it out in these phases, you can tackle the logic systematically, from the data layer up to the user interface. Good luck, and I'm excited to see Llore come to life with these powerful new capabilities
+This completes the implementation plan. You have a robust fix for the save functionality and a well-designed, powerful new feature that deeply integrates your application's core strengths—the Codex and AI—directly into the writing process.

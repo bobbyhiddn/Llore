@@ -28,9 +28,14 @@
   function startWriting(content: string, templateType: string) {
     dispatch('startwriting', { initialContent: content, templateType });
   }
+
+  function goBackToModeSelection() {
+    dispatch('backtomodeselection');
+  }
 </script>
 
 <div class="write-hub-container">
+  <button class="back-btn" on:click={goBackToModeSelection}>← Back to Mode Selection</button>
   <h2>Start a New Document</h2>
   <div class="options-grid">
     <!-- Blank Document Card -->
@@ -66,6 +71,26 @@
 </div>
 
 <style>
+  .back-btn {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .back-btn:hover {
+    background: var(--bg-hover-medium);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+  }
+  
   .write-hub-container { padding: 2rem; text-align: center; }
   h2 { color: var(--text-primary); margin-bottom: 2rem; }
   .options-grid {

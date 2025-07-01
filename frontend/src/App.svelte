@@ -85,17 +85,16 @@
   let chatViewRef: ChatView | null = null;
   let storyImportViewRef: StoryImportView | null = null;
   let settingsViewRef: SettingsView | null = null;
-  
-  // Variables for WriteView initial content when opening from library
-  let writeViewInitialContent: string = '';
-  let writeViewInitialFilename: string = '';
+  let writeViewRef: WriteView | null = null; // For calling child methods
 
-  // NEW state to manage the Write mode's view
+  // --- Write Mode State ---
   let currentWriteView: 'hub' | 'editor' = 'hub';
-  let writeViewProps = {
-    initialContent: '',
-    initialFilename: '',
-    templateType: 'blank'
+  // -- NEW/REVISED State for Active Document --
+  let activeDocument = {
+    content: '',
+    filename: '',
+    templateType: 'blank',
+    isDirty: false
   };
 
   // --- Interfaces --- (Keep if needed globally, or move to models.ts if applicable)
@@ -1011,7 +1010,7 @@
       console.log(`Write file saved: ${filename}`);
   }
   
-  // Handle opening a library file in Write mode
+  // REVISE handler for editing a file from the library
   async function handleEditInWriteMode(event: CustomEvent<string>) {
     const filename = event.detail;
     if (!vaultIsReady) {
@@ -1022,13 +1021,12 @@
     libraryErrorMsg = '';
     try {
       const content = await ReadLibraryFile(filename);
-      // Set props for the editor view
-      writeViewProps = {
-        initialContent: content,
-        initialFilename: filename,
-        templateType: 'chapter' // Assume library files are chapters, or determine from metadata later
+      activeDocument = {
+        content: content,
+        filename: filename,
+        templateType: 'chapter', // Assumption, can be improved later
+        isDirty: false
       };
-      // Set mode to 'write' and view to 'editor'
       mode = 'write';
       currentWriteView = 'editor';
     } catch (err) {
@@ -1040,37 +1038,53 @@
     }
   }
 
-  // NEW handler for starting to write from the hub
+  // REVISE handler for starting to write from the hub
   function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
-    writeViewProps = {
-      initialContent: event.detail.initialContent,
-      initialFilename: '', // It's a new document
-      templateType: event.detail.templateType
+    activeDocument = {
+      content: event.detail.initialContent,
+      filename: '', // New document
+      templateType: event.detail.templateType,
+      isDirty: false // It's a fresh document/template
     };
     currentWriteView = 'editor';
   }
 
-  // NEW handler for loading a custom template
-  async function handleLoadCustomTemplate(event: CustomEvent<string>) {
-    const filename = event.detail;
-    // We need a new backend function to read a template file, let's assume it exists for now
-    // For simplicity, we can reuse ReadLibraryFile but point it to the Templates dir
-    // Let's create `ReadTemplateFile` in backend. For now, we'll imagine it.
-    // --> We will just reuse `ReadLibraryFile` but need to make the backend aware.
-    // For now, let's assume `ReadLibraryFile` can handle `Templates/file.md`
-    try {
-      const content = await ReadLibraryFile(`../Templates/${filename}`); // A bit of a hack, better to have a dedicated func
-      writeViewProps = {
-        initialContent: content,
-        initialFilename: '',
-        templateType: filename.replace('.md', '') // Use filename as template type
-      };
-      currentWriteView = 'editor';
-    } catch (err) {
-      // dispatch global error
-      handleGenericError(new CustomEvent('error', { detail: `Failed to load template: ${err}` }));
+  // NEW handler for content changes from WriteView
+  function handleContentUpdate(event: CustomEvent<string>) {
+    const newContent = event.detail;
+    if (activeDocument.content !== newContent) {
+      activeDocument.content = newContent;
+      activeDocument.isDirty = true;
     }
   }
+
+  // NEW handler for Save/Save As events from WriteView
+  async function handleSaveRequest(event: CustomEvent<{ filename: string, isSaveAs: boolean }>) {
+    const { filename, isSaveAs } = event.detail;
+    
+    // Use a reference to the WriteView to call back with status
+    writeViewRef?.setSavingState(true, ''); // Start saving, clear previous messages
+
+    try {
+      await SaveLibraryFile(filename, activeDocument.content);
+      
+      // Update app state on successful save
+      activeDocument.filename = filename;
+      activeDocument.isDirty = false;
+      
+      // Notify WriteView of success
+      writeViewRef?.setSavingState(false, `File '${filename}' saved successfully!`);
+
+      // Notify App of file list change
+      handleWriteFileSaved(new CustomEvent('filesaved', { detail: filename }));
+
+    } catch (err) {
+      const errorMsg = `Failed to save file: ${err}`;
+      console.error("Save Error in App.svelte:", err);
+      writeViewRef?.setSavingState(false, '', errorMsg); // Send error back to view
+    }
+  }
+
 
   // Function to manually reset UI state when the debug button is clicked
   function handleResetState() {
@@ -1207,16 +1221,19 @@
   {:else if mode === 'write'}
     {#if currentWriteView === 'hub'}
       <WriteHub
-        on:startwriting={handleStartWriting}
-        on:loadtemplate={handleLoadCustomTemplate}
-        on:back={() => { mode = null; currentWriteView = 'hub'; }}
-      />
+       on:startwriting={handleStartWriting}
+       on:backtomodeselection={() => { mode = null; currentWriteView = 'hub'; }}
+     />
     {:else}
       <WriteView
-        initialContent={writeViewProps.initialContent}
-        initialFilename={writeViewProps.initialFilename}
-        templateType={writeViewProps.templateType}
+        bind:this={writeViewRef}
+        documentContent={activeDocument.content}
+        documentFilename={activeDocument.filename}
+        isDocumentDirty={activeDocument.isDirty}
+        templateType={activeDocument.templateType}
         chatModelId={chatModelId}
+        on:updatecontent={handleContentUpdate}
+        on:saverequest={handleSaveRequest}
         on:back={() => { currentWriteView = 'hub'; /* Go back to hub, not mode select */ }}
         on:filesaved={handleWriteFileSaved}
         on:loading={handleWriteLoading}

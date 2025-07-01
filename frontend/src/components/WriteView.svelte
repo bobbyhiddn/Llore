@@ -5,39 +5,31 @@
   import { database } from '@wailsjs/go/models';
   import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
   import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
+  import CodexSelectorModal from './CodexSelectorModal.svelte';
 
-  // --- Props ---
-  export let initialContent: string = ''; // If loading existing content
-  export let initialFilename: string = ''; // If loading existing content
-  export let chatModelId: string = ''; // From global settings
+  // --- REVISED Props ---
+  export let documentContent: string = '';
+  export let documentFilename: string = '';
+  export let isDocumentDirty: boolean = false;
   export let templateType: string = 'blank';
+  export let chatModelId: string = ''; // From global settings
 
-  // Local State for Editor and Content
-  let writeContent: string = ''; // Initialized in onMount
+  // --- Local State for UI/Modals ---
   let renderedWriteHtml = '';
   let markdownTextareaElement: HTMLTextAreaElement;
   let editorMode: 'split' | 'edit' | 'preview' = 'split';
-  
-  // State for Dirty Checking, Word/Char Count
-  let isDirty: boolean = false;
   let wordCount: number = 0;
   let charCount: number = 0;
-  let baselineContentForDirtyCheck: string = ''; // Stores content as of last load/save
-
-  // Write Mode Chat State
   let writeChatDisplayElement: HTMLDivElement; // For auto-scrolling
   let writeChatMessages: { sender: 'user' | 'ai', text: string }[] = [];
   let writeChatInput: string = '';
   let isWriteChatLoading: boolean = false;
   let writeChatError: string = '';
-
-  // Save State
   let showWriteSaveModal: boolean = false;
   let filenameForSaveModal: string = ''; // Filename input in the modal
-  let currentDocumentFilename: string = ''; // The actual filename of the current document (after load/save)
-  let isSaving: boolean = false;
-  let writeSaveError: string = '';
-  let writeSaveSuccess: string = '';
+  let isSaving = false;
+  let writeSaveError = '';
+  let writeSaveSuccess = '';
   let isSaveAsOperation: boolean = false;
 
   // --- New State ---
@@ -49,6 +41,16 @@
   let dropMenuX = 0;
   let dropMenuY = 0;
   let droppedEntry: database.CodexEntry | null = null;
+  let showCodexSelector = false;
+  let activeWritingWeave: { type: string, label: string } | null = null;
+  let writingWeaveCursorPos = 0;
+  const writingWeaves = [
+    { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
+    { type: 'exposition', label: 'Exposition', description: 'Explain background or world details.', icon: '🌍' },
+    { type: 'dialogue', label: 'Dialogue', description: 'Write a conversation between characters.', icon: '💬' },
+    { type: 'description', label: 'Description', description: 'Describe a character, object, or scene.', icon: '🎨' },
+    { type: 'introspection', label: 'Introspection', description: 'Explore a character\'s internal thoughts.', icon: '🧠' },
+  ];
   let dropCursorPosition: number = 0;
   let isWeaving = false;
 
@@ -65,49 +67,16 @@
   let showSaveTemplateModal = false;
   let newTemplateName = '';
 
-
   const dispatch = createEventDispatcher();
   const marked = new Marked({ gfm: true, breaks: true });
 
   // Custom renderer for links
-  const renderer = new marked.Renderer();
-  const originalLinkRenderer = renderer.link;
-  renderer.link = (href, title, text) => {
-    if (href && href.startsWith('codex://entry/')) {
-      const entryId = href.substring('codex://entry/'.length);
-      return `<span class="codex-mention" data-entry-id="${entryId}" title="Codex Entry: ${text}">${text}</span>`;
-    }
-    return false; // Returning false tells marked to use the default renderer
-  };
-  marked.use({ renderer });
-
-  // --- Debounced Markdown Rendering ---
-  let renderTimeout: number;
-  function scheduleRender(text: string) {
-      clearTimeout(renderTimeout);
-      renderTimeout = window.setTimeout(() => {
-          renderMarkdown(text);
-      }, 200); // 200ms debounce
-  }
-
-  function renderMarkdown(text: string) {
-    try {
-      const result = marked.parse(text || '');
-      renderedWriteHtml = typeof result === 'string' ? result : String(result);
-    } catch (err) {
-      console.error("Markdown rendering error:", err);
-      renderedWriteHtml = `<p style="color:red;">Error rendering Markdown. Check console.</p><pre>${text.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
-    }
-  }
+  // Custom renderer for links has been temporarily removed to resolve a build issue.
+  // TODO: Re-implement the custom renderer with the correct signature for the installed marked version.
 
   // --- Lifecycle ---
   onMount(async () => {
-      writeContent = initialContent;
-      baselineContentForDirtyCheck = initialContent;
-      currentDocumentFilename = initialFilename;
-      filenameForSaveModal = initialFilename || 'untitled.md'; // Default for modal
-      renderMarkdown(writeContent); // Initial render
-      updateCounts(writeContent);
+      filenameForSaveModal = documentFilename || 'untitled.md'; // Default for modal
       
       // Focus editor on mount if in edit or split mode
       if (editorMode === 'edit' || editorMode === 'split') {
@@ -122,14 +91,20 @@
       }
   });
 
-  // Reactive Updates for Content Changes
-  $: {
-    if (writeContent !== undefined) { // Check ensures it runs after onMount initialization
-      scheduleRender(writeContent);
-      isDirty = writeContent !== baselineContentForDirtyCheck;
-      updateCounts(writeContent);
-    }
+  // --- REVISED Logic ---
+  // The parent will pass down the new rendered HTML when content changes.
+  $: if (documentContent !== undefined) {
+    (async () => {
+      try {
+        const result = await marked.parse(documentContent || '');
+        renderedWriteHtml = result;
+      } catch (e) {
+        console.error("Markdown parsing error:", e);
+        renderedWriteHtml = "Error parsing markdown.";
+      }
+    })();
   }
+  $: updateCounts(documentContent);
 
   function updateCounts(text: string) {
       charCount = text.length;
@@ -158,9 +133,9 @@
     if (!markdownTextareaElement) return;
     const start = markdownTextareaElement.selectionStart;
     const end = markdownTextareaElement.selectionEnd;
-    const currentText = writeContent;
+    const currentText = documentContent;
 
-    writeContent = currentText.substring(0, start) + textToInsert + currentText.substring(end);
+    dispatch('updatecontent', currentText.substring(0, start) + textToInsert + currentText.substring(end));
     
     // Use requestAnimationFrame to ensure DOM updates (textarea value) before setting selection
     requestAnimationFrame(() => {
@@ -174,8 +149,7 @@
 
   // --- General Functions ---
   function goBack() {
-    // TODO: Add confirmation if isDirty
-    if (isDirty && !confirm("You have unsaved changes. Are you sure you want to leave?")) {
+    if (isDocumentDirty && !confirm("You have unsaved changes. Are you sure you want to leave?")) {
         return;
     }
     dispatch('back');
@@ -231,7 +205,7 @@
 
     if (!finalPrompt) { // Regular chat message, build prompt with context
         // Build prompt with draft context
-        const draftContext = writeContent.length > 2000 ? writeContent.substring(0, 2000) + "\n...[Draft Truncated]..." : writeContent;
+        const draftContext = documentContent.length > 2000 ? documentContent.substring(0, 2000) + "\n...[Draft Truncated]..." : documentContent;
         finalPrompt = `System: You are an AI writing assistant. The user is working on the following draft:\n<draft>\n${draftContext}\n</draft>\n\n`;
 
         finalPrompt += `Recent Chat History (user and AI):\n`;
@@ -282,77 +256,57 @@
       writeSaveSuccess = '';
       isSaveAsOperation = isSaveAs;
 
-      if (isSaveAs || !currentDocumentFilename) {
+      if (isSaveAs || !documentFilename) {
           // For "Save As" or if no current filename, suggest based on content or use "untitled"
-          if (currentDocumentFilename && isSaveAs) {
-              const baseName = currentDocumentFilename.replace(/\.[^/.]+$/, '');
+          if (documentFilename && isSaveAs) {
+              const baseName = documentFilename.replace(/\.[^/.]+$/, '');
               filenameForSaveModal = `${baseName}_copy.md`;
-          } else if (writeContent.trim()) {
-              const firstLine = writeContent.trim().split('\n')[0];
+          } else if (documentContent.trim()) {
+              const firstLine = documentContent.trim().split('\n')[0];
               filenameForSaveModal = firstLine.substring(0, 30).replace(/[^a-z0-9\s._-]/gi, '').replace(/\s+/g, '-') + '.md';
           } else {
               filenameForSaveModal = 'untitled.md';
           }
       } else {
           // For regular "Save", use the current document's filename
-          filenameForSaveModal = currentDocumentFilename;
+          filenameForSaveModal = documentFilename;
       }
       showWriteSaveModal = true;
   }
 
-  // Direct Save (used by "Save" button in tools if filename exists)
-  async function handleDirectSave() {
-    console.log("handleDirectSave called");
-    if (!currentDocumentFilename) {
-        console.log("currentDocumentFilename is empty, opening save modal");
-        openSaveModal(false); // If no filename, open modal as if it's the first save
-        return;
+  // REVISE event handlers
+  function handleDirectSave() {
+    if (!documentFilename) {
+      openSaveModal(false); // Still need to prompt for name if it's a new doc
+    } else {
+      // Dispatch a request to the parent to save with the current filename
+      dispatch('saverequest', { filename: documentFilename, isSaveAs: false });
     }
-    filenameForSaveModal = currentDocumentFilename; // Ensure modal uses current filename
-    console.log("Calling doSave for", filenameForSaveModal);
-    await doSave();
   }
 
-  // Actual save logic, called by modal or direct save
-  async function doSave() {
+  function doSaveFromModal() {
+    // This function now only dispatches the save request with the new filename
     if (!filenameForSaveModal.trim()) {
       writeSaveError = 'Filename cannot be empty.';
       return;
     }
-    let finalFilenameToSave = filenameForSaveModal.trim();
-    if (!finalFilenameToSave.toLowerCase().endsWith('.md')) {
-      finalFilenameToSave += '.md';
-    }
+    let finalFilename = filenameForSaveModal.trim();
+    if (!finalFilename.toLowerCase().endsWith('.md')) finalFilename += '.md';
+    
+    dispatch('saverequest', { filename: finalFilename, isSaveAs: isSaveAsOperation });
+  }
 
-    writeSaveError = '';
-    writeSaveSuccess = '';
-    isSaving = true;
-    dispatch('loading', true);
-
-    try {
-      await SaveLibraryFile(finalFilenameToSave, writeContent);
-      
-      currentDocumentFilename = finalFilenameToSave; // Update the current document's filename
-      baselineContentForDirtyCheck = writeContent;   // Update baseline content
-      isDirty = false;                               // Reset dirty state
-
-      writeSaveSuccess = `File '${finalFilenameToSave}' saved successfully!`;
-      if (!isSaveAsOperation && showWriteSaveModal) { // Only close modal if it wasn't "Save As" that just completed
-          // Or always close? User might want to keep it open for "Save As" to see success.
-          // Let's close it for now.
-          setTimeout(() => { showWriteSaveModal = false; }, 1500); // Close after a delay
-      } else if (isSaveAsOperation) {
-          showWriteSaveModal = false; // Close immediately for "Save As"
-      }
-
-      dispatch('filesaved', finalFilenameToSave);
-    } catch (err) {
-      writeSaveError = `Failed to save file: ${err}`;
-      console.error("Save Write Content Error:", err);
-      dispatch('error', writeSaveError);
-    } finally {
-      isSaving = false;
-      dispatch('loading', false);
+  // NEW functions to be called by parent App.svelte
+  export function setSavingState(saving: boolean, successMsg: string = '', errorMsg: string = '') {
+    isSaving = saving;
+    writeSaveSuccess = successMsg;
+    writeSaveError = errorMsg;
+    
+    if (successMsg) {
+      setTimeout(() => {
+        writeSaveSuccess = '';
+        if (showWriteSaveModal) showWriteSaveModal = false;
+      }, 2000);
     }
   }
 
@@ -362,7 +316,7 @@
 
     const start = markdownTextareaElement.selectionStart;
     const end = markdownTextareaElement.selectionEnd;
-    const selectedText = writeContent.substring(start, end);
+    const selectedText = documentContent.substring(start, end);
     let prefix = '';
     let suffix = '';
     let blockPrefix = ''; // For formats applied to the start of the line
@@ -397,25 +351,25 @@
 
         if (blockPrefix) {
             // Apply block formats to the start of the current or selected line(s)
-            const lineStart = writeContent.lastIndexOf('\n', start - 1) + 1;
+            const lineStart = documentContent.lastIndexOf('\n', start - 1) + 1;
             // For block quotes, we might need to apply to multiple lines if selected
             if (formatType === 'blockquote' && selectedText.includes('\n')) {
                  const lines = selectedText.split('\n');
                  const prefixedLines = lines.map(line => blockPrefix + line).join('\n');
-                 writeContent = writeContent.substring(0, start) + prefixedLines + writeContent.substring(end);
+                 dispatch('updatecontent', documentContent.substring(0, start) + prefixedLines + documentContent.substring(end));
                  markdownTextareaElement.selectionStart = start;
                  markdownTextareaElement.selectionEnd = start + prefixedLines.length;
             } else {
                  // Apply prefix at the beginning of the line for headings
-                 writeContent = writeContent.substring(0, lineStart) + blockPrefix + writeContent.substring(lineStart);
+                 dispatch('updatecontent', documentContent.substring(0, lineStart) + blockPrefix + documentContent.substring(lineStart));
                  // Adjust selection points after adding prefix
                  markdownTextareaElement.selectionStart = start + blockPrefix.length;
                  markdownTextareaElement.selectionEnd = end + blockPrefix.length;
             }
         } else {
             // Apply inline formats (bold, italic, code)
-            const newText = writeContent.substring(0, start) + prefix + selectedText + suffix + writeContent.substring(end);
-            writeContent = newText;
+            const newText = documentContent.substring(0, start) + prefix + selectedText + suffix + documentContent.substring(end);
+            dispatch('updatecontent', newText);
 
             if (selectedText) {
               // If text was selected, select the newly formatted text
@@ -438,18 +392,40 @@
 
   function handleDrop(event: DragEvent) {
     event.preventDefault();
-    const entryData = event.dataTransfer?.getData('application/json');
-    if (!entryData) return;
+    event.stopPropagation();
 
-    droppedEntry = JSON.parse(entryData);
-    dropMenuX = event.clientX;
-    dropMenuY = event.clientY;
-    
-    // Calculate cursor position in textarea
-    const target = event.target as HTMLTextAreaElement;
-    dropCursorPosition = target.selectionStart; // Or more complex logic to find char under cursor
-    
-    showDropMenu = true;
+    if (!event.dataTransfer || !markdownTextareaElement) return;
+
+    const jsonData = event.dataTransfer.getData('application/json');
+    const textData = event.dataTransfer.getData('text/plain');
+
+    if (jsonData) {
+      droppedEntry = JSON.parse(jsonData);
+      dropMenuX = event.clientX;
+      dropMenuY = event.clientY;
+      const target = event.target as HTMLTextAreaElement;
+      dropCursorPosition = target.selectionStart;
+      showDropMenu = true;
+    } else if (textData) {
+      try {
+        const dropData = JSON.parse(textData);
+        if (dropData.type === 'writing-weave') {
+          const cursorPos = getCursorPositionFromMouseEvent(event);
+          activeWritingWeave = dropData.weave;
+          writingWeaveCursorPos = cursorPos;
+          showCodexSelector = true;
+        }
+      } catch (e) {
+        const cursorPos = getCursorPositionFromMouseEvent(event);
+        insertTextAt(textData, cursorPos);
+      }
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      showWriteSaveModal = false;
+    }
   }
 
   function handleDropMenuAction(event: CustomEvent<'reference' | 'weave'>) {
@@ -475,17 +451,17 @@
 
     try {
       const generatedText = await WeaveEntryIntoText(
-        droppedEntry, 
-        writeContent.replace(weavingIndicator, ''), // Send content without the indicator
+        droppedEntry,
+        documentContent.replace(weavingIndicator, ''), // Send content without the indicator
         dropCursorPosition,
         templateType
       );
 
       // Replace indicator with generated text
-      writeContent = writeContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`);
+      dispatch('updatecontent', documentContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`));
     } catch(err) {
       dispatch('error', `Llore-weaving failed: ${err}`);
-      writeContent = writeContent.replace(weavingIndicator, ''); // Remove indicator on error
+      dispatch('updatecontent', documentContent.replace(weavingIndicator, '')); // Remove indicator on error
     } finally {
       isWeaving = false;
       dispatch('loading', false);
@@ -494,7 +470,7 @@
 
   // Helper to insert text at a specific position
   function insertTextAt(text: string, position: number) {
-    writeContent = writeContent.slice(0, position) + text + writeContent.slice(position);
+    dispatch('updatecontent', documentContent.slice(0, position) + text + documentContent.slice(position));
   }
 
   // Computed property for filtered codex entries
@@ -527,11 +503,13 @@
     // ... (keep existing keydown logic for Ctrl+B/I/S and Tab)
   }
   
-  function handleWriteViewInput(event: Event) {
-    const ta = event.target as HTMLTextAreaElement;
-    const cursorPos = ta.selectionStart;
-    const textBeforeCursor = ta.value.substring(0, cursorPos);
+  function handleInput(event: Event) {
+    const target = event.target as HTMLTextAreaElement;
+    dispatch('updatecontent', target.value);
 
+    // Also handle autocomplete logic
+    const cursorPos = target.selectionStart;
+    const textBeforeCursor = target.value.substring(0, cursorPos);
     const atMatch = textBeforeCursor.match(/@(\w*)$/);
 
     if (atMatch) {
@@ -558,10 +536,10 @@
     const referenceText = `[@${entry.name}](codex://entry/${entry.id}) `;
     
     // Replace from the '@' trigger position
-    const textBefore = writeContent.substring(0, autocompleteTriggerPos);
-    const textAfter = writeContent.substring(autocompleteTriggerPos + autocompleteQuery.length + 1);
+    const textBefore = documentContent.substring(0, autocompleteTriggerPos);
+    const textAfter = documentContent.substring(autocompleteTriggerPos + autocompleteQuery.length + 1);
     
-    writeContent = textBefore + referenceText + textAfter;
+    dispatch('updatecontent', textBefore + referenceText + textAfter);
     showAutocomplete = false;
     
     // Move cursor after the inserted text
@@ -580,7 +558,7 @@
       return;
     }
     try {
-      await SaveTemplate(newTemplateName, writeContent);
+      await SaveTemplate(newTemplateName, documentContent);
       alert(`Template '${newTemplateName}.md' saved successfully!`);
       showSaveTemplateModal = false;
       newTemplateName = '';
@@ -588,9 +566,93 @@
       alert(`Failed to save template: ${err}`);
     }
   }
+
+  // NEW: The core function that is called after the user selects their context entries (or none)
+  async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[] }>) {
+    const { selectedEntries } = event.detail;
+    showCodexSelector = false;
+    
+    if (!activeWritingWeave) return;
+
+    isWeaving = true; // Use the same flag as Llore-weaving
+    dispatch('loading', true);
+    const weavingIndicator = `... weaving ${activeWritingWeave.label.toLowerCase()} ...`;
+    insertTextAt(weavingIndicator, writingWeaveCursorPos);
+
+    try {
+      // Step 1: Create a custom prompt for writing weaving
+      const cleanContent = documentContent.replace(weavingIndicator, '');
+      const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
+      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nDocument content:\n${cleanContent}\n\nContext entries to consider for inspiration:\n${contextEntries || 'No specific context provided.'}\n\nBased on the weave type and the context, generate only the text to be inserted at the cursor position. The text should blend seamlessly.`;
+      
+      const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
+      
+      // Step 2: Replace the indicator with the AI's response
+      dispatch('updatecontent', documentContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`));
+
+    } catch (err) {
+      dispatch('error', `Writing Weaving failed: ${err}`);
+      dispatch('updatecontent', documentContent.replace(weavingIndicator, '')); // Clean up on error
+    } finally {
+      isWeaving = false;
+      dispatch('loading', false);
+      activeWritingWeave = null; // Reset for next use
+    }
+  }
+
+  function openWritingWeave(event: MouseEvent, node: { type: string, label: string }) {
+    event.stopPropagation();
+    if (!markdownTextareaElement) return;
+    
+    activeWritingWeave = node;
+    writingWeaveCursorPos = markdownTextareaElement.selectionStart;
+    showCodexSelector = true;
+  }
+
+  // NEW: Handle drag start for writing weave buttons
+  function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string }) {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'writing-weave', weave }));
+    event.dataTransfer.effectAllowed = 'copy';
+  }
+
+
+
+  // Helper function to get cursor position from mouse event
+  function getCursorPositionFromMouseEvent(event: DragEvent): number {
+    if (!markdownTextareaElement) return 0;
+    
+    // Calculate approximate cursor position based on mouse coordinates
+    const rect = markdownTextareaElement.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    // Simple approximation - in a real implementation you'd want more precise calculation
+    const lineHeight = 20; // Approximate line height
+    const charWidth = 8; // Approximate character width
+    const line = Math.floor(y / lineHeight);
+    const col = Math.floor(x / charWidth);
+    
+    const lines = markdownTextareaElement.value.split('\n');
+    let position = 0;
+    
+    for (let i = 0; i < Math.min(line, lines.length - 1); i++) {
+      position += lines[i].length + 1; // +1 for newline
+    }
+    
+    if (line < lines.length) {
+      position += Math.min(col, lines[line]?.length || 0);
+    }
+    
+    return position;
+  }
 </script>
 
-<button class="back-btn" on:click={goBack}>← Back to Mode Choice</button>
+
+
+
+
+<button class="back-btn" on:click={goBack}>← Back to Write Hub</button>
 
 <div class="write-view-main-content">
   <!-- LEFT COLUMN: Chat and Tools -->
@@ -628,8 +690,8 @@
       <div class="tool-section">
         <h4>File</h4>
         <div class="save-buttons">
-          <button class="save-btn" on:click={handleDirectSave} disabled={isSaving || !isDirty}>
-            Save {#if isDirty && currentDocumentFilename}*{/if}
+          <button class="save-btn" on:click={handleDirectSave} disabled={isSaving || !isDocumentDirty}>
+            Save {#if isDocumentDirty && documentFilename}*{/if}
           </button>
           <button class="save-as-btn" on:click={() => openSaveModal(true)} disabled={isSaving}>Save As...</button>
           <button class="template-btn" on:click={() => showSaveTemplateModal = true} disabled={isSaving}>Save as Template</button>
@@ -652,20 +714,20 @@
         <button class:active={editorMode === 'preview'} on:click={() => editorMode = 'preview'} title="Preview mode">👁️ Preview</button>
       </div>
       <div class="current-file-display">
-        {currentDocumentFilename || "New Document"}{#if isDirty && currentDocumentFilename}*{/if}
+        {documentFilename || "New Document"}{#if isDocumentDirty && documentFilename}*{/if}
       </div>
     </div>
     <div class="editor-container">
       <textarea
         class="markdown-input"
-        bind:value={writeContent}
+        value={documentContent}
+        on:input={handleInput}
         bind:this={markdownTextareaElement}
         placeholder="Start writing your masterpiece (Markdown supported)..."
         style="display: {editorMode === 'preview' ? 'none' : 'block'}"
         on:drop={handleDrop}
         on:dragover|preventDefault
         on:keydown={handleWriteViewKeydown}
-        on:input={handleWriteViewInput}
       ></textarea>
       <div 
         class="markdown-preview-container"
@@ -711,7 +773,7 @@
         <button on:click={() => applyMarkdownFormat('h1')} title="Heading 1">H1</button>
         <button on:click={() => applyMarkdownFormat('h2')} title="Heading 2">H2</button>
         <button on:click={() => applyMarkdownFormat('h3')} title="Heading 3">H3</button>
-        <button on:click={() => applyMarkdownFormat('code')} title="Code (`code`)">{"</>"}}</button>
+        <button on:click={() => applyMarkdownFormat('code')} title="Code (`code`)">{"</>"}</button>
         <button on:click={() => applyMarkdownFormat('blockquote')} title="Blockquote (> text)">" "</button>
       </div>
     </div>
@@ -721,6 +783,23 @@
         <button on:click={() => handleToolAction('summarize')} title="Summarize selected text via chat">Summarize</button>
         <button on:click={() => handleToolAction('rephrase')} title="Rephrase selected text via chat">Rephrase</button>
         <button on:click={() => handleToolAction('continue')} title="Ask AI to continue writing from cursor via chat">Continue</button>
+      </div>
+    </div>
+    
+    <!-- Writing Weaving Section -->
+    <div class="tool-section">
+      <h4>Writing Weaving</h4>
+      <div class="writing-weave-buttons">
+        {#each writingWeaves as weave (weave.type)}
+          <button 
+            on:click={(e) => openWritingWeave(e, weave)} 
+            title={weave.description}
+            draggable="true"
+            on:dragstart={(e) => handleWeaveButtonDragStart(e, weave)}
+          >
+            <span class="icon">{weave.icon}</span> {weave.label}
+          </button>
+        {/each}
       </div>
     </div>
   </div>
@@ -750,8 +829,8 @@
 {#if showWriteSaveModal}
   <div class="modal-backdrop">
     <div class="modal save-write-modal">
-      <h3>{isSaveAsOperation || !currentDocumentFilename ? 'Save As' : 'Save File'}</h3>
-      <label for="write-filename">Filename: {isDirty ? '*' : ''}</label>
+      <h3>{isSaveAsOperation || !documentFilename ? 'Save As' : 'Save File'}</h3>
+      <label for="write-filename">Filename: {isDocumentDirty ? '*' : ''}</label>
       <input id="write-filename" type="text" bind:value={filenameForSaveModal} placeholder="e.g., chapter-one.md">
       {#if writeSaveError}
         <p class="error-message small">{writeSaveError}</p>
@@ -760,7 +839,7 @@
         <p class="success-message small">{writeSaveSuccess}</p>
       {/if}
       <div class="modal-buttons">
-        <button on:click={doSave} disabled={isSaving || !filenameForSaveModal.trim()}>
+        <button on:click={doSaveFromModal} disabled={isSaving || !filenameForSaveModal.trim()}>
             {#if isSaving}Saving...{:else}Save{/if}
         </button>
         <button on:click={() => { showWriteSaveModal = false; writeSaveSuccess = ''; writeSaveError = ''; }} disabled={isSaving}>Cancel</button>
@@ -1207,6 +1286,31 @@
       color: var(--text-primary, #e0e0e0); /* Icon color on hover */
   }
 
+  /* Writing Weaving Button Styles */
+  .writing-weave-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .writing-weave-buttons button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-align: left;
+    cursor: grab;
+  }
+  
+  .writing-weave-buttons button:active {
+    cursor: grabbing;
+  }
+  
+  .writing-weave-buttons button .icon {
+    font-size: 1.2em;
+    width: 1.5em;
+    text-align: center;
+  }
+
   .status-bar {
     padding: 0.5rem 1rem;
     font-size: 0.8rem;
@@ -1215,4 +1319,139 @@
     border-top: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
     text-align: right;
   }
+
+  /* Save Modal Styles */
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 8px;
+    padding: 1.5rem;
+    min-width: 400px;
+    max-width: 500px;
+  }
+
+  .modal h3 {
+    margin: 0 0 1rem 0;
+    color: var(--text-primary);
+  }
+
+  .modal-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .filename-input {
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1rem;
+  }
+
+  .modal-buttons {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+
+  .modal-buttons button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .cancel-btn {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color-medium);
+  }
+
+  .cancel-btn:hover {
+    background: var(--bg-hover-medium);
+  }
+
+  .save-btn {
+    background: var(--accent-primary);
+    color: white;
+  }
+
+  .save-btn:hover:not(:disabled) {
+    background: var(--accent-secondary);
+  }
+
+  .save-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .error-message {
+    color: #ff6b6b;
+    font-size: 0.9rem;
+    margin: 0;
+  }
+
+  .success-message {
+    color: #51cf66;
+    font-size: 0.9rem;
+    margin: 0;
+  }
 </style>
+
+<!-- Save Modal -->
+{#if showWriteSaveModal}
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={() => showWriteSaveModal = false} on:keydown={handleKeyDown}>
+    <div class="modal save-modal" role="dialog" aria-modal="true">
+      <h3>{isSaveAsOperation ? 'Save As' : 'Save'}</h3>
+      <div class="modal-content">
+        <label for="filename-input">Filename:</label>
+        <input 
+          id="filename-input"
+          type="text" 
+          bind:value={filenameForSaveModal} 
+          placeholder="Enter filename..."
+          class="filename-input"
+        />
+        <div class="modal-buttons">
+          <button class="cancel-btn" on:click={() => showWriteSaveModal = false}>Cancel</button>
+          <button class="save-btn" on:click={doSaveFromModal} disabled={isSaving || !filenameForSaveModal.trim()}>
+            {isSaving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+        {#if writeSaveError}
+          <p class="error-message">{writeSaveError}</p>
+        {/if}
+        {#if writeSaveSuccess}
+          <p class="success-message">{writeSaveSuccess}</p>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Codex Selector Modal for Writing Weaving -->
+{#if showCodexSelector}
+  
+  <CodexSelectorModal
+    allEntries={codexEntries}
+    nodeType={activeWritingWeave?.label || ''}
+    on:close={() => showCodexSelector = false}
+    on:weave={handleWritingWeave}
+  />
+{/if}
