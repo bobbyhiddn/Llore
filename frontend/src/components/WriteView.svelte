@@ -44,6 +44,10 @@
   let showCodexSelector = false;
   let activeWritingWeave: { type: string, label: string } | null = null;
   let writingWeaveCursorPos = 0;
+  let isWeaveDragOver = false;
+  let dropIndicatorStyle = '';
+
+
   const writingWeaves = [
     { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
     { type: 'exposition', label: 'Exposition', description: 'Explain background or world details.', icon: '🌍' },
@@ -390,7 +394,63 @@
     event.dataTransfer?.setData('application/json', JSON.stringify(entry));
   }
 
+
+
+    function getCoordsFromPos(pos: number): { x: number, y: number } {
+    if (!markdownTextareaElement) return { x: 0, y: 0 };
+
+    const textarea = markdownTextareaElement;
+    const style = window.getComputedStyle(textarea);
+    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2);
+    const font = style.font;
+
+    const textUpToPos = textarea.value.substring(0, pos);
+    const lines = textUpToPos.split('\n');
+    const lineIndex = lines.length - 1;
+    const currentLineText = lines[lineIndex];
+
+    const y = (lineIndex * lineHeight) + paddingTop - textarea.scrollTop;
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return { x: paddingLeft, y }; // Fallback
+    context.font = font;
+    const x = context.measureText(currentLineText).width + paddingLeft - textarea.scrollLeft;
+
+    return { x, y };
+  }
+
+    function handleDragEnter(event: DragEvent) {
+    if (event.dataTransfer?.types.includes('application/x-llore-writing-weave') || 
+        event.dataTransfer?.types.includes('application/json')) {
+      isWeaveDragOver = true;
+    }
+  }
+
+  function handleDragLeave(event: DragEvent) {
+    const target = event.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    if (event.clientX <= rect.left || event.clientX >= rect.right || event.clientY <= rect.top || event.clientY >= rect.bottom) {
+      isWeaveDragOver = false;
+    }
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (event.dataTransfer?.types.includes('application/x-llore-writing-weave') ||
+        event.dataTransfer?.types.includes('application/json')) {
+      event.preventDefault(); // Allow drop
+      const pos = getCursorPositionFromMouseEvent(event);
+      const coords = getCoordsFromPos(pos);
+      dropIndicatorStyle = `top: ${coords.y}px; left: ${coords.x}px;`;
+    }
+  }
+
+    
+
   function handleDrop(event: DragEvent) {
+    isWeaveDragOver = false;
     event.preventDefault();
     event.stopPropagation();
 
@@ -568,35 +628,33 @@
   }
 
   // NEW: The core function that is called after the user selects their context entries (or none)
-  async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[] }>) {
+    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[] }>) {
     const { selectedEntries } = event.detail;
     showCodexSelector = false;
     
-    if (!activeWritingWeave) return;
+    if (!activeWritingWeave || writingWeaveCursorPos === null) return;
 
-    isWeaving = true; // Use the same flag as Llore-weaving
+    isWeaving = true;
     dispatch('loading', true);
-    const weavingIndicator = `... weaving ${activeWritingWeave.label.toLowerCase()} ...`;
-    insertTextAt(weavingIndicator, writingWeaveCursorPos);
-
+    
     try {
-      // Step 1: Create a custom prompt for writing weaving
-      const cleanContent = documentContent.replace(weavingIndicator, '');
+      const textBeforeCursor = documentContent.substring(0, writingWeaveCursorPos);
+      const textAfterCursor = documentContent.substring(writingWeaveCursorPos);
+
       const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
-      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nDocument content:\n${cleanContent}\n\nContext entries to consider for inspiration:\n${contextEntries || 'No specific context provided.'}\n\nBased on the weave type and the context, generate only the text to be inserted at the cursor position. The text should blend seamlessly.`;
+      
+      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\nContinue the story from the text provided before the cursor, and ensure it flows naturally into the text after the cursor.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nText before cursor:\n---\n${textBeforeCursor.slice(-2000)}\n---\n\nText after cursor:\n---\n${textAfterCursor.substring(0, 2000)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate only the new text to be inserted between the 'before' and 'after' sections. The generated text should blend seamlessly.`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       
-      // Step 2: Replace the indicator with the AI's response
-      dispatch('updatecontent', documentContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`));
+      insertTextAt(generatedText, writingWeaveCursorPos);
 
     } catch (err) {
       dispatch('error', `Writing Weaving failed: ${err}`);
-      dispatch('updatecontent', documentContent.replace(weavingIndicator, '')); // Clean up on error
     } finally {
       isWeaving = false;
       dispatch('loading', false);
-      activeWritingWeave = null; // Reset for next use
+      activeWritingWeave = null;
     }
   }
 
@@ -610,40 +668,86 @@
   }
 
   // NEW: Handle drag start for writing weave buttons
-  function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string }) {
+  function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string, description: string, icon: string }) {
     if (!event.dataTransfer) return;
-    event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'writing-weave', weave }));
-    event.dataTransfer.effectAllowed = 'copy';
+    
+    const payload = {
+      type: 'writing-weave',
+      weave: { type: weave.type, label: weave.label, description: weave.description, icon: weave.icon }
+    };
+    
+    // Set both custom type and JSON payload for the new drag handlers
+    event.dataTransfer.setData('application/x-llore-writing-weave', 'true');
+    event.dataTransfer.setData('text/plain', JSON.stringify(payload));
+    event.dataTransfer.effectAllowed = 'move';
   }
 
 
 
   // Helper function to get cursor position from mouse event
-  function getCursorPositionFromMouseEvent(event: DragEvent): number {
+    function getCursorPositionFromMouseEvent(event: DragEvent): number {
     if (!markdownTextareaElement) return 0;
-    
-    // Calculate approximate cursor position based on mouse coordinates
-    const rect = markdownTextareaElement.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    
-    // Simple approximation - in a real implementation you'd want more precise calculation
-    const lineHeight = 20; // Approximate line height
-    const charWidth = 8; // Approximate character width
-    const line = Math.floor(y / lineHeight);
-    const col = Math.floor(x / charWidth);
-    
-    const lines = markdownTextareaElement.value.split('\n');
+
+    const textarea = markdownTextareaElement;
+    const rect = textarea.getBoundingClientRect();
+
+    // Coordinates relative to the textarea, accounting for scroll position
+    const x = event.clientX - rect.left + textarea.scrollLeft;
+    const y = event.clientY - rect.top + textarea.scrollTop;
+
+    // Get computed styles for accurate calculations
+    const style = window.getComputedStyle(textarea);
+    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2); // Fallback
+    const font = style.font;
+
+    // Use a canvas for precise text width measurement
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) {
+      // Fallback to a rough estimate if canvas is not supported
+      const charWidth = parseFloat(style.fontSize) * 0.6;
+      const col = Math.floor(x / charWidth);
+      const line = Math.floor(y / lineHeight);
+      const lines = textarea.value.split('\n');
+      let pos = 0;
+      for (let i = 0; i < line; i++) pos += lines[i].length + 1;
+      pos += col;
+      return Math.min(pos, textarea.value.length);
+    }
+    context.font = font;
+
+    const lines = textarea.value.split('\n');
+    const targetLineIndex = Math.floor(y / lineHeight);
+
+    if (targetLineIndex >= lines.length) {
+      return textarea.value.length; // Dropped below all text, append to end
+    }
+
+    // Sum lengths of lines before the target line
     let position = 0;
-    
-    for (let i = 0; i < Math.min(line, lines.length - 1); i++) {
-      position += lines[i].length + 1; // +1 for newline
+    for (let i = 0; i < targetLineIndex; i++) {
+      position += lines[i].length + 1; // +1 for newline character
     }
-    
-    if (line < lines.length) {
-      position += Math.min(col, lines[line]?.length || 0);
+
+    // Find the closest character on the target line
+    const targetLine = lines[targetLineIndex];
+    let closestCharIndex = 0;
+    let minDistance = Infinity;
+
+    for (let i = 0; i <= targetLine.length; i++) {
+      const subWidth = context.measureText(targetLine.substring(0, i)).width;
+      const distance = Math.abs(x - subWidth);
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestCharIndex = i;
+      } else {
+        // Once distance starts increasing, we've passed the closest point
+        break;
+      }
     }
-    
+
+    position += closestCharIndex;
     return position;
   }
 </script>
@@ -657,7 +761,6 @@
 <div class="write-view-main-content">
   <!-- LEFT COLUMN: Chat and Tools -->
   <div class="left-column">
-    <!-- ... (existing chat and save tools) ... -->
     <div class="write-chat-panel">
       <h3>Contextual Chat</h3>
       <div class="chat-messages-area" bind:this={writeChatDisplayElement}>
@@ -706,7 +809,6 @@
 
   <!-- CENTER COLUMN: Editor -->
   <div class="center-column">
-    <!-- ... (existing editor toolbar) ... -->
     <div class="editor-toolbar">
       <div class="view-mode-toggles">
         <button class:active={editorMode === 'edit'} on:click={() => editorMode = 'edit'} title="Edit mode">📝 Edit</button>
@@ -717,7 +819,10 @@
         {documentFilename || "New Document"}{#if isDocumentDirty && documentFilename}*{/if}
       </div>
     </div>
-    <div class="editor-container">
+    <div class="editor-pane" style="position: relative;">
+      {#if isWeaveDragOver}
+      <div class="drop-indicator" style={dropIndicatorStyle}></div>
+    {/if}
       <textarea
         class="markdown-input"
         value={documentContent}
@@ -726,6 +831,9 @@
         placeholder="Start writing your masterpiece (Markdown supported)..."
         style="display: {editorMode === 'preview' ? 'none' : 'block'}"
         on:drop={handleDrop}
+        on:dragenter={handleDragEnter}
+        on:dragleave={handleDragLeave}
+        on:dragover={handleDragOver}
         on:dragover|preventDefault
         on:keydown={handleWriteViewKeydown}
       ></textarea>
@@ -1045,9 +1153,9 @@
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
   .left-column .write-chat-panel .write-chat-form input[type="text"]:focus {
-    border-color: var(--accent-primary, #6d5ed9);
-    box-shadow: 0 0 0 0.2rem rgba(109, 94, 217, .25); /* Derived from accent-primary */
-    outline: none;
+      border-color: var(--accent-primary, #6d5ed9);
+      box-shadow: 0 0 0 0.2rem rgba(109, 94, 217, .25); /* Derived from accent-primary */
+      outline: none;
   }
   .left-column .write-chat-panel .write-chat-form button {
     padding: 0.75rem 1.2rem;
@@ -1124,6 +1232,13 @@
     /* No border needed to separate from main-content if same bg */
   }
 
+  .editor-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Important for flex child to shrink */
+  }
+
   .center-column .editor-toolbar {
     display: flex;
     justify-content: space-between;
@@ -1153,15 +1268,6 @@
     border-color: var(--border-color-strong, rgba(160, 160, 160, 0.3));
   }
 
-  .center-column .editor-container {
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
-    border-radius: 6px;
-    overflow: hidden;
-    background-color: var(--bg-secondary, rgba(22, 33, 62, 0.9)); /* Slightly different for editor area */
-  }
 
   .center-column .markdown-input {
     flex-grow: 1;
@@ -1309,6 +1415,23 @@
     font-size: 1.2em;
     width: 1.5em;
     text-align: center;
+  }
+
+  .drop-indicator {
+    position: absolute;
+    width: 2px;
+    height: 1.5em; /* Should roughly match line-height */
+    background-color: var(--accent-primary);
+    animation: blink 1s infinite steps(1, start);
+    pointer-events: none; /* So it doesn't interfere with other events */
+    z-index: 10;
+    transform: translateY(-2px); /* Minor adjustment */
+  }
+
+  @keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0; }
+    100% { opacity: 1; }
   }
 
   .status-bar {

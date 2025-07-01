@@ -1049,6 +1049,7 @@
     currentWriteView = 'editor';
   }
 
+  // NEW handler for loading custom JSON templates
   // NEW handler for content changes from WriteView
   function handleContentUpdate(event: CustomEvent<string>) {
     const newContent = event.detail;
