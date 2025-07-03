@@ -403,21 +403,42 @@
     const style = window.getComputedStyle(textarea);
     const paddingLeft = parseFloat(style.paddingLeft) || 0;
     const paddingTop = parseFloat(style.paddingTop) || 0;
-    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2);
-    const font = style.font;
-
+    
+    // Use same measurements as getCursorPositionFromMouseEvent
+    const fontSize = parseFloat(style.fontSize) || 16;
+    let lineHeight = parseFloat(style.lineHeight);
+    if (isNaN(lineHeight) || lineHeight < fontSize) {
+      lineHeight = fontSize * 1.5;
+    }
+    const charWidth = fontSize * 0.6;
+    
+    // Account for visual line wrapping
+    const textareaWidth = textarea.clientWidth - paddingLeft - parseFloat(style.paddingRight || '0');
+    const charsPerLine = Math.floor(textareaWidth / charWidth);
+    
     const textUpToPos = textarea.value.substring(0, pos);
     const lines = textUpToPos.split('\n');
     const lineIndex = lines.length - 1;
     const currentLineText = lines[lineIndex];
-
-    const y = (lineIndex * lineHeight) + paddingTop - textarea.scrollTop;
-
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    if (!context) return { x: paddingLeft, y }; // Fallback
-    context.font = font;
-    const x = context.measureText(currentLineText).width + paddingLeft - textarea.scrollLeft;
+    
+    // Calculate visual line position accounting for wrapping
+    let visualLineIndex = 0;
+    for (let i = 0; i < lineIndex; i++) {
+      const line = textarea.value.split('\n')[i];
+      const wrappedLines = Math.max(1, Math.ceil(line.length / charsPerLine));
+      visualLineIndex += wrappedLines;
+    }
+    
+    // Add position within current line
+    const charIndexInLine = currentLineText.length;
+    const visualLineWithinCurrent = Math.floor(charIndexInLine / charsPerLine);
+    visualLineIndex += visualLineWithinCurrent;
+    
+    const y = (visualLineIndex * lineHeight) + paddingTop - textarea.scrollTop;
+    
+    // Calculate x position within the wrapped line
+    const charWithinWrappedLine = charIndexInLine % charsPerLine;
+    const x = (charWithinWrappedLine * charWidth) + paddingLeft - textarea.scrollLeft;
 
     return { x, y };
   }
@@ -460,25 +481,30 @@
     const textData = event.dataTransfer.getData('text/plain');
 
     if (jsonData) {
-      droppedEntry = JSON.parse(jsonData);
-      dropMenuX = event.clientX;
-      dropMenuY = event.clientY;
-      const target = event.target as HTMLTextAreaElement;
-      dropCursorPosition = target.selectionStart;
-      showDropMenu = true;
-    } else if (textData) {
       try {
-        const dropData = JSON.parse(textData);
+        const dropData = JSON.parse(jsonData);
         if (dropData.type === 'writing-weave') {
+          // Handle writing weave drop
           const cursorPos = getCursorPositionFromMouseEvent(event);
           activeWritingWeave = dropData.weave;
           writingWeaveCursorPos = cursorPos;
           showCodexSelector = true;
+        } else {
+          // Handle codex entry drop (has id, name, type, content properties)
+          droppedEntry = dropData;
+          dropMenuX = event.clientX;
+          dropMenuY = event.clientY;
+          const target = event.target as HTMLTextAreaElement;
+          dropCursorPosition = target.selectionStart;
+          showDropMenu = true;
         }
       } catch (e) {
-        const cursorPos = getCursorPositionFromMouseEvent(event);
-        insertTextAt(textData, cursorPos);
+        console.error('Error parsing JSON drop data:', e);
       }
+    } else if (textData) {
+      // Handle plain text drop
+      const cursorPos = getCursorPositionFromMouseEvent(event);
+      insertTextAt(textData, cursorPos);
     }
   }
 
@@ -628,8 +654,8 @@
   }
 
   // NEW: The core function that is called after the user selects their context entries (or none)
-    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[] }>) {
-    const { selectedEntries } = event.detail;
+    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: string }>) {
+    const { selectedEntries, selectedLength } = event.detail;
     showCodexSelector = false;
     
     if (!activeWritingWeave || writingWeaveCursorPos === null) return;
@@ -643,7 +669,17 @@
 
       const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
       
-      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\nContinue the story from the text provided before the cursor, and ensure it flows naturally into the text after the cursor.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nText before cursor:\n---\n${textBeforeCursor.slice(-2000)}\n---\n\nText after cursor:\n---\n${textAfterCursor.substring(0, 2000)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate only the new text to be inserted between the 'before' and 'after' sections. The generated text should blend seamlessly.`;
+      // Convert length selection to prompt instruction
+      const lengthInstructions = {
+        'small': 'Keep your response to exactly 1 sentence that flows naturally.',
+        'medium': 'Write approximately 1 paragraph (3-5 sentences) that develops the scene.',
+        'large': 'Write approximately 1 page worth of content (multiple paragraphs, around 200-400 words).',
+        'extra-large': 'Write approximately 2 pages worth of content (multiple paragraphs, around 400-800 words).'
+      };
+      
+      const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
+      
+      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\nContinue the story from the text provided before the cursor, and ensure it flows naturally into the text after the cursor.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before cursor:\n---\n${textBeforeCursor.slice(-2000)}\n---\n\nText after cursor:\n---\n${textAfterCursor.substring(0, 2000)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate only the new text to be inserted between the 'before' and 'after' sections. The generated text should blend seamlessly and match the specified length requirement.`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       
@@ -678,77 +714,82 @@
     
     // Set both custom type and JSON payload for the new drag handlers
     event.dataTransfer.setData('application/x-llore-writing-weave', 'true');
-    event.dataTransfer.setData('text/plain', JSON.stringify(payload));
+    event.dataTransfer.setData('application/json', JSON.stringify(payload));
     event.dataTransfer.effectAllowed = 'move';
   }
 
 
 
   // Helper function to get cursor position from mouse event
-    function getCursorPositionFromMouseEvent(event: DragEvent): number {
+  function getCursorPositionFromMouseEvent(event: DragEvent): number {
     if (!markdownTextareaElement) return 0;
 
     const textarea = markdownTextareaElement;
     const rect = textarea.getBoundingClientRect();
-
-    // Coordinates relative to the textarea, accounting for scroll position
-    const x = event.clientX - rect.left + textarea.scrollLeft;
-    const y = event.clientY - rect.top + textarea.scrollTop;
-
-    // Get computed styles for accurate calculations
     const style = window.getComputedStyle(textarea);
-    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2); // Fallback
-    const font = style.font;
-
-    // Use a canvas for precise text width measurement
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    if (!context) {
-      // Fallback to a rough estimate if canvas is not supported
-      const charWidth = parseFloat(style.fontSize) * 0.6;
-      const col = Math.floor(x / charWidth);
-      const line = Math.floor(y / lineHeight);
-      const lines = textarea.value.split('\n');
-      let pos = 0;
-      for (let i = 0; i < line; i++) pos += lines[i].length + 1;
-      pos += col;
-      return Math.min(pos, textarea.value.length);
+    
+    // Simple approach: just use basic math
+    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    
+    // Mouse position relative to textarea content
+    const x = event.clientX - rect.left - paddingLeft + textarea.scrollLeft;
+    const y = event.clientY - rect.top - paddingTop + textarea.scrollTop;
+    
+    // Get basic measurements
+    const fontSize = parseFloat(style.fontSize) || 16;
+    
+    // Try to get actual line height from computed style first
+    let lineHeight = parseFloat(style.lineHeight);
+    if (isNaN(lineHeight) || lineHeight < fontSize) {
+      lineHeight = fontSize * 1.5; // More generous line height
     }
-    context.font = font;
-
+    
+    const charWidth = fontSize * 0.6; // Slightly wider character estimate
+    
+    // Account for visual line wrapping
+    const textareaWidth = textarea.clientWidth - paddingLeft - parseFloat(style.paddingRight || '0');
+    const charsPerLine = Math.floor(textareaWidth / charWidth);
+    
+    // Calculate which visual line we're on
+    const visualLineIndex = Math.floor(y / lineHeight);
+    
+    // Split into lines and find position accounting for wrapping
     const lines = textarea.value.split('\n');
-    const targetLineIndex = Math.floor(y / lineHeight);
-
-    if (targetLineIndex >= lines.length) {
-      return textarea.value.length; // Dropped below all text, append to end
-    }
-
-    // Sum lengths of lines before the target line
+    
+    let currentVisualLine = 0;
     let position = 0;
-    for (let i = 0; i < targetLineIndex; i++) {
-      position += lines[i].length + 1; // +1 for newline character
-    }
-
-    // Find the closest character on the target line
-    const targetLine = lines[targetLineIndex];
-    let closestCharIndex = 0;
-    let minDistance = Infinity;
-
-    for (let i = 0; i <= targetLine.length; i++) {
-      const subWidth = context.measureText(targetLine.substring(0, i)).width;
-      const distance = Math.abs(x - subWidth);
-
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestCharIndex = i;
-      } else {
-        // Once distance starts increasing, we've passed the closest point
+    let targetLine = -1;
+    let targetChar = 0;
+    
+    // Find which actual line contains our target visual line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const wrappedLines = Math.max(1, Math.ceil(line.length / charsPerLine));
+      
+      if (currentVisualLine + wrappedLines > visualLineIndex) {
+        // This line contains our target
+        targetLine = i;
+        const visualLineWithinThisLine = visualLineIndex - currentVisualLine;
+        targetChar = Math.min(visualLineWithinThisLine * charsPerLine + Math.floor(x / charWidth), line.length);
         break;
       }
+      
+      currentVisualLine += wrappedLines;
+      position += line.length + 1; // +1 for newline
     }
-
-    position += closestCharIndex;
-    return position;
+    
+    // If we found a target line, calculate final position
+    if (targetLine >= 0) {
+      position += targetChar;
+    } else {
+      // Fallback to end of document
+      position = textarea.value.length;
+    }
+    
+    console.log(`visualLine=${visualLineIndex}, targetLine=${targetLine}, targetChar=${targetChar}, finalPosition=${position}`);
+    
+    return Math.min(position, textarea.value.length);
   }
 </script>
 
@@ -967,6 +1008,19 @@
       <div class="modal-buttons">
         <button on:click={handleSaveAsTemplate} disabled={!newTemplateName.trim()}>Save Template</button>
         <button on:click={() => showSaveTemplateModal = false}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Weaving Loading Modal -->
+{#if isWeaving}
+  <div class="modal-backdrop">
+    <div class="modal weaving-modal">
+      <div class="weaving-content">
+        <div class="weaving-spinner">✨</div>
+        <h3>Weaving...</h3>
+        <p>Crafting your narrative enhancement</p>
       </div>
     </div>
   </div>
@@ -1498,6 +1552,48 @@
     border-radius: 4px;
     cursor: pointer;
     font-weight: 500;
+  }
+
+  /* Weaving Modal Styles */
+  .weaving-modal {
+    text-align: center;
+    min-width: 300px;
+    max-width: 400px;
+  }
+
+  .weaving-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .weaving-spinner {
+    font-size: 2rem;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .weaving-modal h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.5rem;
+  }
+
+  .weaving-modal p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 0.6;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.1);
+    }
   }
 
   .cancel-btn {

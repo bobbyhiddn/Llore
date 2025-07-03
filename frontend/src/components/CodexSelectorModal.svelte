@@ -7,7 +7,15 @@
 
   let selectedEntries: database.CodexEntry[] = [];
   let searchTerm = '';
+  let selectedLength = 'medium'; // Default to medium
   const dispatch = createEventDispatcher();
+
+  const lengthOptions = [
+    { value: 'small', label: 'Small', description: '1 sentence' },
+    { value: 'medium', label: 'Medium', description: '1 paragraph' },
+    { value: 'large', label: 'Large', description: '1 page' },
+    { value: 'extra-large', label: 'Extra Large', description: '2 pages' }
+  ];
 
   function handleKeyDown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
@@ -36,7 +44,7 @@
   }
 
   function handleWeave() {
-    dispatch('weave', { selectedEntries });
+    dispatch('weave', { selectedEntries, selectedLength });
   }
 </script>
 
@@ -45,6 +53,16 @@
     <h3>Attach Codex Entries for '{nodeType}'</h3>
     <p>Select entries to provide specific context for the AI. This is optional.</p>
         <input type="search" bind:this={searchInput} bind:value={searchTerm} placeholder="Search entries..."/>
+    
+    <!-- Length Selector -->
+    <div class="length-selector">
+      <label for="length-select">Response Length:</label>
+      <select id="length-select" bind:value={selectedLength}>
+        {#each lengthOptions as option}
+          <option value={option.value}>{option.label} ({option.description})</option>
+        {/each}
+      </select>
+    </div>
     <div class="entry-list" role="listbox">
       {#each filteredEntries as entry (entry.id)}
         <div 
@@ -113,6 +131,35 @@
     color: var(--text-primary);
     font-size: 1rem;
     margin-bottom: 1rem;
+  }
+
+  .length-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .length-selector label {
+    color: var(--text-primary);
+    font-weight: 500;
+    font-size: 0.9rem;
+  }
+
+  .length-selector select {
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    cursor: pointer;
+  }
+
+  .length-selector select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.2);
   }
 
   .entry-list {
