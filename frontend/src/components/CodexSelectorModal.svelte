@@ -65,17 +65,16 @@
     </div>
     <div class="entry-list" role="listbox">
       {#each filteredEntries as entry (entry.id)}
-        <div 
+        <button 
+          type="button"
           class="entry-item" 
           role="option"
           aria-selected={selectedEntries.some(e => e.id === entry.id)}
-          tabindex="0"
           class:selected={selectedEntries.some(e => e.id === entry.id)}
           on:click={() => toggleSelection(entry)}
-          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelection(entry); } }}
         >
           {entry.name} ({entry.type})
-        </div>
+        </button>
       {/each}
     </div>
     <div class="modal-actions">
@@ -172,24 +171,34 @@
   }
 
   .entry-item {
-    padding: 0.6rem 0.8rem;
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color-light);
+    border-radius: 4px;
     cursor: pointer;
-    border-bottom: 1px solid var(--border-color-light);
-    transition: background-color 0.2s;
-  }
-
-  .entry-item:last-child {
-    border-bottom: none;
+    transition: all 0.2s ease;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    text-align: left;
+    font-family: inherit;
+    font-size: inherit;
   }
 
   .entry-item:hover {
-    background: var(--bg-hover-light);
+    background: var(--bg-secondary);
+    border-color: var(--border-color-medium);
+  }
+
+  .entry-item:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.2);
   }
 
   .entry-item.selected {
-    background: var(--accent-primary-translucent, rgba(68, 126, 255, 0.3));
-    color: var(--text-primary);
-    font-weight: 500;
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
   }
 
   .modal-actions {

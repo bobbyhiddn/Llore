@@ -1,140 +1,117 @@
-# Llore: Dynamic Codex Management for Fiction Writing
+# Llore: Your Dynamic Codex for Fiction Writing
 
 ![Llore Logo](frontend/src/assets/images/logo.png)
 
-**Llore** is a modern desktop application built with Wails (Go + Web Technologies) to help fiction writers dynamically manage their world-building codex (characters, locations, lore, etc.) with integrated Large Language Model (LLM) assistance. With its sleek interface featuring gradient backgrounds and silver accents, Llore provides a beautiful and intuitive environment for organizing your creative world.
+**Llore** is a modern, cross-platform desktop application designed to be the ultimate world-building companion for fiction writers. Built with Go and Svelte using the Wails framework, Llore provides a beautiful and intuitive environment to manage your creative universe—from characters and locations to complex lore—all enhanced with powerful, integrated Large Language Model (LLM) assistance.
+
+Llore's core philosophy is to combine structured data management with the creative power of AI, using Retrieval-Augmented Generation (RAG) to ensure the AI understands the unique context of *your* world.
 
 ## Table of Contents
 
--   [Motivation](#motivation)
--   [Core Features](#core-features)
--   [Technology Stack](#technology-stack)
--   [Screenshots (Optional)](#screenshots-optional)
--   [Prerequisites](#prerequisites)
--   [Setup & Installation](#setup--installation)
--   [Configuration](#configuration)
--   [Running Llore](#running-llore)
-    -   [Development Mode](#development-mode)
-    -   [Building for Production](#building-for-production)
--   [Basic Usage](#basic-usage)
--   [Project Status](#project-status)
--   [Future Work / Roadmap](#future-work--roadmap)
--   [Contributing](#contributing)
--   [License](#license)
-
-## Motivation
-
-Fiction writers often juggle vast amounts of information about their worlds, characters, and plots. Traditional notes or static wiki-like tools can become unwieldy. **Llore** aims to provide a more dynamic and intelligent solution by:
-
-1.  **Leveraging LLMs:** Assisting writers in generating initial ideas, descriptions, or expanding on existing entries.
-2.  **Structured Data:** Storing codex entries in a robust database for easy querying and management.
-3.  **Cross-Platform:** Using Wails to create a native desktop experience for Windows, macOS, and Linux.
-4.  **Context-Aware Generation:** Using Retrieval-Augmented Generation (RAG) with vector embeddings to make LLM responses relevant to the writer's existing codex.
-5.  **(Future Goal) Version Control:** Implementing a Git-like system for tracking changes to codex entries, allowing writers to experiment without losing previous versions.
+- [Core Features](#core-features)
+- [How It Works: The RAG Engine](#how-it-works-the-rag-engine)
+- [Technology Stack](#technology-stack)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+- [How to Use Llore](#how-to-use-llore)
+  - [1. The Vault System](#1-the-vault-system)
+  - [2. The Codex](#2-the-codex)
+  - [3. Story Import & Analysis](#3-story-import--analysis)
+  - [4. Lore Chat](#4-lore-chat)
+  - [5. The Library & Templates](#5-the-library--templates)
+  - [6. Weaving](#6-weaving)
+- [Project Status](#project-status)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Core Features
 
-*   **Modern Desktop Experience:**
-    *   Beautiful gradient backgrounds and silver accents for a premium feel
-    *   Responsive and intuitive interface
-    *   Smooth transitions and animations
-    *   Cross-platform support via Wails v2
+Llore is more than just a notebook; it's an intelligent system for creative writing.
 
-*   **Vault System:**
-    *   Create and manage multiple vaults for different projects
-    *   Easy vault switching and organization
-    *   Secure local storage of your creative content
+*   **✨ Modern Desktop Experience:** A sleek, responsive interface with gradient backgrounds and silver accents, optimized for dark mode to keep you in the creative zone.
+*   **🗄️ Vault System:** Organize your work by creating separate, self-contained "vaults" for each of your projects. Each vault holds its own codex, library, and chat history.
+*   **📚 Codex Management:** Create, read, update, and delete entries for your **Characters, Locations, Items, and Lore**. A powerful search and filtering system makes finding information effortless.
+*   **🧠 Multi-Provider AI Integration:** Llore is not tied to a single AI provider. It supports:
+    *   **OpenRouter:** Access a wide variety of models from different providers.
+    *   **OpenAI:** Use GPT models directly via your API key.
+    *   **Google Gemini:** Leverage Gemini models for generation and high-quality embeddings.
+    *   **Ollama (Local):** Run models like Llama 3 or Mistral completely offline on your own machine for ultimate privacy and control.
+*   **🤖 Context-Aware AI:**
+    *   **RAG-Powered Chat:** Chat with an AI that has read your codex. Ask questions like "What is the relationship between Alice and Bob?" or "Summarize the history of the Sunstone," and get answers based on your lore.
+    *   **AI-Assisted Creation:** Generate new entry ideas, expand on existing descriptions, or brainstorm plot points with the click of a button.
+*   **📄 Story Import & Analysis:** Paste or upload your manuscript, and Llore's AI will automatically read it, identify key entities, and suggest new codex entries. It can also intelligently merge new information into existing entries.
+*   **✍️ Library & Templates:** Store your manuscript files, notes, and other documents directly within your project vault. Create reusable templates for character sheets, chapter outlines, and more.
+*   **🕸️ Weaving:** A unique feature that allows you to drag a codex entry onto an open document. Llore's AI will then "weave" that entry's information into the text at your cursor position, creating natural-sounding prose.
 
-*   **Codex Entry Management:**
-    *   Create and organize entries (Characters, Locations, Items, Lore)
-    *   Rich text editing with proper formatting
-    *   Quick entry filtering and search
-    *   Bulk operations for efficient management
+## How It Works: The RAG Engine
 
-*   **AI Integration:**
-    *   OpenRouter API support for access to multiple AI models
-    *   Gemini API integration for vector embeddings
-    *   Context-aware content generation using RAG
-    *   AI-assisted entry creation and enhancement
-    *   Customizable model selection
+Llore's "magic" comes from its Retrieval-Augmented Generation (RAG) system, which gives the AI long-term memory of your world.
 
-*   **Story Import:**
-    *   Import stories and automatically extract relevant entries
-    *   Smart parsing of characters, locations, and items
-    *   Bulk entry creation from imported content
+```mermaid
+flowchart TD
+    subgraph UserInteraction["User Interaction"]
+        A[User asks: "What does Alice think of the Sunstone?"]
+    end
 
-*   **Library Management:**
-    *   Organize and view your story files
-    *   Easy access to your creative content
-    *   File preview and management
+    subgraph BackendProcessing["Llore's Backend"]
+        B[Query is converted to a vector embedding]
+        C{Codex Database}
+        C -- "Finds entries for 'Alice' & 'Sunstone' via vector similarity" --> D[Relevant Context is Retrieved]
+        D -- "Context + Original Query" --> E[A new prompt is built for the LLM]
+        E --> F{LLM (OpenAI, Gemini, Ollama, etc.)}
+        F --> G[LLM generates a context-aware answer]
+    end
 
-*   **Lore Chat:**
-    *   Interactive chat interface for exploring your world
-    *   Semantic search for relevant context using embeddings
-    *   Context-aware responses based on your codex
-    *   Save chat insights directly to your codex
-
-*   **Vector Embeddings System:**
-    *   Automatic generation of embeddings for all codex entries
-    *   Background processing to maintain application responsiveness
-    *   Semantic search capabilities for finding relevant context
-    *   Intelligent context selection based on similarity scores
+    subgraph UIResponse["Response to User"]
+        G --> H["AI Responds: 'Based on your lore, Alice believes the Sunstone is a dangerous artifact... she acquired it from...'"]
+    end
+```
+1.  **Embedding:** When you create or update a codex entry, its content is converted into a numerical representation (a "vector embedding") and stored.
+2.  **Retrieval:** When you ask a question, your query is also converted into a vector. Llore performs a semantic search to find the most relevant codex entries by comparing your query's vector to all the entry vectors in the database.
+3.  **Augmentation:** The content from the most relevant entries is collected and injected as context into a new, detailed prompt for the LLM.
+4.  **Generation:** The LLM receives the augmented prompt and generates a response that is directly informed by your world's specific lore, not just its general knowledge.
 
 ## Technology Stack
 
-*   **Framework:** [Wails v2](https://wails.io/)
-*   **Backend Language:** [Go](https://go.dev/)
-*   **Frontend Framework:** [Svelte](https://svelte.dev/)
-*   **UI:** HTML, CSS, JavaScript/TypeScript
-*   **Database:** [SQLite](https://www.sqlite.org/index.html) (via `modernc.org/sqlite`)
-*   **LLM Integration:** 
-    *   [OpenRouter API](https://openrouter.ai/docs) for access to multiple AI models
-    *   [Google Gemini API](https://ai.google.dev/) for generating embeddings
-*   **Vector Storage:** SQLite with custom embedding tables
+*   **Core Framework:** [Wails v2](https://wails.io/)
+*   **Backend:** [Go](https://go.dev/)
+*   **Frontend:** [Svelte](https://svelte.dev/) & TypeScript
+*   **Database:** [SQLite](https://www.sqlite.org/index.html) for data and vector storage.
+*   **AI Providers:**
+    *   [OpenRouter API](https://openrouter.ai/docs)
+    *   [OpenAI API](https://platform.openai.com/docs)
+    *   [Google Gemini API](https://ai.google.dev/)
+    *   [Ollama](https://ollama.com/) (for local models)
 
-## Screenshots (Optional)
+## Getting Started
 
-*(Add screenshots of Llore here if available)*
-<!--
-![Screenshot 1](path/to/screenshot1.png)
-![Screenshot 2](path/to/screenshot2.png)
--->
+### Prerequisites
 
-## Requirements
+Ensure you have the following installed on your system:
+1.  **Go** (version 1.20 or higher)
+2.  **Node.js** and **npm**
+3.  **Wails CLI v2:** Run `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+4.  **Git**
+5.  **Python 3.x** (used by a build script for icon generation)
+6.  **API Keys (Optional):**
+    *   [OpenRouter API Key](https://openrouter.ai/)
+    *   [OpenAI API Key](https://platform.openai.com/api-keys)
+    *   [Gemini API Key](https://makersuite.google.com/app/apikey)
 
-- **Go** (>=1.20): [Download Go](https://go.dev/dl/)
-- **Node.js & npm** (for frontend): [Download Node.js](https://nodejs.org/)
-- **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-
-
-
-## Prerequisites
-
-Before you begin, ensure you have the following installed:
-
-1.  **Go:** Version 1.20 or higher ([Installation Guide](https://go.dev/doc/install))
-2.  **Node.js & npm:** Required for frontend dependencies ([Installation Guide](https://nodejs.org/))
-3.  **Wails CLI v2:** ([Installation Guide](https://wails.io/docs/gettingstarted/installation))
-4.  **Git:** For cloning the repository ([Installation Guide](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git))
-5.  **Python 3.x:** For icon generation and utilities ([Installation Guide](https://www.python.org/downloads/))
-6.  **API Keys:**
-    *   OpenRouter API key - [OpenRouter](https://openrouter.ai/)
-    *   Gemini API key - [Google AI Studio](https://makersuite.google.com/app/apikey)
-
-## Setup & Installation
+### Installation
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/YOUR_GITHUB_USERNAME/llore.git
+    git clone https://github.com/bobbyhiddn/llore.git
     cd llore
     ```
 
-
-
-3.  **Install Go dependencies:**
+2.  **Install backend dependencies:**
     ```bash
     go mod tidy
-    go install github.com/wailsapp/wails/v2/cmd/wails@latest
     ```
 
 3.  **Install frontend dependencies:**
@@ -144,211 +121,102 @@ Before you begin, ensure you have the following installed:
     cd ..
     ```
 
-## Configuration
+### Configuration
 
-Configuration is done through the `~/.llore` folder under `config.json`.
+-   On first launch, Llore creates a configuration file at `~/.llore/config.json`.
+-   API keys, model preferences, and the active AI mode (e.g., `local`, `openai`) can be easily managed from the **Settings** page within the application itself.
 
-The configuration includes:
-- OpenRouter API key for LLM access
-- Gemini API key for embeddings
-- Default model preferences
+## How to Use Llore
 
-## Running Llore
+### Running the App
 
-### Development Mode
-
-This mode provides hot-reloading for both the Go backend and the frontend.
-
-1.  Navigate to the project root directory (`llore`).
-2.  Run the command:
+*   **For Development (with hot-reloading):**
     ```bash
     wails dev
     ```
-3.  The Llore application window will appear. Changes to Go files or frontend code will trigger automatic rebuilds and reloads.
-
-### Building for Production
-
-This compiles Llore into a native, self-contained executable for your platform.
-
-1.  Navigate to the project root directory (`llore`).
-2.  Run the command:
+*   **To Build a Production Executable:**
     ```bash
     wails build
     ```
-3.  The executable will be placed in the `build/bin/` directory (e.g., `Llore.exe` on Windows, `Llore` on Linux/macOS).
+    The final application will be in the `build/bin/` directory.
 
-## How RAG Chat Works in Llore
+### 1. The Vault System
+On first launch, you'll be prompted to either **Create a New Vault** or **Select an Existing Vault**. A vault is simply a folder on your computer that will contain all the data for a specific project.
 
-Llore uses Retrieval-Augmented Generation (RAG) to provide context-aware responses that understand your fictional world:
+### 2. The Codex
+This is the heart of your world.
+-   Use the sidebar to navigate between **Characters, Locations, Items,** and **Lore**.
+-   Click **"+ New Entry"** to create an entry.
+-   Use the **AI Generate** button within the editor to get help writing or expanding content.
+-   Your changes are saved automatically. Embeddings for the RAG system are generated in the background whenever you create or update an entry.
 
-```mermaid
-flowchart TD
-    subgraph UserInteraction["User Interaction"]
-        A[User sends query] --> B[Query text is processed]
-    end
+### 3. Story Import & Analysis
+-   Navigate to the **Story Import** tab.
+-   Paste or upload a text file containing your manuscript or notes.
+-   The AI will process the text and present you with a list of suggested new entries and updates to existing ones.
+-   Review the suggestions and import them into your codex with a single click.
 
-    subgraph EmbeddingGeneration["Embedding Generation"]
-        B --> C[Convert query to embedding vector via Gemini API]
-        D[Codex entries] --> E[Generate & store embeddings for all entries]
-        E --> F[Cache embeddings in memory]
-    end
+### 4. Lore Chat
+-   Go to the **Lore Chat** tab.
+-   Ask questions about your world. The AI will use the RAG engine to provide answers based on your codex.
+-   If the AI generates a new piece of lore you like, you can easily save the insight directly to a new or existing codex entry.
 
-    subgraph ContextRetrieval["Context Retrieval"]
-        C --> G[Calculate similarity between query and all entries]
-        F --> G
-        G --> H[Select most relevant entries based on similarity score]
-        H --> I[Build context from selected entries]
-    end
+### 5. The Library & Templates
+-   The **Library** tab shows all non-codex files in your vault (e.g., `.txt`, `.md` files). You can use it to store and edit drafts.
+-   The **Templates** folder within your vault can hold Markdown files for reusable structures like character sheets.
 
-    subgraph LLMInteraction["LLM Interaction"]
-        I --> J[Construct prompt with context and query]
-        J --> K[Send to OpenRouter API]
-        K --> L[Process AI response]
-    end
-
-    subgraph ResponseHandling["Response Handling"]
-        L --> M[Display AI response to user]
-        M --> N[Option to save insights to codex]
-        N --> D
-    end
-
-    classDef process fill:#6d5ed9,color:white,stroke:#333,stroke-width:1px;
-    classDef data fill:#16213e,color:white,stroke:#333,stroke-width:1px;
-    classDef input fill:#0984e3,color:white,stroke:#333,stroke-width:1px;
-    classDef output fill:#2ed573,color:white,stroke:#333,stroke-width:1px;
-
-    class A,N input;
-    class B,C,E,G,H,I,J,K,L process;
-    class D,F data;
-    class M output;
-```
-
-### Key Components:
-
-1. **Embedding Generation**: When you add or update entries, Llore automatically generates vector embeddings via Gemini API and stores them
-2. **Query Processing**: Your question is converted to an embedding vector using the same model
-3. **Semantic Search**: The system finds the most relevant entries by calculating similarity between your query and all entries
-4. **Context Building**: Selected entries are formatted into a context block that gives the AI relevant information
-5. **AI Response**: The query and context are sent to your selected LLM through OpenRouter, resulting in answers informed by your lore
-6. **Knowledge Cycle**: New insights can be saved back to your codex, enriching future responses
-
-## Troubleshooting
-
-
-
-## Basic Usage
-
-1.  **First Launch:**
-    * Start Llore via `wails dev` or the built executable
-    * Create or select a vault for your project
-    * The main interface will show various modes: Codex, Story Import, Library, Lore Chat, and Settings
-
-2.  **Configure API Keys:**
-    * Get your OpenRouter API key from [OpenRouter](https://openrouter.ai/)
-    * Get your Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-    * Configure both in the Settings page of the application
-
-3.  **Managing Entries:**
-    * In Codex mode, use the sidebar to view and manage entries
-    * Click "+ New Entry" to create a character, location, item, or lore entry
-    * Fill in the name, type, and content
-    * Use the AI generation button for creative assistance
-    * Save your changes
-    * Embeddings are automatically generated for all entries
-
-4.  **Importing Stories:**
-    * Use Story Import mode to analyze existing writing
-    * Select a story file from your computer
-    * Review and approve the automatically extracted entries
-    * Import them directly into your codex
-    * Embeddings are generated automatically for new entries
-
-5.  **Using Lore Chat:**
-    * Enter Lore Chat mode for interactive exploration
-    * Ask questions about your world and characters
-    * The system finds semantically relevant entries using embeddings
-    * Get context-aware responses based on your codex
-    * Save interesting responses directly to your codex
-
-6.  **Managing Files:**
-    * Use Library mode to organize your story files
-    * Preview and edit file contents
-    * Keep your creative work organized
+### 6. Weaving
+This is a powerful editing feature.
+1.  Open a document in the Library.
+2.  Drag a codex entry from the sidebar and drop it onto the text editor.
+3.  The AI will generate and insert text that seamlessly weaves the dropped entry's information into your narrative at the cursor's location.
 
 ## Project Status
 
-**Llore** is a fully functional application with a modern, polished interface.
+**Llore is fully functional and in active development.**
 
-**Implemented Features:**
+**Implemented:**
+*   ✅ Multi-Vault Project System
+*   ✅ Full CRUD for Codex Entries (Characters, Locations, Items, Lore)
+*   ✅ Multi-Provider AI Support (OpenRouter, OpenAI, Gemini, Ollama)
+*   ✅ RAG-Powered Lore Chat
+*   ✅ Automated Story Import and Entity Extraction
+*   ✅ Intelligent Content Merging for existing entries
+*   ✅ Background Vector Embedding Generation
+*   ✅ Library and Template File Management
 
-*   **Core Architecture:**
-    * Go backend with Wails v2 integration
-    * Svelte frontend with modern UI components
-    * SQLite database for efficient data storage
-    * Multi-vault support for project organization
+## Roadmap
 
-*   **User Interface:**
-    * Modern gradient and silver styling
-    * Responsive and intuitive layout
-    * Smooth transitions and animations
-    * Dark theme optimized for creative work
+We have exciting plans for the future of Llore!
 
-*   **AI Integration:**
-    * OpenRouter API integration
-    * Multiple AI model support
-    * Vector embeddings via Gemini API
-    * Context-aware content generation
-    * Interactive Lore Chat system
-
-*   **Content Management:**
-    * Comprehensive CRUD operations for entries
-    * Story import and analysis
-    * Library file management
-    * Bulk operations support
-    * Automatic embedding generation
-
-## Future Work / Roadmap
-
-*   [ ] Enhanced AI Features:
-    * [x] Vector embeddings for improved context awareness
-    * [ ] Local model support via Ollama
-    * [ ] Custom AI model fine-tuning options
-
-*   [ ] Advanced Content Management:
-    * [ ] Version control for entries
-    * [ ] Rich text editor with formatting
-    * [ ] Entry linking and relationship mapping
-    * [ ] Advanced search and filtering
-
-*   [ ] Collaboration Features:
-    * [ ] Multi-user support
-    * [ ] Real-time collaboration
-    * [ ] Change tracking and history
-
-*   [ ] Data Management:
-    * [ ] Cloud backup options
-    * [ ] Import/export in multiple formats
-    * [ ] Data migration tools
-
-*   [ ] UI Enhancements:
-    * [ ] Customizable themes
-    * [ ] Visualization tools for world-building
-    * [ ] Mobile-responsive design
-    * [ ] Accessibility improvements
+*   **Advanced Content Management:**
+    *   [ ] Rich text editor with advanced formatting.
+    *   [ ] Direct linking between entries (e.g., `@CharacterName`).
+    *   [ ] Graph visualization of relationships between entries.
+    *   [ ] Git-like version control for codex entries.
+*   **Enhanced AI Features:**
+    *   [ ] Proactive suggestions (e.g., "This character lacks a defined goal. Would you like to brainstorm one?").
+    *   [ ] AI-powered consistency checking across your lore.
+*   **UI/UX Enhancements:**
+    *   [ ] Customizable themes.
+    *   [ ] Improved accessibility.
+*   **Data Management:**
+    *   [ ] More robust import/export options (e.g., JSON, CSV).
+    *   [ ] Optional cloud backup solutions.
 
 ## Contributing
 
-Contributions to Llore are welcome! If you'd like to contribute, please:
+Contributions are welcome! If you'd like to help improve Llore, please follow these steps:
 
-1.  Fork the repository (`https://github.com/YOUR_GITHUB_USERNAME/llore.git`).
-2.  Create a new branch (`git checkout -b feature/your-feature-name`).
+1.  Fork the repository.
+2.  Create a new branch (`git checkout -b feature/your-awesome-feature`).
 3.  Make your changes.
-4.  Commit your changes (`git commit -am 'Add some feature'`).
-5.  Push to the branch (`git push origin feature/your-feature-name`).
-6.  Open a Pull Request against the main repository.
+4.  Commit your changes (`git commit -m 'Add some awesome feature'`).
+5.  Push to the branch (`git push origin feature/your-awesome-feature`).
+6.  Open a Pull Request.
 
-Please report bugs or suggest features using the GitHub Issues tab on the main repository.
+Please use the [GitHub Issues](https://github.com/bobbyhiddn/llore/issues) tab to report bugs or suggest new features.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.

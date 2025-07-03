@@ -559,6 +559,11 @@
     dispatch('updatecontent', documentContent.slice(0, position) + text + documentContent.slice(position));
   }
 
+  // Helper to replace text within a specific range
+  function replaceTextRange(newText: string, startPos: number, endPos: number) {
+    dispatch('updatecontent', documentContent.slice(0, startPos) + newText + documentContent.slice(endPos));
+  }
+
   // Computed property for filtered codex entries
   $: filteredCodexEntries = codexSearchTerm 
     ? codexEntries.filter(e => e.name.toLowerCase().includes(codexSearchTerm.toLowerCase()))
@@ -654,23 +659,28 @@
   }
 
   // NEW: The core function that is called after the user selects their context entries (or none)
-    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: string }>) {
+    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
     const { selectedEntries, selectedLength } = event.detail;
     showCodexSelector = false;
     
-    if (!activeWritingWeave || writingWeaveCursorPos === null) return;
+    if (!activeWritingWeave || writingWeaveCursorPos === null || !markdownTextareaElement) return;
 
     isWeaving = true;
     dispatch('loading', true);
     
     try {
-      const textBeforeCursor = documentContent.substring(0, writingWeaveCursorPos);
-      const textAfterCursor = documentContent.substring(writingWeaveCursorPos);
+      const selectionStart = markdownTextareaElement.selectionStart;
+      const selectionEnd = markdownTextareaElement.selectionEnd;
+      const selectedText = documentContent.substring(selectionStart, selectionEnd);
+      
+      // Get context chunks around the selection
+      const textBeforeSelection = documentContent.substring(0, selectionStart);
+      const textAfterSelection = documentContent.substring(selectionEnd);
 
       const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
       
       // Convert length selection to prompt instruction
-      const lengthInstructions = {
+      const lengthInstructions: Record<string, string> = {
         'small': 'Keep your response to exactly 1 sentence that flows naturally.',
         'medium': 'Write approximately 1 paragraph (3-5 sentences) that develops the scene.',
         'large': 'Write approximately 1 page worth of content (multiple paragraphs, around 200-400 words).',
@@ -679,11 +689,12 @@
       
       const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
       
-      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave a '${activeWritingWeave.label}' element into the document at the user's cursor position.\nContinue the story from the text provided before the cursor, and ensure it flows naturally into the text after the cursor.\n\nWhen incorporating the context entries, do so with nuance. Do not simply state the information from the context. Instead, use it to inform the atmosphere, character voice, or narrative direction. The insertion should feel like a natural continuation of the story, enhancing it without being jarring or overly explicit.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before cursor:\n---\n${textBeforeCursor.slice(-2000)}\n---\n\nText after cursor:\n---\n${textAfterCursor.substring(0, 2000)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate only the new text to be inserted between the 'before' and 'after' sections. The generated text should blend seamlessly and match the specified length requirement.`;
+      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       
-      insertTextAt(generatedText, writingWeaveCursorPos);
+      // Replace the entire selection with the enhanced version
+      replaceTextRange(generatedText, selectionStart, selectionEnd);
 
     } catch (err) {
       dispatch('error', `Writing Weaving failed: ${err}`);
@@ -698,8 +709,18 @@
     event.stopPropagation();
     if (!markdownTextareaElement) return;
     
+    const selectionStart = markdownTextareaElement.selectionStart;
+    const selectionEnd = markdownTextareaElement.selectionEnd;
+    
+    // Check if there's a text selection
+    if (selectionStart === selectionEnd) {
+      // No selection - prompt user to highlight text first
+      dispatch('error', 'Please highlight a selection in the text first, then click the weave button.');
+      return;
+    }
+    
     activeWritingWeave = node;
-    writingWeaveCursorPos = markdownTextareaElement.selectionStart;
+    writingWeaveCursorPos = selectionStart;
     showCodexSelector = true;
   }
 
