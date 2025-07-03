@@ -2,6 +2,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { ProcessAndSaveTextAsEntries, SaveLibraryFile } from '@wailsjs/go/main/App'; // Import SaveLibraryFile (will add Go func later)
+  import Editor from './components/Editor.svelte';
 
   export let filename: string;
   export let initialContent: string;
@@ -48,12 +49,43 @@
   function handleClose() {
     dispatch('close');
   }
+
+  // Autosave function for the Editor component
+  async function handleAutoSave(newContent: string) {
+    // Only autosave if content has actually changed
+    if (newContent === content) {
+      return; // No change, don't save
+    }
+
+    console.log(`Autosaving library file: ${filename}`);
+    try {
+      await SaveLibraryFile(filename, newContent);
+      
+      // Update the content so future comparisons work correctly
+      content = newContent;
+      
+      console.log("Library file autosaved successfully.");
+      // Clear any previous error messages on successful save
+      errorMsg = '';
+    } catch (error) {
+      console.error("Failed to autosave library file:", error);
+      // Show error to user
+      errorMsg = `Autosave failed: ${error}`;
+    }
+  }
 </script>
 
 <div class="modal-backdrop">
   <div class="modal-content library-viewer">
     <h3>Viewing/Editing: {filename}</h3>
-    <textarea bind:value={content} rows="20" disabled={isLoading}></textarea>
+    <div class="editor-container">
+      <Editor 
+        content={content}
+        onSave={handleAutoSave}
+        placeholder="Edit your library file content..."
+        editorClass="library-editor"
+      />
+    </div>
     {#if errorMsg}<p class="error-message">{errorMsg}</p>{/if}
     {#if successMsg}<p style="color: green;">{successMsg}</p>{/if}
     <div class="modal-actions">
@@ -84,12 +116,21 @@
   .library-viewer h3 {
     margin-top: 0;
   }
-  .library-viewer textarea {
-    width: 100%;
-    flex-grow: 1; /* Make textarea fill space */
+  .editor-container {
+    flex-grow: 1;
     margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .library-viewer :global(.library-editor) {
+    height: 100%;
+    flex-grow: 1;
+  }
+
+  .library-viewer :global(.library-editor .editor-textarea) {
     font-family: monospace; /* Good for code/text */
-    resize: none; /* Disable manual resize */
+    min-height: 400px;
   }
   .modal-actions {
     margin-top: 1rem;

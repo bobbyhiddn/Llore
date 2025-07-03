@@ -1,7 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { database } from '@wailsjs/go/models'; // Import namespace
-  import { GetEmbedding } from '@wailsjs/go/main/App';
+  import { GetEmbedding, UpdateEntry } from '@wailsjs/go/main/App';
+  import Editor from './Editor.svelte';
 
   // Props from parent (App.svelte)
   export let entries: database.CodexEntry[] = [];
@@ -140,9 +141,37 @@
   function handleTypeChange(event: Event) {
     localType = (event.target as HTMLInputElement).value;
   }
-  
-  function handleContentChange(event: Event) {
-    localContent = (event.target as HTMLTextAreaElement).value;
+
+  // Autosave function for the Editor component
+  async function handleAutoSave(newContent: string) {
+    // Only autosave if we have a valid entry ID and the content has actually changed
+    if (!currentEntry || !currentEntry.id || currentEntry.id <= 0) {
+      return; // Don't autosave new entries that haven't been created yet
+    }
+    
+    if (newContent === currentEntry.content) {
+      return; // No change, don't save
+    }
+
+    console.log(`Autosaving codex entry: ${currentEntry.id}`);
+    try {
+      // Create updated entry object
+      const updatedEntry: database.CodexEntry = {
+        ...currentEntry,
+        content: newContent
+      };
+      
+      await UpdateEntry(updatedEntry);
+      
+      // Update the current entry's content so future comparisons work correctly
+      currentEntry.content = newContent;
+      localContent = newContent;
+      
+      console.log("Codex entry autosaved successfully.");
+    } catch (error) {
+      console.error("Failed to autosave codex entry:", error);
+      // Optionally show error to user - for now just log it
+    }
   }
 </script>
 
@@ -201,11 +230,11 @@
 
           <div class="codex-entry-field">
             <label for="content">Content:</label>
-            <textarea
-              id="content"
-              value={localContent}
-              on:input={handleContentChange}
+            <Editor 
+              content={localContent}
+              onSave={handleAutoSave}
               placeholder="Describe the entry..."
+              editorClass="codex-editor"
             />
           </div>
         </div>
@@ -340,8 +369,7 @@
     font-size: 0.9rem;
   }
 
-  .codex-entry-field input,
-  .codex-entry-field textarea {
+  .codex-entry-field input {
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 6px;
@@ -350,10 +378,13 @@
     font-size: 1rem;
   }
 
-  .codex-entry-field textarea {
-    min-height: 150px; /* Reduced min-height */
-    resize: vertical;
-    flex-grow: 1; /* Allow textarea to grow */
+  .codex-entry-field :global(.codex-editor) {
+    min-height: 200px;
+    flex-grow: 1;
+  }
+
+  .codex-entry-field :global(.codex-editor .editor-textarea) {
+    min-height: 150px;
   }
 
   .button-group {
