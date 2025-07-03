@@ -72,6 +72,11 @@
   let showSaveTemplateModal = false;
   let newTemplateName = '';
 
+  // --- Error Modal State ---
+  let showErrorModal = false;
+  let errorModalTitle = '';
+  let errorModalMessage = '';
+
   const dispatch = createEventDispatcher();
   const marked = new Marked({ gfm: true, breaks: true });
 
@@ -489,6 +494,7 @@
           const cursorPos = getCursorPositionFromMouseEvent(event);
           activeWritingWeave = dropData.weave;
           writingWeaveCursorPos = cursorPos;
+          writingWeaveSelectionEnd = cursorPos; // Set end to start for a drop (no selection)
           showCodexSelector = true;
         } else {
           // Handle codex entry drop (has id, name, type, content properties)
@@ -657,8 +663,8 @@
     }
   }
 
-  // NEW: The core function that is called after the user selects their context entries (or none)
-    async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
+  // UPDATED: The core function that is called after the user selects their context entries (or none)
+  async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
     const { selectedEntries, selectedLength } = event.detail;
     showCodexSelector = false;
     
@@ -670,6 +676,7 @@
     try {
       // Use the saved selection end, as the live one is lost when the modal opens.
       const selectedText = documentContent.substring(writingWeaveCursorPos, writingWeaveSelectionEnd);
+      const hasSelection = selectedText.length > 0;
       const textBeforeSelection = documentContent.substring(0, writingWeaveCursorPos);
       const textAfterSelection = documentContent.substring(writingWeaveSelectionEnd);
 
@@ -685,11 +692,28 @@
       
       const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
       
-      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.\n\nCRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
+      // --- Conditional Prompting ---
+      const taskDescription = hasSelection 
+        ? `Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.`
+        : `Your task is to generate and insert a '${activeWritingWeave.label}' element at the user's cursor position.`;
+
+      const criticalInstruction = hasSelection
+        ? `CRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.`
+        : `CRITICAL: Your response must be ONLY the generated text to insert. Do not include any conversational pleasantries or introductions. Your output will be directly inserted into the document.`;
+
+      const selectedTextContext = hasSelection 
+        ? `\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n` 
+        : '';
+      
+      const finalInstruction = hasSelection
+        ? `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`
+        : `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate new text to be inserted. The result should flow naturally from the text before the cursor and into the text after it. Match the specified length requirement.`;
+
+      const prompt = `You are a subtle and masterful fiction writing assistant. ${taskDescription}\n\n${criticalInstruction}\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---${selectedTextContext}\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\n${finalInstruction}`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       
-      // Replace the entire selection with the enhanced version
+      // Replace the entire selection with the enhanced version (or insert if no selection)
       replaceTextRange(generatedText, writingWeaveCursorPos, writingWeaveSelectionEnd);
 
     } catch (err) {
@@ -701,6 +725,13 @@
     }
   }
 
+  function handleModalKeydown(event: KeyboardEvent) {
+    if (showErrorModal && event.key === 'Escape') {
+      showErrorModal = false;
+    }
+  }
+
+  // UPDATED: Handle click on writing weave buttons
   function openWritingWeave(event: MouseEvent, node: { type: string, label: string }) {
     event.stopPropagation();
     if (!markdownTextareaElement) return;
@@ -710,14 +741,40 @@
     
     // Check if there's a text selection
     if (selectionStart === selectionEnd) {
-      // No selection - prompt user to highlight text first
-      dispatch('error', 'Please highlight a selection in the text first, then click the weave button.');
+      // No selection - show the local error modal
+      errorModalTitle = 'Text Selection Required';
+      errorModalMessage = 'Please select some text in your document before clicking a writing weave. You can also drag the weave directly into your document at the desired location.';
+      showErrorModal = true;
       return;
     }
     
     activeWritingWeave = node;
     writingWeaveCursorPos = selectionStart;
-    writingWeaveSelectionEnd = selectionEnd;
+    writingWeaveSelectionEnd = selectionEnd; // Will be same as start if no selection
+    showCodexSelector = true;
+  }
+
+  // NEW: Handle drag start for writing weave buttons
+  function handleCodexEntryClick(event: MouseEvent | KeyboardEvent, entry: database.CodexEntry) {
+    event.stopPropagation();
+    if (!markdownTextareaElement) return;
+    
+    const selectionStart = markdownTextareaElement.selectionStart;
+    const selectionEnd = markdownTextareaElement.selectionEnd;
+
+    // Check if there's a text selection
+    if (selectionStart === selectionEnd) {
+      // No selection - show the local error modal
+      errorModalTitle = 'Text Selection Required';
+      errorModalMessage = 'Please select some text in your document before clicking a codex entry. You can also drag the entry directly into your document to insert a reference.';
+      showErrorModal = true;
+      return;
+    }
+    
+    // If text is selected, trigger weaving flow with this codex entry
+    activeWritingWeave = { type: 'codex', label: entry.name };
+    writingWeaveCursorPos = markdownTextareaElement.selectionStart;
+    writingWeaveSelectionEnd = markdownTextareaElement.selectionEnd;
     showCodexSelector = true;
   }
 
@@ -918,6 +975,7 @@
             tabindex="0"
             draggable="true"
             on:dragstart={(e) => handleDragStart(e, entry)}
+            on:click={(e) => handleCodexEntryClick(e, entry)}
             on:keydown={(e) => {
               if (e.key === 'Enter') {
                 const referenceText = `[@${entry.name}](codex://entry/${entry.id})`;
@@ -1031,8 +1089,21 @@
   </div>
 {/if}
 
-<!-- Weaving Loading Modal -->
-{#if isWeaving}
+    <!-- Error Modal -->
+    {#if showErrorModal}
+      <div class="modal-backdrop">
+        <div class="modal error-modal" role="dialog" aria-modal="true">
+          <h3>{errorModalTitle}</h3>
+          <p>{errorModalMessage}</p>
+          <div class="modal-buttons">
+            <button on:click={() => showErrorModal = false} class="save-btn">OK</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Weaving Loading Modal -->
+    {#if isWeaving}
   <div class="modal-backdrop">
     <div class="modal weaving-modal">
       <div class="weaving-content">
