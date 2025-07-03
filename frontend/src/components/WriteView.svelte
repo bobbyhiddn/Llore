@@ -44,6 +44,7 @@
   let showCodexSelector = false;
   let activeWritingWeave: { type: string, label: string } | null = null;
   let writingWeaveCursorPos = 0;
+  let writingWeaveSelectionEnd = 0; // To preserve selection across modals
   let isWeaveDragOver = false;
   let dropIndicatorStyle = '';
 
@@ -625,18 +626,16 @@
   function handleAutocompleteSelect(event: CustomEvent<database.CodexEntry>) {
     const entry = event.detail;
     const referenceText = `[@${entry.name}](codex://entry/${entry.id}) `;
-    
-    // Replace from the '@' trigger position
-    const textBefore = documentContent.substring(0, autocompleteTriggerPos);
-    const textAfter = documentContent.substring(autocompleteTriggerPos + autocompleteQuery.length + 1);
-    
-    dispatch('updatecontent', textBefore + referenceText + textAfter);
+        // Use the saved selection end for the final replacement.
+        const textBefore = documentContent.substring(0, writingWeaveCursorPos);
+        const textAfter = documentContent.substring(writingWeaveSelectionEnd);
+        dispatch('updatecontent', textBefore + referenceText + textAfter);
     showAutocomplete = false;
     
     // Move cursor after the inserted text
     requestAnimationFrame(() => {
       if (!markdownTextareaElement) return;
-      const newCursorPos = autocompleteTriggerPos + referenceText.length;
+      const newCursorPos = writingWeaveCursorPos + referenceText.length;
       markdownTextareaElement.focus();
       markdownTextareaElement.selectionStart = newCursorPos;
       markdownTextareaElement.selectionEnd = newCursorPos;
@@ -669,13 +668,10 @@
     dispatch('loading', true);
     
     try {
-      const selectionStart = markdownTextareaElement.selectionStart;
-      const selectionEnd = markdownTextareaElement.selectionEnd;
-      const selectedText = documentContent.substring(selectionStart, selectionEnd);
-      
-      // Get context chunks around the selection
-      const textBeforeSelection = documentContent.substring(0, selectionStart);
-      const textAfterSelection = documentContent.substring(selectionEnd);
+      // Use the saved selection end, as the live one is lost when the modal opens.
+      const selectedText = documentContent.substring(writingWeaveCursorPos, writingWeaveSelectionEnd);
+      const textBeforeSelection = documentContent.substring(0, writingWeaveCursorPos);
+      const textAfterSelection = documentContent.substring(writingWeaveSelectionEnd);
 
       const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
       
@@ -689,12 +685,12 @@
       
       const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
       
-      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
+      const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.\n\nCRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\nBased on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       
       // Replace the entire selection with the enhanced version
-      replaceTextRange(generatedText, selectionStart, selectionEnd);
+      replaceTextRange(generatedText, writingWeaveCursorPos, writingWeaveSelectionEnd);
 
     } catch (err) {
       dispatch('error', `Writing Weaving failed: ${err}`);
@@ -721,6 +717,7 @@
     
     activeWritingWeave = node;
     writingWeaveCursorPos = selectionStart;
+    writingWeaveSelectionEnd = selectionEnd;
     showCodexSelector = true;
   }
 
@@ -1064,7 +1061,7 @@
   .codex-reference-panel {
     display: flex;
     flex-direction: column;
-    height: 100%; /* Or set a max-height */
+    max-height: 60%; /* Constrain the panel's height */
   }
 
   .codex-search {
@@ -1080,6 +1077,46 @@
   .codex-entry-list {
     flex-grow: 1;
     overflow-y: auto;
+  }
+
+  /* Custom Scrollbar for multiple elements */
+  .codex-entry-list,
+  .markdown-input,
+  .markdown-preview-container,
+  .chat-messages-area {
+    scrollbar-width: thin; /* For Firefox */
+    scrollbar-color: var(--accent-primary) transparent; /* For Firefox */
+  }
+
+  .codex-entry-list::-webkit-scrollbar,
+  .markdown-input::-webkit-scrollbar,
+  .markdown-preview-container::-webkit-scrollbar,
+  .chat-messages-area::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .codex-entry-list::-webkit-scrollbar-track,
+  .markdown-input::-webkit-scrollbar-track,
+  .markdown-preview-container::-webkit-scrollbar-track,
+  .chat-messages-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .codex-entry-list::-webkit-scrollbar-thumb,
+  .markdown-input::-webkit-scrollbar-thumb,
+  .markdown-preview-container::-webkit-scrollbar-thumb,
+  .chat-messages-area::-webkit-scrollbar-thumb {
+    background-color: var(--accent-primary, #6d5ed9);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  .codex-entry-list::-webkit-scrollbar-thumb:hover,
+  .markdown-input::-webkit-scrollbar-thumb:hover,
+  .markdown-preview-container::-webkit-scrollbar-thumb:hover,
+  .chat-messages-area::-webkit-scrollbar-thumb:hover {
+    background-color: var(--accent-secondary, #8a7ef9);
   }
 
   .codex-item {
