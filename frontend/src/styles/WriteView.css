@@ -1,0 +1,672 @@
+/* NEW STYLES for rendered @mentions */
+.markdown-preview :global(.codex-mention) {
+    background-color: rgba(109, 94, 217, 0.2); /* Use accent color but subtle */
+    color: var(--accent-secondary);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-weight: 500;
+    cursor: help; /* Indicate it's interactive */
+    border-bottom: 1px dotted var(--accent-secondary);
+}
+/* ... (keep most existing styles) ... */
+
+.codex-reference-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: 60%; /* Constrain the panel's height */
+}
+
+.codex-search {
+    width: 100%;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.codex-list {
+    flex-grow: 1;
+    overflow-y: auto;
+}
+
+/* Custom Scrollbar for multiple elements */
+.codex-list,
+.markdown-input,
+.markdown-preview-container,
+.chat-messages-area,
+.right-column-toolbar {
+    scrollbar-width: thin; /* For Firefox */
+    scrollbar-color: var(--accent-primary) transparent; /* For Firefox */
+}
+
+.codex-list::-webkit-scrollbar,
+.markdown-input::-webkit-scrollbar,
+.markdown-preview-container::-webkit-scrollbar,
+.chat-messages-area::-webkit-scrollbar,
+.right-column-toolbar::-webkit-scrollbar {
+    width: 8px;
+}
+
+.codex-list::-webkit-scrollbar-track,
+.markdown-input::-webkit-scrollbar-track,
+.markdown-preview-container::-webkit-scrollbar-track,
+.chat-messages-area::-webkit-scrollbar-track,
+.right-column-toolbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.codex-list::-webkit-scrollbar-thumb,
+.markdown-input::-webkit-scrollbar-thumb,
+.markdown-preview-container::-webkit-scrollbar-thumb,
+.chat-messages-area::-webkit-scrollbar-thumb,
+.right-column-toolbar::-webkit-scrollbar-thumb {
+    background-color: var(--accent-primary, #6d5ed9);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.codex-list::-webkit-scrollbar-thumb:hover,
+.markdown-input::-webkit-scrollbar-thumb:hover,
+.markdown-preview-container::-webkit-scrollbar-thumb:hover,
+.chat-messages-area::-webkit-scrollbar-thumb:hover,
+.right-column-toolbar::-webkit-scrollbar-thumb:hover {
+    background-color: var(--accent-secondary, #8a7ef9);
+}
+
+.codex-item {
+    padding: 0.5rem;
+    border-radius: 4px;
+    cursor: grab;
+    margin-bottom: 0.25rem;
+    border: 1px solid transparent;
+}
+.codex-item:hover {
+    background-color: var(--bg-hover-medium);
+    border-color: var(--border-color-strong);
+}
+.codex-item span { color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.5rem; }
+
+/* Overlay for closing the context menu */
+.overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 1000;
+}
+:global(body) {
+    font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif);
+    color: var(--text-primary, #e0e0e0); /* Light text for dark theme */
+    background-color: var(--bg-primary, #1e1e1e); /* Dark background for body */
+}
+
+.back-btn {
+    display: block;
+    margin: 1rem 1rem 1.5rem 1rem;
+    padding: 0.7rem 1.2rem;
+    background: var(--bg-secondary, rgba(22, 33, 62, 0.95)); /* App.svelte var */
+    color: var(--text-accent, var(--accent-primary, #6d5ed9)); /* App.svelte var */
+    border: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+.back-btn:hover {
+    background: var(--bg-hover-medium, rgba(255, 255, 255, 0.1));
+    color: var(--text-accent-hover, var(--accent-secondary, #8a7ef9)); /* App.svelte var */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.write-view-main-content {
+    display: flex;
+    height: calc(100vh - 60px); 
+    width: 100%;
+    box-sizing: border-box;
+    background-color: var(--bg-primary, rgba(26, 26, 46, 0.95)); /* App.svelte var */
+    padding-bottom: 1.5rem; /* Added padding to the bottom */
+}
+
+.left-column, .center-column, .right-column-toolbar {
+    padding: 1.25rem;
+    box-sizing: border-box;
+    overflow-y: auto;
+}
+
+.left-column {
+    flex: 0 0 300px;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-secondary, rgba(22, 33, 62, 0.90)); /* App.svelte var */
+    border-right: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
+    gap: 1.5rem;
+}
+
+.left-column .write-chat-panel {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+.left-column .write-chat-panel h3 {
+    font-size: 1.1em;
+    color: var(--text-title, var(--accent-primary, #6d5ed9)); /* App.svelte var */
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+}
+
+.left-column .write-chat-panel .chat-messages-area {
+    flex-grow: 1;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-primary, rgba(26, 26, 46, 0.85)); /* App.svelte var */
+    border-radius: 6px;
+    border: 1px solid var(--border-color-light, rgba(160, 160, 160, 0.1));
+}
+
+.message {
+    margin-bottom: 0.8rem;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    line-height: 1.4;
+    font-size: 0.75rem;
+    word-wrap: break-word;
+    position: relative;
+}
+.message.user {
+    background-color: var(--user-message-bg, var(--accent-primary, #6d5ed9)); /* Use accent for user */
+    color: var(--text-primary, #e0e0e0);
+    margin-left: auto;
+    max-width: 85%;
+    border-bottom-right-radius: 2px;
+}
+.message.ai {
+    background-color: var(--ai-message-bg, var(--bg-secondary, rgba(22, 33, 62, 0.9))); /* App.svelte var */
+    color: var(--text-primary, #e0e0e0);
+    margin-right: auto;
+    max-width: 85%;
+    border-bottom-left-radius: 2px;
+    text-align: left; /* Ensure content is left-aligned */
+}
+ .message.ai .insert-btn {
+    position: absolute;
+    bottom: 5px;
+    right: 8px;
+    padding: 3px 7px;
+    font-size: 0.7rem;
+    background: var(--bg-hover-medium, rgba(255,255,255,0.1));
+    color: var(--text-secondary, #a0a0a0);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+.message.ai:hover .insert-btn { opacity: 1; background: var(--bg-hover-strong, rgba(255,255,255,0.2)); }
+
+.left-column .write-chat-panel .write-chat-form input[type="text"] {
+    flex-grow: 1;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-radius: 6px;
+    font-size: 0.9rem;
+    background-color: var(--bg-input, var(--bg-primary, rgba(26, 26, 46, 0.7))); /* Slightly transparent for depth */
+    color: var(--text-primary, #e0e0e0);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.left-column .write-chat-panel .write-chat-form input[type="text"]:focus {
+    border-color: var(--accent-primary, #6d5ed9);
+    box-shadow: 0 0 0 0.2rem rgba(109, 94, 217, .25); /* Derived from accent-primary */
+    outline: none;
+}
+.left-column .write-chat-panel .write-chat-form button {
+    padding: 0.75rem 1.2rem;
+    background-color: var(--accent-primary, #6d5ed9);
+    color: var(--text-primary, #e0e0e0); /* Text on accent bg should be light */
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.left-column .write-chat-panel .write-chat-form button:hover {
+    background-color: var(--accent-secondary, #8a7ef9);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.left-column .save-tools-module {
+    flex-shrink: 0;
+    background: transparent; /* Or var(--bg-secondary) if more separation needed */
+    padding: 1rem;
+    margin: 0 -1.25rem -1.25rem -1.25rem;
+    border-top: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
+}
+.left-column .save-tools-module .tool-section h4 {
+    font-size: 1em;
+    color: var(--text-title, var(--accent-primary, #6d5ed9));
+    margin-bottom: 0.75rem;
+}
+
+.save-buttons {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.save-btn, .save-as-btn, .template-btn {
+    padding: 0.7rem 1.1rem !important;
+    font-size: 0.9rem !important;
+    border-radius: 6px !important;
+    border: none !important;
+    color: var(--text-primary, #e0e0e0) !important; /* Text on colored button */
+    cursor: pointer;
+    flex: 1;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+    font-weight: 500;
+    text-align: center;
+}
+.save-btn {
+    background-color: var(--success-color, #2ed573) !important; /* App.svelte var */
+}
+.save-btn:hover:not(:disabled) {
+    filter: brightness(110%);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.save-as-btn {
+    background-color: var(--accent-primary, #6d5ed9) !important; /* App.svelte var for general actions */
+}
+.save-as-btn:hover:not(:disabled) {
+    background-color: var(--accent-secondary, #8a7ef9) !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.save-btn:disabled, .save-as-btn:disabled {
+    opacity: 0.5;
+}
+.template-btn {
+    /* Style it differently, maybe with a different color */
+    background-color: #fdcb6e !important; /* A gold/yellow color */
+    color: #2d3436 !important;
+}
+.template-btn:hover:not(:disabled) {
+    background-color: #ffeaa7 !important;
+}
+
+.center-column {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-primary, rgba(26, 26, 46, 0.95)); /* App.svelte var */
+    /* No border needed to separate from main-content if same bg */
+}
+
+.editor-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Important for flex child to shrink */
+}
+
+.center-column .editor-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+}
+.view-mode-toggles button {
+    padding: 0.5rem 1rem;
+    background: transparent;
+    border: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-radius: 6px;
+    color: var(--text-secondary, #a0a0a0); /* App.svelte var */
+    cursor: pointer;
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+.view-mode-toggles button.active {
+    background-color: var(--accent-primary, #6d5ed9);
+    color: var(--text-primary, #e0e0e0);
+    border-color: var(--accent-primary, #6d5ed9);
+}
+.view-mode-toggles button:hover:not(.active) {
+    background-color: var(--bg-hover-light, rgba(255, 255, 255, 0.05));
+    border-color: var(--border-color-strong, rgba(160, 160, 160, 0.3));
+}
+
+
+.center-column .markdown-input {
+    flex-grow: 1;
+    width: 100%;
+    border: none;
+    padding: 1rem;
+    font-family: var(--font-mono, 'Consolas', 'Monaco', 'Courier New', monospace);
+    font-size: 1rem;
+    line-height: 1.6;
+    resize: none;
+    box-sizing: border-box;
+    background-color: transparent;
+    color: var(--text-primary, #e0e0e0);
+}
+.center-column .markdown-input:focus {
+    outline: none;
+}
+
+.markdown-preview-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    background: var(--bg-secondary, rgba(22, 33, 62, 0.85)); /* Consistent with editor or slightly different */
+    color: var(--text-primary, #e0e0e0);
+}
+
+.markdown-preview :global(h1),
+.markdown-preview :global(h2),
+.markdown-preview :global(h3),
+.markdown-preview :global(h4),
+.markdown-preview :global(h5),
+.markdown-preview :global(h6) {
+    color: var(--text-title, var(--accent-secondary, #8a7ef9)); /* Use lighter accent for headers */
+    border-bottom-color: var(--border-color-medium, rgba(160, 160, 160, 0.2));
+}
+.markdown-preview :global(a) {
+    color: var(--text-accent, var(--accent-primary, #6d5ed9));
+}
+.markdown-preview :global(code) {
+    background: var(--bg-primary, rgba(26, 26, 46, 0.7));
+    color: var(--text-secondary, #a0a0a0);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+}
+.markdown-preview :global(pre) {
+    background: var(--bg-primary, rgba(26, 26, 46, 0.8));
+    border: 1px solid var(--border-color-light, rgba(160, 160, 160, 0.1));
+    padding: 1em;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+.markdown-preview :global(pre code) {
+    background: transparent;
+    color: var(--text-primary, #e0e0e0);
+    padding: 0;
+}
+.markdown-preview :global(blockquote) {
+    border-left: 4px solid var(--accent-primary, #6d5ed9);
+    background: var(--bg-secondary, rgba(22, 33, 62, 0.5));
+    color: var(--text-secondary, #a0a0a0);
+    padding: 0.5em 1em;
+    margin-left: 0;
+}
+
+.right-column-toolbar {
+    flex: 0 0 220px;
+    background-color: var(--bg-secondary, rgba(22, 33, 62, 0.90)); /* Consistent with left column */
+    border-left: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.right-column-toolbar .tool-section {
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+}
+.right-column-toolbar .tool-section:last-child {
+    border-bottom: none;
+}
+
+.right-column-toolbar .tool-section h4 {
+    margin: 0 0 0.75rem 0;
+    color: var(--text-title, var(--accent-primary, #6d5ed9));
+    border-bottom: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    padding-bottom: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+
+.right-column-toolbar .tool-section button {
+    display: block;
+    width: 100%;
+    margin-bottom: 0.6rem;
+    text-align: left;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.85rem;
+    background-color: var(--bg-button-tool, var(--bg-primary, rgba(26, 26, 46, 0.8)));
+    color: var(--text-secondary, #a0a0a0);
+    border: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+.right-column-toolbar .tool-section button:hover {
+    background-color: var(--bg-hover-medium, rgba(255, 255, 255, 0.1));
+    border-color: var(--border-color-strong, rgba(160, 160, 160, 0.3));
+    color: var(--text-primary, #e0e0e0);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+
+/* Writing Weaving Button Styles */
+.writing-weave-buttons {
+    display: grid; /* Changed to grid */
+    grid-template-columns: 1fr; /* Single column */
+    gap: 0.5rem;
+}
+
+.writing-weave-buttons button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-align: left;
+    cursor: grab;
+}
+
+.writing-weave-buttons button:active {
+    cursor: grabbing;
+}
+
+.writing-weave-buttons button .icon {
+    font-size: 1.2em;
+    width: 1.5em;
+    text-align: center;
+}
+
+.drop-indicator {
+    position: absolute;
+    width: 2px;
+    height: 1.5em; /* Should roughly match line-height */
+    background-color: var(--accent-primary);
+    animation: blink 1s infinite steps(1, start);
+    pointer-events: none; /* So it doesn't interfere with other events */
+    z-index: 10;
+    transform: translateY(-2px); /* Minor adjustment */
+}
+
+@keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0; }
+    100% { opacity: 1; }
+}
+
+.status-bar {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #a0a0a0);
+    background-color: var(--bg-secondary, rgba(22, 33, 62, 0.95));
+    border-top: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
+    text-align: right;
+}
+
+.bottom-formatting-bar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.25rem; /* Tighter gap */
+    padding: 0.4rem;
+    background-color: var(--bg-primary, #1a1a2e);
+    border-top: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+.bottom-formatting-bar .tool-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: 0.5rem 0.75rem;
+    font-weight: bold;
+    min-width: 40px; /* Ensure consistent width */
+}
+
+.bottom-formatting-bar .tool-btn:hover {
+    background-color: var(--bg-hover-light);
+    border-color: var(--border-color-medium);
+    color: var(--text-primary);
+}
+
+/* Save Modal Styles */
+.modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 8px;
+    padding: 1.5rem;
+    min-width: 400px;
+    max-width: 500px;
+}
+
+.modal h3 {
+    margin: 0 0 1rem 0;
+    color: var(--text-primary);
+}
+
+.modal-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.filename-input {
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.modal-buttons button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+/* Weaving Modal Styles */
+.weaving-modal {
+    text-align: center;
+    min-width: 300px;
+    max-width: 400px;
+}
+
+.weaving-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.weaving-spinner {
+    font-size: 2rem;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.weaving-modal h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.5rem;
+}
+
+.weaving-modal p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 0.6;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+}
+
+.cancel-btn {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color-medium);
+}
+
+.cancel-btn:hover {
+    background: var(--bg-hover-medium);
+}
+
+.save-btn {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.save-btn:hover:not(:disabled) {
+    background: var(--accent-secondary);
+}
+
+.save-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.error-message {
+    color: #ff6b6b;
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+.success-message {
+    color: #51cf66;
+    font-size: 0.9rem;
+    margin: 0;
+}

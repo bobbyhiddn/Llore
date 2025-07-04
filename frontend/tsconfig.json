@@ -13,11 +13,11 @@
     "moduleResolution": "node", // Important for resolving node_modules types
     "strict": true, // Optional, but good practice
     "noEmit": true, // We don't need TS to emit JS, Vite handles it
-    "baseUrl": ".",
+    "baseUrl": "./",
     "paths": {
       "$lib": ["src/lib"],
       "$lib/*": ["src/lib/*"],
-      "@wailsjs/*": ["wailsjs/*"]
+      "@wailsjs/*": ["./wailsjs/*"]
     }
   },
   "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.ts", "src/**/*.svelte", "wailsjs/**/*.js", "wailsjs/**/*.ts"],
