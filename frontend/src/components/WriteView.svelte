@@ -2,11 +2,12 @@
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
   import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate, ProcessStory } from '@wailsjs/go/main/App';
-  import { database } from '@wailsjs/go/models';
+  import { database, llm } from '@wailsjs/go/models';
   import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
   import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
   import CodexSelectorModal from './CodexSelectorModal.svelte';
   import ChatMessageMenu from './ChatMessageMenu.svelte';
+  import StoryImportStatus from './StoryImportStatus.svelte';
   import '../styles/WriteView.css';
 
   // --- REVISED Props ---
@@ -61,6 +62,11 @@
   ];
   let dropCursorPosition: number = 0;
   let isWeaving = false;
+  type IndexingStatus = 'idle' | 'indexing' | 'complete' | 'error';
+  let indexingStatus: IndexingStatus = 'idle';
+  let indexingError: string | null = null;
+  let newIndexedEntries: database.CodexEntry[] = [];
+  let updatedIndexedEntries: database.CodexEntry[] = [];
 
   // --- New State for Autocomplete ---
   let showAutocomplete = false;
@@ -278,39 +284,41 @@
     if (!userMessageToSend && !overridePrompt) return;
     
     if (!chatModelId) {
-        writeChatError = 'No chat model selected in settings.';
-        dispatch('error', writeChatError); // Dispatch global error
+        dispatch('error', 'No chat model is selected. Please select a model in the settings.');
         return;
     }
+    
+    // Add user message to display immediately, unless it's a command that shouldn't be shown
+    if (!overridePrompt && !userMessageToSend.startsWith('/')) {
+        writeChatMessages = [...writeChatMessages, { sender: 'user', text: userMessageToSend }];
+    } else if (userMessageOverride) {
+        // For things like rephrase, show the "Rephrase selection" message
+        writeChatMessages = [...writeChatMessages, { sender: 'user', text: userMessageOverride }];
+    }
 
-    writeChatMessages = [...writeChatMessages, { sender: 'user', text: userMessageToSend }];
     if (!overridePrompt) writeChatInput = ''; // Clear input only if not an override
     isWriteChatLoading = true;
     writeChatError = '';
     dispatch('loading', true);
 
-
     let finalPrompt = overridePrompt;
-
     if (!finalPrompt) {
         // Handle Slash Commands
         if (userMessageToSend.startsWith('/summarize_selection')) {
             const selection = getSelectedText();
             if (!selection) { 
-                writeChatError = "Please select text to summarize."; 
-                isWriteChatLoading = false; 
+                writeChatError = "You must select text to use /summarize_selection.";
+                isWriteChatLoading = false;
                 dispatch('loading', false);
-                writeChatMessages = writeChatMessages.slice(0, -1); // Remove the user message
                 return; 
             }
-            finalPrompt = `System: Summarize the following selected text from the user's draft concisely.\n<selected_text>\n${selection}\n</selected_text>\nUser: Summarize the selected text.`;
+            finalPrompt = `System: Summarize the following selected text from the user's draft.\n<selected_text>\n${selection}\n</selected_text>\nUser: Summarize the selected text.`;
         } else if (userMessageToSend.startsWith('/rephrase_selection')) {
             const selection = getSelectedText();
             if (!selection) { 
-                writeChatError = "Please select text to rephrase."; 
-                isWriteChatLoading = false; 
+                writeChatError = "You must select text to use /rephrase_selection.";
+                isWriteChatLoading = false;
                 dispatch('loading', false);
-                writeChatMessages = writeChatMessages.slice(0, -1); 
                 return; 
             }
             finalPrompt = `System: Rephrase the following selected text from the user's draft. Aim for clarity and improved style.\n<selected_text>\n${selection}\n</selected_text>\nUser: Rephrase the selected text.`;
@@ -320,30 +328,26 @@
         }
     }
 
-    if (!finalPrompt) { // Regular chat message, build prompt with context
-        // Build prompt with draft context
-        const draftContext = documentContent.length > 2000 ? documentContent.substring(0, 2000) + "\n...[Draft Truncated]..." : documentContent;
-        finalPrompt = `System: You are an AI writing assistant. The user is working on the following draft:\n<draft>\n${draftContext}\n</draft>\n\n`;
-
-        finalPrompt += `Recent Chat History (user and AI):\n`;
-        const historyLimit = 3; // User-AI pairs
-        writeChatMessages.slice(-(historyLimit * 2 + 1), -1).forEach(msg => { // Get history before current user message
-            finalPrompt += `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}\n`;
-        });
-        finalPrompt += `User: ${userMessageToSend}\nAI:`;
-    }
+    // The query MUST be a string. Use the slash-command prompt if it exists, otherwise use the user's input.
+    const query = finalPrompt || userMessageToSend;
 
     try {
-      const aiReply = await GetAIResponseWithContext(finalPrompt, chatModelId);
-      const aiReplyHtml = await marked.parse(aiReply || '');
-      writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply, html: aiReplyHtml }];
+        const aiReply = await GetAIResponseWithContext(query, chatModelId);
+        
+        const markedResponse = await marked.parse(aiReply || '');
+
+        writeChatMessages = [
+            ...writeChatMessages, 
+            { sender: 'ai', text: aiReply, html: markedResponse }
+        ];
+
     } catch (err) {
-      console.error("Error in write chat:", err);
-      writeChatError = `AI error: ${err}`;
-      dispatch('error', writeChatError);
+        writeChatError = `AI error: ${err}`;
+        console.error("Write chat send error:", err);
+        dispatch('error', writeChatError);
     } finally {
-      isWriteChatLoading = false;
-      dispatch('loading', false);
+        isWriteChatLoading = false;
+        dispatch('loading', false);
     }
   }
 
@@ -1076,20 +1080,25 @@ Based on the AI response and the surrounding context, generate enhanced text tha
   }
   async function saveChatToCodex(text: string) {
     if (!text) return;
-    try {
-      const result = await ProcessStory(text);
-      const newEntries = result.newEntries || [];
-      const updatedEntries = result.updatedEntries || [];
-      
-      if (newEntries.length > 0 || updatedEntries.length > 0) {
-        // Refresh the codex entries list
-        codexEntries = await GetAllEntries() || [];
-        // Optionally, dispatch a success message
-        dispatch('info', 'Codex has been updated.');
-      }
-    } catch (err) {
-      dispatch('error', `Failed to save to codex: ${err}`);
-    }
+    indexingStatus = 'indexing';
+    indexingError = null;
+    newIndexedEntries = [];
+    updatedIndexedEntries = [];
+    dispatch('savecodex', text);
+  }
+
+  export function setCodexSaveResult(result: { newEntries: database.CodexEntry[], updatedEntries: database.CodexEntry[] }) {
+    indexingStatus = 'complete';
+    indexingError = null;
+    newIndexedEntries = result.newEntries || [];
+    updatedIndexedEntries = result.updatedEntries || [];
+  }
+
+  export function setCodexSaveError(message: string) {
+    indexingStatus = 'error';
+    indexingError = message;
+    newIndexedEntries = [];
+    updatedIndexedEntries = [];
   }
 </script>
 
@@ -1115,11 +1124,9 @@ Based on the AI response and the surrounding context, generate enhanced text tha
                   {msg.text}
                 {/if}
               </div>
-              {#if msg.sender === 'ai'}
-                <button class="message-menu-btn" on:click|stopPropagation={() => toggleMenu(i)}>⋮</button>
-                {#if activeMenuMessageIndex === i}
-                  <ChatMessageMenu on:action={(e) => handleMenuAction(e, msg.text)} />
-                {/if}
+              <button class="message-menu-btn" on:click|stopPropagation={() => toggleMenu(i)}>⋮</button>
+              {#if activeMenuMessageIndex === i}
+                <ChatMessageMenu on:action={(e) => handleMenuAction(e, msg.text)} />
               {/if}
             </div>
         {/each}
@@ -1314,6 +1321,25 @@ Based on the AI response and the surrounding context, generate enhanced text tha
           <div class="modal-buttons">
             <button on:click={() => showErrorModal = false} class="save-btn">OK</button>
           </div>
+        </div>
+      </div>
+    {/if}
+    
+    <!-- Indexing Modal -->
+    {#if indexingStatus !== 'idle'}
+      <div class="modal-backdrop">
+        <div class="modal indexing-modal">
+            <StoryImportStatus
+                status={indexingStatus === 'indexing' ? 'sending' : indexingStatus}
+                errorMsg={indexingError}
+                newEntries={newIndexedEntries}
+                updatedEntries={updatedIndexedEntries}
+            />
+            {#if indexingStatus === 'complete' || indexingStatus === 'error'}
+                <div class="modal-buttons" style="margin-top: 1rem; justify-content: center;">
+                    <button on:click={() => { indexingStatus = 'idle'; }} class="save-btn">OK</button>
+                </div>
+            {/if}
         </div>
       </div>
     {/if}

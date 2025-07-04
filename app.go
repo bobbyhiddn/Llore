@@ -322,7 +322,7 @@ func (a *App) SwitchVault(path string) error {
 
 	log.Printf("SwitchVault: Initializing LLM client for mode '%s' (derived for LLM tasks)", llmProviderForChat)
 	if err := llm.Init(path); err != nil {
-		log.Printf("Warning: Failed to initialize LLM package (OpenRouter cache) for vault '%s': %v", path, err)
+		log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", path, err)
 	}
 
 	// Initialize embedding services using the helper
@@ -415,18 +415,12 @@ func (a *App) initializeEmbeddingServices(cfg llm.OpenRouterConfig) error {
 	// Load cache and process missing embeddings only if DB is available
 	if a.db != nil {
 		go func() {
-			if err := a.embeddingService.LoadEmbeddingsIntoCache(); err != nil {
-				log.Printf("Warning: Failed to pre-load embeddings into cache: %v", err)
-			}
-		}()
-		go func() {
-			time.Sleep(2 * time.Second) // Allow cache loading
 			if err := a.GenerateMissingEmbeddings(); err != nil {
 				log.Printf("Warning: Failed to generate missing embeddings in background: %v", err)
 			}
 		}()
 	} else {
-		log.Println("Database not available, skipping cache load and missing embedding generation for now.")
+		log.Println("Database not available, skipping missing embedding generation for now.")
 	}
 
 	// Initialize LLM service
@@ -450,19 +444,8 @@ func (a *App) initializeLLM(cfg llm.OpenRouterConfig, vaultPath string) error {
 	// clients will be created on-demand in GenerateLLMContent.
 
 	// Common llm.Init for OpenRouter cache, which might be generally useful
-	// or could be made specific to OpenRouter mode.
-	// For now, let's assume it's mainly for OpenRouter's cache.
-	if cfg.ActiveMode == "openrouter" || cfg.ActiveMode == "hybrid" {
-		if err := llm.Init(vaultPath); err != nil {
-			log.Printf("Warning: Failed to initialize LLM package (OpenRouter cache) for vault '%s': %v", vaultPath, err)
-		}
-	} else if cfg.ActiveMode == "local" {
-		// Initialize Ollama cache if needed
-		if err := llm.Init(vaultPath); err != nil {
-			log.Printf("Warning: Failed to initialize LLM package (Ollama cache) for vault '%s': %v", vaultPath, err)
-		}
-	} else {
-		log.Printf("Skipping OpenRouter/Ollama cache initialization for ActiveMode: %s", cfg.ActiveMode)
+	if err := llm.Init(vaultPath); err != nil {
+		log.Printf("Warning: Failed to initialize LLM package for vault '%s': %v", vaultPath, err)
 	}
 
 	// Log API key status for each mode
@@ -1059,7 +1042,7 @@ func (a *App) ListChatLogs() ([]string, error) {
 	logs := make([]string, 0)
 	for _, entry := range entries {
 		// Only include files that end with .json AND are NOT the cache file
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "openrouter_cache.json" {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
 			logs = append(logs, entry.Name())
 		}
 	}
@@ -1144,10 +1127,6 @@ func (a *App) startup(ctx context.Context) {
 		// Log warning but don't necessarily fail startup, user might add key later
 		log.Printf("Warning: Failed to load OpenRouter configuration: %v. API key might be missing.", err)
 	}
-	// REMOVED: Load OpenRouter cache - This will be handled by llm.Init called during SwitchVault
-	// if err := llm.LoadOpenRouterCache(); err != nil {
-	// 	log.Printf("Warning: Failed to load OpenRouter cache: %v", err)
-	// }
 
 	log.Println("App startup complete.")
 }
@@ -1159,18 +1138,8 @@ func (a *App) shutdown(ctx context.Context) {
 
 // ProcessStory sends a prompt to the LLM and processes the structured response.
 func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
-	// Determine if this is a chat with structured content (like "**Name:**" or numbered items)
-	isChatWithStructuredContent := strings.Contains(storyText, "**Name:**") ||
-		(strings.Contains(storyText, "1.") && strings.Contains(storyText, "2.") &&
-			(strings.Contains(storyText, "**Concept:**") || strings.Contains(storyText, "*Concept:*")))
-
 	// Prepare the prompt based on content type
-	var simplifiedPrompt string
-	if isChatWithStructuredContent {
-		simplifiedPrompt = fmt.Sprintf("Analyze the following text which contains descriptions of multiple entities. Extract EACH distinct entity mentioned, including any with numbered items or sections. Be thorough and create a separate entry for EACH named entity (e.g., if there are entities named 'Thanatos Echo', 'Logos Worm', etc., create individual entries for each). Format the output STRICTLY as a JSON array where each object has 'name', 'type', 'and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Thanatos Echo\", \"type\": \"Concept\", \"content\": \"A Basilisk that feeds on the process of dying and the fear of death...\"}]. Text to analyze:\n\n%s", storyText)
-	} else {
-		simplifiedPrompt = fmt.Sprintf("Analyze the following story text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output STRICTLY as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Story text:\n\n%s", storyText)
-	}
+	simplifiedPrompt := fmt.Sprintf("Analyze the following text and extract key entities (characters, locations, items, concepts) and their descriptions. Be thorough and try to identify anywhere from 3 to 15 distinct entities. Format the output as a JSON array where each object has 'name', 'type', and 'content' fields. Types should be one of: Character, Location, Item, Concept. Do not include any text before or after the JSON array. Example: [{\"name\": \"Sir Reginald\", \"type\": \"Character\", \"content\": \"A brave knight known for his shiny armor.\"}]. Text to analyze:\n\n%s", storyText)
 
 	log.Println("Sending prompt for story processing...")
 	cfg := llm.GetConfig()
@@ -1193,9 +1162,33 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
 	log.Printf("Using model '%s' for processing story (ActiveMode: %s)", processingModelID, cfg.ActiveMode)
 
 	llmResponse, err := a.GenerateLLMContent(simplifiedPrompt, processingModelID)
-	if err != nil {
-		log.Printf("Error generating content from LLM: %v", err)
-		return ProcessStoryResult{}, fmt.Errorf("failed to get LLM response: %w", err)
+	if err != nil || llmResponse == "" {
+		log.Printf("Primary model '%s' failed or returned empty response (err: %v). Attempting fallbacks...", processingModelID, err)
+
+		fallbackModels := []string{
+			"google/gemini-2.5-pro",                     // Proven stable free model
+			"openai/gpt-3.5-turbo",                       // OpenAI fallback (may require key)
+			"mistralai/mistral-small-3.1-24b-instruct:free", // Another free OpenRouter model
+		}
+
+		for _, fm := range fallbackModels {
+			log.Printf("Trying fallback model: %s", fm)
+			resp, ferr := a.GenerateLLMContent(simplifiedPrompt, fm)
+			if ferr == nil && resp != "" {
+				log.Printf("Successfully generated response using fallback model: %s", fm)
+				llmResponse = resp
+				err = nil
+				processingModelID = fm // Update for logging downstream
+				break
+			} else {
+				log.Printf("Fallback model '%s' failed (err: %v).", fm, ferr)
+			}
+		}
+
+		if err != nil || llmResponse == "" {
+			log.Printf("All fallback attempts failed. Last error: %v", err)
+			return ProcessStoryResult{}, fmt.Errorf("failed to get LLM response after fallbacks: %w", err)
+		}
 	}
 
 	log.Println("Received LLM response, attempting to parse JSON...")
@@ -1229,9 +1222,18 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
 		log.Printf("LLM Response Text:\n%s", llmResponse)
 		// Fallback: Treat the entire response as the content of a single entry
 		// Remove unused fallbackEntry declaration
-		// For now, returning empty result.
-		log.Println("Returning empty result due to LLM response parsing error.")
-		return ProcessStoryResult{}, nil // Changed return
+		// Fallback: Treat the entire response as the content of a single entry
+		log.Println("Falling back to creating a single entry with the raw LLM response.")
+		fallbackEntry := struct {
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}{
+			Name:    "Generated Entry",
+			Type:    "Generated",
+			Content: llmResponse,
+		}
+		llmEntries = append(llmEntries, fallbackEntry)
 	}
 
 	// Process the structured entries
@@ -1316,13 +1318,10 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
 	return ProcessStoryResult{NewEntries: newEntriesResult, UpdatedEntries: updatedEntriesResult}, nil // Return the struct
 }
 
-// GenerateOpenRouterContent calls OpenRouter with prompt/model, uses cache, and returns the response.
+// GenerateOpenRouterContent calls OpenRouter with prompt/model and returns the response.
 func (a *App) GenerateOpenRouterContent(prompt, model string) (string, error) {
 	if err := llm.LoadOpenRouterConfig(); err != nil { // Ensure config is loaded (or attempt reload)
 		return "", fmt.Errorf("failed to load OpenRouter configuration: %w", err)
-	}
-	if err := llm.LoadOpenRouterCache(); err != nil {
-		return "", fmt.Errorf("failed to load OpenRouter cache: %w", err)
 	}
 	return llm.GetOpenRouterCompletion(prompt, model)
 }

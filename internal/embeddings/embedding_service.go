@@ -14,11 +14,9 @@ import (
 
 // EmbeddingService manages vector embeddings and delegates to a specific provider
 type EmbeddingService struct {
-	db         *sql.DB
-	provider   EmbeddingProvider // Holds the actual implementation
-	cache      map[int64][]float32
-	cacheMutex sync.RWMutex
-	dbMutex    sync.Mutex
+	db       *sql.DB
+	provider EmbeddingProvider // Holds the actual implementation
+	dbMutex  sync.Mutex
 }
 
 // NewEmbeddingService creates a new embedding service
@@ -29,7 +27,6 @@ func NewEmbeddingService(db *sql.DB, provider EmbeddingProvider) *EmbeddingServi
 	return &EmbeddingService{
 		db:       db,
 		provider: provider,
-		cache:    make(map[int64][]float32),
 	}
 }
 
@@ -90,9 +87,6 @@ func (s *EmbeddingService) SaveEmbedding(entryID int64, embedding []float32) err
 		return fmt.Errorf("failed to save embedding to database: %w", err)
 	}
 
-	s.cacheMutex.Lock()
-	s.cache[entryID] = embedding
-	s.cacheMutex.Unlock()
 	log.Printf("Saved embedding for entry ID %d (provider: %s)", entryID, vectorVersion)
 	return nil
 }
@@ -101,14 +95,6 @@ func (s *EmbeddingService) SaveEmbedding(entryID int64, embedding []float32) err
 func (s *EmbeddingService) GetEmbedding(entryID int64) ([]float32, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("database connection is nil")
-	}
-	// Check cache first
-	s.cacheMutex.RLock()
-	cached, ok := s.cache[entryID]
-	s.cacheMutex.RUnlock()
-
-	if ok {
-		return cached, nil
 	}
 
 	if s.provider == nil {
@@ -141,65 +127,7 @@ func (s *EmbeddingService) GetEmbedding(entryID int64) ([]float32, error) {
 		embedding[i] = math.Float32frombits(binary.LittleEndian.Uint32(embeddingBytes[i*4:]))
 	}
 
-	// Update cache
-	s.cacheMutex.Lock()
-	s.cache[entryID] = embedding
-	s.cacheMutex.Unlock()
-
 	return embedding, nil
-}
-
-// LoadEmbeddingsIntoCache pre-loads embeddings into the cache
-func (s *EmbeddingService) LoadEmbeddingsIntoCache() error {
-	if s.db == nil {
-		return fmt.Errorf("database connection is nil")
-	}
-	if s.provider == nil {
-		log.Println("Warning: No embedding provider set in EmbeddingService. Cannot load embeddings into cache.")
-		return nil
-	}
-	vectorVersion := s.provider.ModelIdentifier()
-	log.Printf("Loading embeddings into cache for provider: %s", vectorVersion)
-
-	rows, err := s.db.Query(`
-		SELECT ce.id, em.embedding 
-		FROM codex_entries ce
-		INNER JOIN codex_embeddings em ON ce.id = em.codex_entry_id 
-		WHERE em.vector_version = ?`,
-		vectorVersion,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to query embeddings for cache: %w", err)
-	}
-	defer rows.Close()
-
-	s.cacheMutex.Lock()
-	defer s.cacheMutex.Unlock()
-
-	s.cache = make(map[int64][]float32) // Clear existing cache
-	count := 0
-	for rows.Next() {
-		var entryID int64
-		var embeddingBytes []byte
-		if err := rows.Scan(&entryID, &embeddingBytes); err != nil {
-			log.Printf("Warning: Failed to scan embedding row for cache: %v", err)
-			continue
-		}
-
-		if len(embeddingBytes)%4 != 0 {
-			log.Printf("Warning: Invalid embedding data length (%d bytes) for entry %d in cache load", len(embeddingBytes), entryID)
-			continue
-		}
-
-		embedding := make([]float32, len(embeddingBytes)/4)
-		for i := range embedding {
-			embedding[i] = math.Float32frombits(binary.LittleEndian.Uint32(embeddingBytes[i*4:]))
-		}
-		s.cache[entryID] = embedding
-		count++
-	}
-	log.Printf("Loaded %d embeddings into cache for provider %s.", count, s.provider.ModelIdentifier())
-	return rows.Err() // Check for errors during iteration
 }
 
 // SearchResult represents a search result with similarity score

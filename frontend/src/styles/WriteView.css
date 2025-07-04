@@ -636,6 +636,12 @@
     font-size: 1.5rem;
 }
 
+.indexing-modal {
+    text-align: center;
+    min-width: 300px;
+    max-width: 400px;
+}
+
 .weaving-modal p {
     margin: 0;
     color: var(--text-secondary);

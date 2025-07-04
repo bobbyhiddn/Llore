@@ -1249,6 +1249,7 @@
         on:filesaved={handleWriteFileSaved}
         on:loading={handleWriteLoading}
         on:error={handleGenericError}
+        on:savecodex={handleSaveCodexFromChat}
       />
     {/if}
   {/if}
