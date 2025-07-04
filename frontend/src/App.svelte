@@ -1238,7 +1238,6 @@
     {:else}
       <WriteView
         bind:this={writeViewRef}
-        codexEntries={entries}
         documentContent={activeDocument.content}
         documentFilename={activeDocument.filename}
         isDocumentDirty={activeDocument.isDirty}
