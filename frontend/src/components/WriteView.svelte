@@ -21,7 +21,7 @@
   let wordCount: number = 0;
   let charCount: number = 0;
   let writeChatDisplayElement: HTMLDivElement; // For auto-scrolling
-  let writeChatMessages: { sender: 'user' | 'ai', text: string }[] = [];
+  let writeChatMessages: { sender: 'user' | 'ai', text: string, html?: string }[] = [];
   let writeChatInput: string = '';
   let isWriteChatLoading: boolean = false;
   let writeChatError: string = '';
@@ -77,6 +77,12 @@
   let errorModalTitle = '';
   let errorModalMessage = '';
 
+  // --- Undo/Redo State ---
+  let undoStack: string[] = [];
+  let redoStack: string[] = [];
+  let lastHistoryPush = 0;
+  const historyDebounce = 1000; // ms
+
   const dispatch = createEventDispatcher();
   const marked = new Marked({ gfm: true, breaks: true });
 
@@ -86,6 +92,9 @@
 
   // --- Lifecycle ---
   onMount(async () => {
+      // Initialize undo stack with the starting content
+      undoStack = [documentContent || ''];
+
       filenameForSaveModal = documentFilename || 'untitled.md'; // Default for modal
       
       // Focus editor on mount if in edit or split mode
@@ -128,6 +137,100 @@
     }
   });
 
+  // --- Undo/Redo Functions ---
+  function pushToHistory(content: string, force = false) {
+    const now = Date.now();
+    // Debounce pushes unless forced
+    if (!force && now - lastHistoryPush < historyDebounce) {
+        return;
+    }
+    // Don't push if content is identical to the last state
+    const lastState = undoStack[undoStack.length - 1];
+    if (lastState !== undefined && lastState === content) {
+        return;
+    }
+    
+    undoStack.push(content);
+    redoStack = []; // Clear redo stack on a new action
+    lastHistoryPush = now;
+
+    // Limit stack size
+    if (undoStack.length > 100) {
+        undoStack.shift();
+    }
+  }
+
+  function handleUndo() {
+    if (undoStack.length > 1) { // Can't undo the initial state
+        const currentState = undoStack.pop();
+        if (currentState !== undefined) {
+            redoStack.push(currentState);
+        }
+        const prevState = undoStack[undoStack.length - 1];
+        dispatch('updatecontent', prevState);
+    }
+  }
+
+  function handleRedo() {
+    if (redoStack.length > 0) {
+        const nextState = redoStack.pop();
+        if (nextState !== undefined) {
+            undoStack.push(nextState);
+            dispatch('updatecontent', nextState);
+        }
+    }
+  }
+
+  // --- Event Handlers for Textarea ---
+
+
+
+
+  // --- Autocomplete Functions ---
+  function updateAutocompletePosition() {
+    if (!markdownTextareaElement || autocompleteTriggerPos === null) return;
+
+    const text = markdownTextareaElement.value;
+    const pre = text.substring(0, autocompleteTriggerPos);
+    
+    // Create a temporary div to measure text position
+    const div = document.createElement('div');
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordWrap = 'break-word';
+    
+    // Copy relevant textarea styles
+    const style = window.getComputedStyle(markdownTextareaElement);
+    const styleProps: (keyof CSSStyleDeclaration)[] = ['font', 'lineHeight', 'padding', 'width', 'borderWidth', 'borderColor', 'borderStyle'];
+    for (const prop of styleProps) {
+        div.style[prop as any] = style[prop as any];
+    }
+
+    // Use a span to get the coordinates of the trigger position
+    div.innerHTML = pre.replace(/\n/g, '<br>') + '<span id="caret"></span>';
+    document.body.appendChild(div);
+    
+    const span = div.querySelector('#caret') as HTMLSpanElement;
+    const rect = markdownTextareaElement.getBoundingClientRect();
+    
+    // Position relative to the textarea, accounting for scroll
+    autocompleteX = rect.left + span.offsetLeft - markdownTextareaElement.scrollLeft;
+    autocompleteY = rect.top + span.offsetTop - markdownTextareaElement.scrollTop + (parseFloat(style.lineHeight) || 20);
+
+    document.body.removeChild(div);
+  }
+
+  function filterAutocompleteItems() {
+      if (!autocompleteQuery) {
+          autocompleteItems = codexEntries.slice(0, 10); // Show some initial entries
+          return;
+      }
+      autocompleteItems = codexEntries.filter(e => 
+          e.name.toLowerCase().includes(autocompleteQuery.toLowerCase())
+      ).slice(0, 10);
+  }
+
   // --- Helper Functions ---
   function getSelectedText(): string {
       if (!markdownTextareaElement) return '';
@@ -140,6 +243,7 @@
   }
 
   function insertTextIntoDraft(textToInsert: string) {
+    pushToHistory(documentContent, true);
     if (!markdownTextareaElement) return;
     const start = markdownTextareaElement.selectionStart;
     const end = markdownTextareaElement.selectionEnd;
@@ -228,7 +332,8 @@
 
     try {
       const aiReply = await GetAIResponseWithContext(finalPrompt, chatModelId);
-      writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply }];
+      const aiReplyHtml = await marked.parse(aiReply || '');
+      writeChatMessages = [...writeChatMessages, { sender: 'ai', text: aiReply, html: aiReplyHtml }];
     } catch (err) {
       console.error("Error in write chat:", err);
       writeChatError = `AI error: ${err}`;
@@ -322,6 +427,7 @@
 
   // --- Write Mode Formatting Tools Function ---
   function applyMarkdownFormat(formatType: 'bold' | 'italic' | 'h1' | 'h2' | 'h3' | 'code' | 'blockquote') {
+    pushToHistory(documentContent, true); // Force push for a discrete formatting action
     if (!markdownTextareaElement) return;
 
     const start = markdownTextareaElement.selectionStart;
@@ -396,13 +502,11 @@
   }
 
   // --- New Drag and Drop Handlers ---
-  function handleDragStart(event: DragEvent, entry: database.CodexEntry) {
-    event.dataTransfer?.setData('application/json', JSON.stringify(entry));
+  function handleDragStart(e: DragEvent, entry: database.CodexEntry) {
+    e.dataTransfer?.setData('application/json', JSON.stringify({ type: 'codex-entry', entry }));
   }
 
-
-
-    function getCoordsFromPos(pos: number): { x: number, y: number } {
+  function getCoordsFromPos(pos: number): { x: number, y: number } {
     if (!markdownTextareaElement) return { x: 0, y: 0 };
 
     const textarea = markdownTextareaElement;
@@ -515,12 +619,6 @@
     }
   }
 
-  function handleKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      showWriteSaveModal = false;
-    }
-  }
-
   function handleDropMenuAction(event: CustomEvent<'reference' | 'weave'>) {
     const action = event.detail;
     showDropMenu = false;
@@ -563,11 +661,13 @@
 
   // Helper to insert text at a specific position
   function insertTextAt(text: string, position: number) {
+    pushToHistory(documentContent, true);
     dispatch('updatecontent', documentContent.slice(0, position) + text + documentContent.slice(position));
   }
 
   // Helper to replace text within a specific range
   function replaceTextRange(newText: string, startPos: number, endPos: number) {
+    pushToHistory(documentContent, true);
     dispatch('updatecontent', documentContent.slice(0, startPos) + newText + documentContent.slice(endPos));
   }
 
@@ -575,6 +675,72 @@
   $: filteredCodexEntries = codexSearchTerm 
     ? codexEntries.filter(e => e.name.toLowerCase().includes(codexSearchTerm.toLowerCase()))
     : codexEntries;
+
+  function getCursorPositionFromMouseEvent(event: MouseEvent): number {
+    const textarea = event.target as HTMLTextAreaElement;
+    const rect = textarea.getBoundingClientRect();
+    const style = window.getComputedStyle(textarea);
+
+    // --- 1. Get accurate coordinates and styles ---
+    const x = event.clientX - rect.left - parseFloat(style.paddingLeft);
+    const y = event.clientY - rect.top - parseFloat(style.paddingTop);
+    const scrollTop = textarea.scrollTop;
+    const text = textarea.value;
+
+    // --- 2. Create a hidden div to mirror textarea styles to calculate position accurately ---
+    const mirrorDiv = document.createElement('div');
+    document.body.appendChild(mirrorDiv);
+
+    // Copy styles that affect layout
+    mirrorDiv.style.position = 'absolute';
+    mirrorDiv.style.visibility = 'hidden';
+    mirrorDiv.style.whiteSpace = 'pre-wrap';
+    mirrorDiv.style.wordWrap = 'break-word';
+    mirrorDiv.style.width = textarea.clientWidth + 'px';
+    mirrorDiv.style.font = style.font;
+    mirrorDiv.style.letterSpacing = style.letterSpacing;
+    mirrorDiv.style.padding = style.padding;
+    mirrorDiv.style.border = style.border;
+
+    // --- 3. Find the character at the click position --- 
+    let position = -1;
+    // Use a sentinel character to ensure we can always find a range
+    mirrorDiv.textContent = text + '|'; 
+    const range = document.createRange();
+    const textNode = mirrorDiv.childNodes[0];
+    if (!textNode || !textNode.textContent) {
+        document.body.removeChild(mirrorDiv);
+        return text.length; // Fallback if textNode is not found
+    }
+
+    // Iterate through characters to find the one at the click coordinates
+    for (let i = 0; i < textNode.textContent.length; i++) {
+      range.setStart(textNode, i);
+      range.setEnd(textNode, i + 1);
+      const rangeRect = range.getBoundingClientRect();
+
+      // Check if the click is within the vertical bounds of the current character's line
+      // We compare against the mirrorDiv's rect, not the textarea's
+      if (event.clientY >= rangeRect.top && event.clientY <= rangeRect.bottom) {
+        // Check if the click is to the left of the character's midpoint
+        if (event.clientX < rangeRect.left + rangeRect.width / 2) {
+          position = i;
+          break;
+        }
+      } else if (event.clientY < rangeRect.top) {
+        // Click is on a previous line, so we've gone too far
+        position = i > 0 ? i : 0; // Use current `i` as it's the start of the line
+        break;
+      }
+    }
+    
+    if (position === -1) {
+      position = text.length; // Clicked past the last character
+    }
+
+    document.body.removeChild(mirrorDiv);
+    return position > text.length ? text.length : position;
+  }
 
   // Function to get cursor coordinates
   function getCursorXY() {
@@ -594,33 +760,62 @@
   }
 
   function handleWriteViewKeydown(event: KeyboardEvent) {
+    // 1. Handle autocomplete key events first
     if (showAutocomplete) {
       autocompleteMenuRef.handleKeyDown(event);
-      return; // Let the menu handle key events
+      // Prevent further keydown processing if the menu is handling it
+      if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+        event.preventDefault();
+        return; 
+      }
     }
-    // ... (keep existing keydown logic for Ctrl+B/I/S and Tab)
+
+    // 2. Handle Undo/Redo and formatting
+    if (event.ctrlKey || event.metaKey) {
+        switch (event.key.toLowerCase()) {
+            case 'z':
+                event.preventDefault();
+                if (event.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+                break;
+            case 'y':
+                event.preventDefault();
+                handleRedo();
+                break;
+            case 'b':
+                event.preventDefault();
+                applyMarkdownFormat('bold');
+                break;
+            case 'i':
+                event.preventDefault();
+                applyMarkdownFormat('italic');
+                break;
+        }
+    }
   }
-  
+
   function handleInput(event: Event) {
     const target = event.target as HTMLTextAreaElement;
+    pushToHistory(documentContent);
     dispatch('updatecontent', target.value);
 
     // Also handle autocomplete logic
+    const text = target.value;
     const cursorPos = target.selectionStart;
-    const textBeforeCursor = target.value.substring(0, cursorPos);
-    const atMatch = textBeforeCursor.match(/@(\w*)$/);
+    const lastAt = text.lastIndexOf('@', cursorPos - 1);
 
-    if (atMatch) {
-      autocompleteTriggerPos = atMatch.index!;
-      autocompleteQuery = atMatch[1].toLowerCase();
-      
-      autocompleteItems = codexEntries.filter(e =>
-        e.name.toLowerCase().startsWith(autocompleteQuery)
-      );
-
-      if (autocompleteItems.length > 0) {
-        getCursorXY();
+    if (lastAt !== -1) {
+      const query = text.substring(lastAt + 1, cursorPos);
+      // Basic check to avoid triggering on email-like patterns
+      if (!query.includes(' ')) {
         showAutocomplete = true;
+        autocompleteQuery = query;
+        autocompleteTriggerPos = lastAt;
+        updateAutocompletePosition();
+        filterAutocompleteItems();
       } else {
         showAutocomplete = false;
       }
@@ -632,22 +827,28 @@
   function handleAutocompleteSelect(event: CustomEvent<database.CodexEntry>) {
     const entry = event.detail;
     const referenceText = `[@${entry.name}](codex://entry/${entry.id}) `;
-        // Use the saved selection end for the final replacement.
-        const textBefore = documentContent.substring(0, writingWeaveCursorPos);
-        const textAfter = documentContent.substring(writingWeaveSelectionEnd);
-        dispatch('updatecontent', textBefore + referenceText + textAfter);
+    const currentContent = documentContent;
+    const cursorPos = markdownTextareaElement.selectionStart;
+
+    // Replace the text from the '@' trigger to the current cursor position
+    const textBefore = currentContent.substring(0, autocompleteTriggerPos);
+    const textAfter = currentContent.substring(cursorPos);
+
+    const newContent = textBefore + referenceText + textAfter;
+    
+    dispatch('updatecontent', newContent);
     showAutocomplete = false;
     
     // Move cursor after the inserted text
     requestAnimationFrame(() => {
       if (!markdownTextareaElement) return;
-      const newCursorPos = writingWeaveCursorPos + referenceText.length;
+      const newCursorPos = autocompleteTriggerPos + referenceText.length;
       markdownTextareaElement.focus();
       markdownTextareaElement.selectionStart = newCursorPos;
       markdownTextareaElement.selectionEnd = newCursorPos;
     });
   }
-  // --- New Function ---
+
   async function handleSaveAsTemplate() {
     if (!newTemplateName.trim()) {
       // You can show an error in the modal
@@ -663,7 +864,6 @@
     }
   }
 
-  // UPDATED: The core function that is called after the user selects their context entries (or none)
   async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
     const { selectedEntries, selectedLength } = event.detail;
     showCodexSelector = false;
@@ -731,7 +931,6 @@
     }
   }
 
-  // UPDATED: Handle click on writing weave buttons
   function openWritingWeave(event: MouseEvent, node: { type: string, label: string }) {
     event.stopPropagation();
     if (!markdownTextareaElement) return;
@@ -754,7 +953,6 @@
     showCodexSelector = true;
   }
 
-  // NEW: Handle drag start for writing weave buttons
   function handleCodexEntryClick(event: MouseEvent | KeyboardEvent, entry: database.CodexEntry) {
     event.stopPropagation();
     if (!markdownTextareaElement) return;
@@ -778,7 +976,6 @@
     showCodexSelector = true;
   }
 
-  // NEW: Handle drag start for writing weave buttons
   function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string, description: string, icon: string }) {
     if (!event.dataTransfer) return;
     
@@ -793,84 +990,12 @@
     event.dataTransfer.effectAllowed = 'move';
   }
 
-
-
-  // Helper function to get cursor position from mouse event
-  function getCursorPositionFromMouseEvent(event: DragEvent): number {
-    if (!markdownTextareaElement) return 0;
-
-    const textarea = markdownTextareaElement;
-    const rect = textarea.getBoundingClientRect();
-    const style = window.getComputedStyle(textarea);
-    
-    // Simple approach: just use basic math
-    const paddingLeft = parseFloat(style.paddingLeft) || 0;
-    const paddingTop = parseFloat(style.paddingTop) || 0;
-    
-    // Mouse position relative to textarea content
-    const x = event.clientX - rect.left - paddingLeft + textarea.scrollLeft;
-    const y = event.clientY - rect.top - paddingTop + textarea.scrollTop;
-    
-    // Get basic measurements
-    const fontSize = parseFloat(style.fontSize) || 16;
-    
-    // Try to get actual line height from computed style first
-    let lineHeight = parseFloat(style.lineHeight);
-    if (isNaN(lineHeight) || lineHeight < fontSize) {
-      lineHeight = fontSize * 1.5; // More generous line height
-    }
-    
-    const charWidth = fontSize * 0.6; // Slightly wider character estimate
-    
-    // Account for visual line wrapping
-    const textareaWidth = textarea.clientWidth - paddingLeft - parseFloat(style.paddingRight || '0');
-    const charsPerLine = Math.floor(textareaWidth / charWidth);
-    
-    // Calculate which visual line we're on
-    const visualLineIndex = Math.floor(y / lineHeight);
-    
-    // Split into lines and find position accounting for wrapping
-    const lines = textarea.value.split('\n');
-    
-    let currentVisualLine = 0;
-    let position = 0;
-    let targetLine = -1;
-    let targetChar = 0;
-    
-    // Find which actual line contains our target visual line
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const wrappedLines = Math.max(1, Math.ceil(line.length / charsPerLine));
-      
-      if (currentVisualLine + wrappedLines > visualLineIndex) {
-        // This line contains our target
-        targetLine = i;
-        const visualLineWithinThisLine = visualLineIndex - currentVisualLine;
-        targetChar = Math.min(visualLineWithinThisLine * charsPerLine + Math.floor(x / charWidth), line.length);
-        break;
-      }
-      
-      currentVisualLine += wrappedLines;
-      position += line.length + 1; // +1 for newline
-    }
-    
-    // If we found a target line, calculate final position
-    if (targetLine >= 0) {
-      position += targetChar;
-    } else {
-      // Fallback to end of document
-      position = textarea.value.length;
-    }
-    
-    console.log(`visualLine=${visualLineIndex}, targetLine=${targetLine}, targetChar=${targetChar}, finalPosition=${position}`);
-    
-    return Math.min(position, textarea.value.length);
-  }
+  // ... (rest of the code remains the same)
 </script>
 
+<svelte:window on:keydown={handleModalKeydown} />
 
-
-
+<!-- ... (rest of the HTML remains the same) -->
 
 <button class="back-btn" on:click={goBack}>← Back to Write Hub</button>
 
@@ -883,7 +1008,13 @@
         {#each writeChatMessages as msg, i (i)} <!-- Simple key for reactivity -->
           <div class="message {msg.sender}">
               <strong class="sender-label">{msg.sender === 'user' ? 'You' : 'AI'}:</strong>
-              <span class="message-text">{msg.text}</span>
+              <div class="message-text">
+                {#if msg.sender === 'ai' && msg.html}
+                  {@html msg.html}
+                {:else}
+                  {msg.text}
+                {/if}
+              </div>
               {#if msg.sender === 'ai'}
                 <button class="insert-btn" on:click={() => insertTextIntoDraft(msg.text)} title="Insert AI response into draft">↵ Insert</button>
               {/if}
@@ -915,9 +1046,8 @@
           <button class="save-as-btn" on:click={() => openSaveModal(true)} disabled={isSaving}>Save As...</button>
           <button class="template-btn" on:click={() => showSaveTemplateModal = true} disabled={isSaving}>Save as Template</button>
         </div>
-        <div class="doc-info">
-          <span>Chars: {charCount}</span>
-          <span>Words: {wordCount}</span>
+        <div class="status-bar">
+          <span>{wordCount} words</span> | <span>{charCount} characters</span>
         </div>
       </div>
     </div>
@@ -960,71 +1090,75 @@
         <div class="markdown-preview">{@html renderedWriteHtml}</div>
       </div>
     </div>
+    <div class="bottom-formatting-bar">
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('h1')} title="Header 1">H1</button>
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('h2')} title="Header 2">H2</button>
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('h3')} title="Header 3">H3</button>
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('bold')} title="Bold">B</button>
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('italic')} title="Italic">I</button>
+        <button class="tool-btn" on:click={() => applyMarkdownFormat('code')} title="Code Block">{`<>`}</button>
+    </div>
   </div>
 
   <!-- RIGHT COLUMN: Codex Reference & AI Tools -->
   <div class="right-column-toolbar">
+    <!-- Codex Entries -->
     <div class="tool-section codex-reference-panel">
       <h4>Codex Reference</h4>
-      <input type="search" placeholder="Search Codex..." bind:value={codexSearchTerm} class="codex-search"/>
-      <div class="codex-entry-list">
+      <input 
+        type="text" 
+        placeholder="Search Codex..." 
+        bind:value={codexSearchTerm} 
+        class="codex-search-input"
+      />
+      <div class="codex-list">
         {#each filteredCodexEntries as entry (entry.id)}
-          <div 
+          <div
             class="codex-item"
-            role="button"
+            role="button" 
             tabindex="0"
             draggable="true"
             on:dragstart={(e) => handleDragStart(e, entry)}
             on:click={(e) => handleCodexEntryClick(e, entry)}
-            on:keydown={(e) => {
-              if (e.key === 'Enter') {
-                const referenceText = `[@${entry.name}](codex://entry/${entry.id})`;
-                insertTextAt(referenceText, markdownTextareaElement.selectionStart);
-              }
-            }}
+            on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleCodexEntryClick(e, entry); }}
           >
-            <strong>{entry.name}</strong>
-            <span>({entry.type})</span>
+            {entry.name} <span>({entry.type})</span>
           </div>
         {/each}
       </div>
     </div>
-    <!-- ... (existing formatting and AI action tools) ... -->
-    <div class="tool-section">
-      <h4>Formatting</h4>
-      <div class="formatting-buttons">
-        <button on:click={() => applyMarkdownFormat('bold')} title="Bold (Ctrl+B)"><b>B</b></button>
-        <button on:click={() => applyMarkdownFormat('italic')} title="Italic (Ctrl+I)"><i>I</i></button>
-        <button on:click={() => applyMarkdownFormat('h1')} title="Heading 1">H1</button>
-        <button on:click={() => applyMarkdownFormat('h2')} title="Heading 2">H2</button>
-        <button on:click={() => applyMarkdownFormat('h3')} title="Heading 3">H3</button>
-        <button on:click={() => applyMarkdownFormat('code')} title="Code (`code`)">{"</>"}</button>
-        <button on:click={() => applyMarkdownFormat('blockquote')} title="Blockquote (> text)">" "</button>
-      </div>
-    </div>
-    <div class="tool-section">
-      <h4>AI Actions (Selection-based)</h4>
-      <div class="ai-action-buttons">
-        <button on:click={() => handleToolAction('summarize')} title="Summarize selected text via chat">Summarize</button>
-        <button on:click={() => handleToolAction('rephrase')} title="Rephrase selected text via chat">Rephrase</button>
-        <button on:click={() => handleToolAction('continue')} title="Ask AI to continue writing from cursor via chat">Continue</button>
-      </div>
-    </div>
-    
-    <!-- Writing Weaving Section -->
+
+    <!-- Writing Weaving -->
     <div class="tool-section">
       <h4>Writing Weaving</h4>
       <div class="writing-weave-buttons">
-        {#each writingWeaves as weave (weave.type)}
+        {#each writingWeaves as weave}
           <button 
-            on:click={(e) => openWritingWeave(e, weave)} 
+            class="tool-btn writing-weave-btn" 
             title={weave.description}
             draggable="true"
             on:dragstart={(e) => handleWeaveButtonDragStart(e, weave)}
+            on:click={(e) => openWritingWeave(e, weave)}
           >
             <span class="icon">{weave.icon}</span> {weave.label}
           </button>
         {/each}
+      </div>
+    </div>
+
+    <!-- AI Actions -->
+    <div class="tool-section">
+      <h4>AI Actions</h4>
+      <div class="tool-buttons-grid">
+        <button class="tool-btn" on:click={() => handleToolAction('summarize')} title="Summarize selected text">
+          <span class="icon">📄</span> Summarize
+        </button>
+        <button class="tool-btn" on:click={() => handleToolAction('rephrase')} title="Rephrase selected text">
+          <span class="icon">✍️</span> Rephrase
+        </button>
+        <button class="tool-btn" on:click={() => handleToolAction('continue')} title="Continue writing from cursor">
+          <span class="icon">➡️</span> Continue
+        </button>
       </div>
     </div>
   </div>
@@ -1075,7 +1209,7 @@
 
 <!-- Add the new modal -->
 {#if showSaveTemplateModal}
-  <div class="modal-backdrop">
+  <div class="modal-backdrop" role="button" tabindex="0" on:click={() => showSaveTemplateModal = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showSaveTemplateModal = false; }}>
     <div class="modal save-template-modal">
       <h3>Save as Template</h3>
       <p>Save the current document's content as a reusable template.</p>
@@ -1128,7 +1262,6 @@
   }
   /* ... (keep most existing styles) ... */
 
-  /* NEW STYLES for Codex Reference Panel */
   .codex-reference-panel {
     display: flex;
     flex-direction: column;
@@ -1145,13 +1278,13 @@
     color: var(--text-primary);
   }
 
-  .codex-entry-list {
+  .codex-list {
     flex-grow: 1;
     overflow-y: auto;
   }
 
   /* Custom Scrollbar for multiple elements */
-  .codex-entry-list,
+  .codex-list,
   .markdown-input,
   .markdown-preview-container,
   .chat-messages-area {
@@ -1159,21 +1292,21 @@
     scrollbar-color: var(--accent-primary) transparent; /* For Firefox */
   }
 
-  .codex-entry-list::-webkit-scrollbar,
+  .codex-list::-webkit-scrollbar,
   .markdown-input::-webkit-scrollbar,
   .markdown-preview-container::-webkit-scrollbar,
   .chat-messages-area::-webkit-scrollbar {
     width: 8px;
   }
 
-  .codex-entry-list::-webkit-scrollbar-track,
+  .codex-list::-webkit-scrollbar-track,
   .markdown-input::-webkit-scrollbar-track,
   .markdown-preview-container::-webkit-scrollbar-track,
   .chat-messages-area::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  .codex-entry-list::-webkit-scrollbar-thumb,
+  .codex-list::-webkit-scrollbar-thumb,
   .markdown-input::-webkit-scrollbar-thumb,
   .markdown-preview-container::-webkit-scrollbar-thumb,
   .chat-messages-area::-webkit-scrollbar-thumb {
@@ -1183,7 +1316,7 @@
     background-clip: content-box;
   }
 
-  .codex-entry-list::-webkit-scrollbar-thumb:hover,
+  .codex-list::-webkit-scrollbar-thumb:hover,
   .markdown-input::-webkit-scrollbar-thumb:hover,
   .markdown-preview-container::-webkit-scrollbar-thumb:hover,
   .chat-messages-area::-webkit-scrollbar-thumb:hover {
@@ -1308,6 +1441,7 @@
     margin-right: auto;
     max-width: 85%;
     border-bottom-left-radius: 2px;
+    text-align: left; /* Ensure content is left-aligned */
   }
    .message.ai .insert-btn {
     position: absolute;
@@ -1533,13 +1667,14 @@
   }
 
   .right-column-toolbar .tool-section h4 {
-    margin-top: 0;
-    margin-bottom: 0.8rem;
-    font-size: 0.95em;
-    color: var(--text-title-secondary, var(--accent-secondary, #8a7ef9));
-    border-bottom: none;
-    padding-bottom: 0;
+    margin: 0 0 0.75rem 0;
+    color: var(--text-title, var(--accent-primary, #6d5ed9));
+    border-bottom: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    padding-bottom: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
   }
+
 
   .right-column-toolbar .tool-section button {
     display: block;
@@ -1561,24 +1696,12 @@
     color: var(--text-primary, #e0e0e0);
     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   }
-  .right-column-toolbar .tool-section button b,
-  .right-column-toolbar .tool-section button i {
-      margin-right: 0.5em;
-      font-size: 1.1em;
-      display: inline-block;
-      width: 1.2em;
-      text-align: center;
-      color: var(--text-secondary, #a0a0a0); /* Icon color */
-  }
-  .right-column-toolbar .tool-section button:hover b,
-  .right-column-toolbar .tool-section button:hover i {
-      color: var(--text-primary, #e0e0e0); /* Icon color on hover */
-  }
+
 
   /* Writing Weaving Button Styles */
   .writing-weave-buttons {
-    display: flex;
-    flex-direction: column;
+    display: grid; /* Changed to grid */
+    grid-template-columns: 1fr; /* Single column */
     gap: 0.5rem;
   }
   
@@ -1624,6 +1747,33 @@
     background-color: var(--bg-secondary, rgba(22, 33, 62, 0.95));
     border-top: 1px solid var(--border-color-strong, rgba(160, 160, 160, 0.3));
     text-align: right;
+  }
+
+  .bottom-formatting-bar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.25rem; /* Tighter gap */
+    padding: 0.4rem;
+    background-color: var(--bg-primary, #1a1a2e);
+    border-top: 1px solid var(--border-color-medium, rgba(160, 160, 160, 0.2));
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+  }
+
+  .bottom-formatting-bar .tool-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: 0.5rem 0.75rem;
+    font-weight: bold;
+    min-width: 40px; /* Ensure consistent width */
+  }
+
+  .bottom-formatting-bar .tool-btn:hover {
+    background-color: var(--bg-hover-light);
+    border-color: var(--border-color-medium);
+    color: var(--text-primary);
   }
 
   /* Save Modal Styles */
@@ -1764,7 +1914,7 @@
 
 <!-- Save Modal -->
 {#if showWriteSaveModal}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={() => showWriteSaveModal = false} on:keydown={handleKeyDown}>
+  <div class="modal-backdrop" role="button" tabindex="0" on:click={() => showWriteSaveModal = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showWriteSaveModal = false; }}>
     <div class="modal save-modal" role="dialog" aria-modal="true">
       <h3>{isSaveAsOperation ? 'Save As' : 'Save'}</h3>
       <div class="modal-content">

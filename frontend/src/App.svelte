@@ -1021,6 +1021,7 @@
     libraryErrorMsg = '';
     try {
       const content = await ReadLibraryFile(filename);
+      await loadEntries(); // Load entries before switching
       activeDocument = {
         content: content,
         filename: filename,
@@ -1039,14 +1040,23 @@
   }
 
   // REVISE handler for starting to write from the hub
-  function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
-    activeDocument = {
-      content: event.detail.initialContent,
-      filename: '', // New document
-      templateType: event.detail.templateType,
-      isDirty: false // It's a fresh document/template
-    };
-    currentWriteView = 'editor';
+  async function handleStartWriting(event: CustomEvent<{initialContent: string, templateType: string}>) {
+    isLoading = true;
+    errorMsg = '';
+    try {
+      await loadEntries();
+      activeDocument = {
+        content: event.detail.initialContent,
+        filename: '', // New document
+        templateType: event.detail.templateType,
+        isDirty: false // It's a fresh document/template
+      };
+      currentWriteView = 'editor';
+    } catch (err) {
+        errorMsg = `Failed to load data for editor: ${err}`;
+    } finally {
+        isLoading = false;
+    }
   }
 
   // NEW handler for loading custom JSON templates
@@ -1228,6 +1238,7 @@
     {:else}
       <WriteView
         bind:this={writeViewRef}
+        codexEntries={entries}
         documentContent={activeDocument.content}
         documentFilename={activeDocument.filename}
         isDocumentDirty={activeDocument.isDirty}
