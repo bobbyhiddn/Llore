@@ -1027,8 +1027,8 @@
          {/if}
       </div>
       <form on:submit|preventDefault={() => handleSendWriteChat()} class="write-chat-form">
-        <input type="text" bind:value={writeChatInput} placeholder="Ask AI..." disabled={isWriteChatLoading || !chatModelId} style="flex-grow: 1; padding: 0.6rem; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 4px; color: var(--text-primary);" />
-        <button type="submit" disabled={isWriteChatLoading || !writeChatInput.trim() || !chatModelId} style="padding: 0.6rem 1rem; background: var(--accent-primary); border-radius: 4px; font-weight: 500; border: none; color: white; cursor: pointer;">Send</button>
+        <input type="text" class="write-chat-input" bind:value={writeChatInput} placeholder="Ask AI..." disabled={isWriteChatLoading || !chatModelId} />
+        <button type="submit" class="write-chat-send-btn" disabled={isWriteChatLoading || !writeChatInput.trim() || !chatModelId}>Send</button>
       </form>
       {#if writeChatError}
         <p class="error-message">{writeChatError}</p>
@@ -1066,7 +1066,7 @@
         {documentFilename || "New Document"}{#if isDocumentDirty && documentFilename}*{/if}
       </div>
     </div>
-    <div class="editor-pane" style="position: relative;">
+    <div class="editor-pane">
       {#if isWeaveDragOver}
       <div class="drop-indicator" style={dropIndicatorStyle}></div>
     {/if}
@@ -1076,7 +1076,7 @@
         on:input={handleInput}
         bind:this={markdownTextareaElement}
         placeholder="Start writing your masterpiece (Markdown supported)..."
-        style="display: {editorMode === 'preview' ? 'none' : 'block'}"
+        class:hidden={editorMode === 'preview'}
         on:drop={handleDrop}
         on:dragenter={handleDragEnter}
         on:dragleave={handleDragLeave}
@@ -1086,7 +1086,7 @@
       ></textarea>
       <div 
         class="markdown-preview-container"
-        style="display: {editorMode === 'edit' ? 'none' : 'block'}"
+        class:hidden={editorMode === 'edit'}
       >
         <div class="markdown-preview">{@html renderedWriteHtml}</div>
       </div>
@@ -1186,27 +1186,6 @@
   <div class="overlay" role="button" tabindex="0" on:click={() => showAutocomplete = false} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showAutocomplete = false; }} />
 {/if}
 
-{#if showWriteSaveModal}
-  <div class="modal-backdrop">
-    <div class="modal save-write-modal">
-      <h3>{isSaveAsOperation || !documentFilename ? 'Save As' : 'Save File'}</h3>
-      <label for="write-filename">Filename: {isDocumentDirty ? '*' : ''}</label>
-      <input id="write-filename" type="text" bind:value={filenameForSaveModal} placeholder="e.g., chapter-one.md">
-      {#if writeSaveError}
-        <p class="error-message small">{writeSaveError}</p>
-      {/if}
-      {#if writeSaveSuccess}
-        <p class="success-message small">{writeSaveSuccess}</p>
-      {/if}
-      <div class="modal-buttons">
-        <button on:click={doSaveFromModal} disabled={isSaving || !filenameForSaveModal.trim()}>
-            {#if isSaving}Saving...{:else}Save{/if}
-        </button>
-        <button on:click={() => { showWriteSaveModal = false; writeSaveSuccess = ''; writeSaveError = ''; }} disabled={isSaving}>Cancel</button>
-      </div>
-    </div>
-  </div>
-{/if}
 
 <!-- Add the new modal -->
 {#if showSaveTemplateModal}

@@ -670,3 +670,57 @@
     font-size: 0.9rem;
     margin: 0;
 }
+
+.write-chat-input {
+    flex-grow: 1;
+    padding: 0.6rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.write-chat-send-btn {
+    padding: 0.6rem 1rem;
+    background: var(--accent-primary);
+    border-radius: 4px;
+    font-weight: 500;
+    border: none;
+    color: white;
+    cursor: pointer;
+}
+
+.editor-pane {
+    position: relative;
+}
+
+.hidden {
+    display: none;
+}
+
+.write-chat-input {
+    flex-grow: 1;
+    padding: 0.6rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.write-chat-send-btn {
+    padding: 0.6rem 1rem;
+    background: var(--accent-primary);
+    border-radius: 4px;
+    font-weight: 500;
+    border: none;
+    color: white;
+    cursor: pointer;
+}
+
+.editor-pane {
+    position: relative;
+}
+
+.hidden {
+    display: none;
+}
