@@ -1287,7 +1287,8 @@
   .codex-list,
   .markdown-input,
   .markdown-preview-container,
-  .chat-messages-area {
+  .chat-messages-area,
+  .right-column-toolbar {
     scrollbar-width: thin; /* For Firefox */
     scrollbar-color: var(--accent-primary) transparent; /* For Firefox */
   }
@@ -1295,21 +1296,24 @@
   .codex-list::-webkit-scrollbar,
   .markdown-input::-webkit-scrollbar,
   .markdown-preview-container::-webkit-scrollbar,
-  .chat-messages-area::-webkit-scrollbar {
+  .chat-messages-area::-webkit-scrollbar,
+  .right-column-toolbar::-webkit-scrollbar {
     width: 8px;
   }
 
   .codex-list::-webkit-scrollbar-track,
   .markdown-input::-webkit-scrollbar-track,
   .markdown-preview-container::-webkit-scrollbar-track,
-  .chat-messages-area::-webkit-scrollbar-track {
+  .chat-messages-area::-webkit-scrollbar-track,
+  .right-column-toolbar::-webkit-scrollbar-track {
     background: transparent;
   }
 
   .codex-list::-webkit-scrollbar-thumb,
   .markdown-input::-webkit-scrollbar-thumb,
   .markdown-preview-container::-webkit-scrollbar-thumb,
-  .chat-messages-area::-webkit-scrollbar-thumb {
+  .chat-messages-area::-webkit-scrollbar-thumb,
+  .right-column-toolbar::-webkit-scrollbar-thumb {
     background-color: var(--accent-primary, #6d5ed9);
     border-radius: 4px;
     border: 2px solid transparent;
@@ -1319,7 +1323,8 @@
   .codex-list::-webkit-scrollbar-thumb:hover,
   .markdown-input::-webkit-scrollbar-thumb:hover,
   .markdown-preview-container::-webkit-scrollbar-thumb:hover,
-  .chat-messages-area::-webkit-scrollbar-thumb:hover {
+  .chat-messages-area::-webkit-scrollbar-thumb:hover,
+  .right-column-toolbar::-webkit-scrollbar-thumb:hover {
     background-color: var(--accent-secondary, #8a7ef9);
   }
 
