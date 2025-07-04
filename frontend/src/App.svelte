@@ -908,11 +908,31 @@
     const { content, filename, force } = event.detail;
 
     try {
+      // Step 1: Sending
       if (storyImportViewRef) {
         storyImportViewRef.updateImportStatus('sending');
       }
+      await new Promise(resolve => setTimeout(resolve, 500)); // Brief delay for UI feedback
 
-      // First, save the file to the library with the provided filename
+      // Step 2: Receiving (simulated since backend does it all at once)
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('receiving', 'Receiving AI response...');
+      }
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Step 3: Parsing
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('parsing', 'Parsing entries from response...');
+      }
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Step 4: Embedding
+      if (storyImportViewRef) {
+        storyImportViewRef.updateImportStatus('embedding', 'Generating embeddings...');
+      }
+      await new Promise(resolve => setTimeout(resolve, 400));
+
+      // Step 5: Library - Save to library and process
       if (storyImportViewRef) {
         storyImportViewRef.updateImportStatus('library', 'Saving story to library...');
       }
@@ -924,7 +944,7 @@
       // Refresh library files to ensure the new file appears in the list
       await refreshLibraryFiles();
       
-      // Show success message
+      // Step 6: Complete
       if (storyImportViewRef) {
         storyImportViewRef.showImportSuccess({
           newEntries: result.newEntries || [],
@@ -963,40 +983,61 @@
     console.log("App.svelte received savecodex event with text:", textToSave.substring(0, 50) + "...");
 
     if (!textToSave) {
-        chatViewRef?.setCodexSaveError("Cannot save empty text to Codex.");
+        // Determine which component sent the event based on current mode
+        if (mode === 'chat') {
+            chatViewRef?.setCodexSaveError("Cannot save empty text to Codex.");
+        } else if (mode === 'write') {
+            writeViewRef?.setCodexSaveError("Cannot save empty text to Codex.");
+        }
         return;
     }
 
-    // Use chatViewRef to update status immediately if possible
-    // Note: ProcessStory doesn't have granular progress, so we mainly signal start/end.
-    chatViewRef?.updateCodexSaveStatus('receiving', 'Processing text...'); // Or 'parsing'? Let's use receiving for now.
+    // Determine which component to update based on current mode
+    const isFromWriteView = mode === 'write';
+    const isFromChatView = mode === 'chat';
+
+    // Update status immediately based on which component sent the event
+    if (isFromChatView) {
+        chatViewRef?.updateCodexSaveStatus('receiving', 'Processing text...');
+    } else if (isFromWriteView) {
+        // WriteView uses different status names - it expects 'indexing' status
+        // The indexing modal will show when indexingStatus !== 'idle'
+        console.log('Setting WriteView indexing status to receiving');
+    }
 
     try {
         // Call ProcessStory - assume it handles creating entries from arbitrary text.
-        // The backend likely uses the default configured model and handles existing entries (force=false equivalent).
-        console.log(`Calling ProcessStory for chat text...`);
-        chatViewRef?.updateCodexSaveStatus('parsing', 'Finding codex entries...');
+        console.log(`Calling ProcessStory for text from ${isFromWriteView ? 'WriteView' : 'ChatView'}...`);
+        
+        if (isFromChatView) {
+            chatViewRef?.updateCodexSaveStatus('parsing', 'Finding codex entries...');
+        }
+        
         const result = await ProcessStory(textToSave);
-        console.log("ProcessStory result from chat text:", result);
+        console.log("ProcessStory result:", result);
 
-        // Update ChatView with the result
-        chatViewRef?.setCodexSaveResult(result);
+        // Update the appropriate component with the result
+        if (isFromChatView) {
+            chatViewRef?.setCodexSaveResult(result);
+        } else if (isFromWriteView) {
+            writeViewRef?.setCodexSaveResult(result);
+        }
 
-        // Additionally, refresh the main codex list if the codex view might be visible
-        // or just keep it simple and let the user refresh manually if needed.
-        // Consider adding a small delay before potentially refreshing main list
-        // if (mode === 'codex') {
-        //     setTimeout(refreshCodexEntries, 500); // Refresh codex list if in codex mode
-        // }
+        // Refresh the main codex list if in codex mode
+        if (mode === 'codex') {
+            setTimeout(() => loadEntries(), 500);
+        }
 
-    } catch (err: any) { // Type the error
-        const error = `Error processing chat text for Codex: ${err.message || String(err)}`;
+    } catch (err: any) {
+        const error = `Error processing text for Codex: ${err.message || String(err)}`;
         console.error(error);
-        chatViewRef?.setCodexSaveError(error);
-    } finally {
-        // Ensure status isn't left hanging if ProcessStory fails without setting state
-        // This might be redundant if setCodexSaveResult/Error always fire, but safer.
-        // setTimeout(() => { if (chatViewRef?.codexSaveStatus !== 'complete' && chatViewRef?.codexSaveStatus !== 'error') chatViewRef?.updateCodexSaveStatus('idle'); }, 100);
+        
+        // Send error to the appropriate component
+        if (isFromChatView) {
+            chatViewRef?.setCodexSaveError(error);
+        } else if (isFromWriteView) {
+            writeViewRef?.setCodexSaveError(error);
+        }
     }
   }
 

@@ -8,6 +8,7 @@
   import CodexSelectorModal from './CodexSelectorModal.svelte';
   import ChatMessageMenu from './ChatMessageMenu.svelte';
   import StoryImportStatus from './StoryImportStatus.svelte';
+  import LengthSelectorModal from './LengthSelectorModal.svelte';
   import '../styles/WriteView.css';
 
   // --- REVISED Props ---
@@ -51,7 +52,7 @@
   let isWeaveDragOver = false;
   let dropIndicatorStyle = '';
   let activeMenuMessageIndex: number | null = null;
-
+  let isContinuing = false; // New state to distinguish continuing from weaving
 
   const writingWeaves = [
     { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
@@ -85,6 +86,10 @@
   let showErrorModal = false;
   let errorModalTitle = '';
   let errorModalMessage = '';
+
+  // --- Length Selector Modal State ---
+  let showLengthSelector = false;
+  let showContinueConfirmModal = false;
 
   // --- Undo/Redo State ---
   let undoStack: string[] = [];
@@ -281,12 +286,18 @@
   // --- Write Mode Chat Function ---
   async function handleSendWriteChat(overridePrompt?: string, userMessageOverride?: string) {
     const userMessageToSend = userMessageOverride || writeChatInput.trim();
-    if (!userMessageToSend && !overridePrompt) return;
+    if (!userMessageToSend && !overridePrompt) {
+        console.log('[WriteChat] No message to send, returning early');
+        return;
+    }
     
     if (!chatModelId) {
+        console.log('[WriteChat] No chat model selected');
         dispatch('error', 'No chat model is selected. Please select a model in the settings.');
         return;
     }
+    
+    console.log('[WriteChat] Starting chat request with loading state');
     
     // Add user message to display immediately, unless it's a command that shouldn't be shown
     if (!overridePrompt && !userMessageToSend.startsWith('/')) {
@@ -307,6 +318,7 @@
         if (userMessageToSend.startsWith('/summarize_selection')) {
             const selection = getSelectedText();
             if (!selection) { 
+                console.log('[WriteChat] No selection for summarize command, clearing loading state');
                 writeChatError = "You must select text to use /summarize_selection.";
                 isWriteChatLoading = false;
                 dispatch('loading', false);
@@ -316,6 +328,7 @@
         } else if (userMessageToSend.startsWith('/rephrase_selection')) {
             const selection = getSelectedText();
             if (!selection) { 
+                console.log('[WriteChat] No selection for rephrase command, clearing loading state');
                 writeChatError = "You must select text to use /rephrase_selection.";
                 isWriteChatLoading = false;
                 dispatch('loading', false);
@@ -332,7 +345,9 @@
     const query = finalPrompt || userMessageToSend;
 
     try {
+        console.log('[WriteChat] Sending request to AI...');
         const aiReply = await GetAIResponseWithContext(query, chatModelId);
+        console.log('[WriteChat] Received AI response, processing...');
         
         const markedResponse = await marked.parse(aiReply || '');
 
@@ -340,14 +355,98 @@
             ...writeChatMessages, 
             { sender: 'ai', text: aiReply, html: markedResponse }
         ];
+        
+        console.log('[WriteChat] Successfully added AI response to chat');
 
     } catch (err) {
+        console.error('[WriteChat] Error during AI request:', err);
         writeChatError = `AI error: ${err}`;
-        console.error("Write chat send error:", err);
         dispatch('error', writeChatError);
     } finally {
+        console.log('[WriteChat] Clearing loading state in finally block');
         isWriteChatLoading = false;
+        isContinuing = false; // Clear continuing state
         dispatch('loading', false);
+    }
+  }
+
+  // --- Continue Confirmation Handlers ---
+  function handleContinueFromEnd() {
+    showContinueConfirmModal = false;
+    // Position cursor at end of document
+    markdownTextareaElement.selectionStart = documentContent.length;
+    markdownTextareaElement.selectionEnd = documentContent.length;
+    // Open length selector
+    showLengthSelector = true;
+  }
+  
+  function handleCancelContinue() {
+    showContinueConfirmModal = false;
+  }
+
+  // --- Length Selector Handler ---
+  async function handleLengthSelection(event: CustomEvent<{ selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
+    const { selectedLength } = event.detail;
+    showLengthSelector = false;
+    
+    // Show continuing buffer modal
+    isContinuing = true;
+    dispatch('loading', true);
+    
+    const selection = getSelectedText();
+    
+    // Length instructions matching the writing weave system
+    const lengthInstructions: Record<string, string> = {
+      'small': 'Keep your response to exactly 1 sentence that flows naturally.',
+      'medium': 'Write approximately 1 paragraph (3-5 sentences) that develops the scene.',
+      'large': 'Write approximately 1 page worth of content (multiple paragraphs, around 200-400 words).',
+      'extra-large': 'Write approximately 2 pages worth of content (multiple paragraphs, around 400-800 words).'
+    };
+    
+    const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
+    
+    let prompt: string;
+    let insertionPos: number;
+    
+    if (selection) {
+      // Continue from after the selected text
+      const textBefore = documentContent.substring(0, markdownTextareaElement.selectionEnd);
+      prompt = `System: Continue writing from after the selected text in the user's draft. Maintain the existing tone and style. ${lengthInstruction}\n<draft_context_before_continuation>\n${textBefore.slice(-1000)}\n</draft_context_before_continuation>\nUser: Continue writing.`;
+      insertionPos = markdownTextareaElement.selectionEnd;
+    } else {
+      // Continue from end of document (this path is used when user confirms end-of-document continuation)
+      const textBefore = documentContent;
+      prompt = `System: Continue writing from the end of the user's draft. Maintain the existing tone and style. ${lengthInstruction}\n<draft_context_before_continuation>\n${textBefore.slice(-1000)}\n</draft_context_before_continuation>\nUser: Continue writing.`;
+      insertionPos = documentContent.length;
+    }
+    
+    try {
+      if (!chatModelId) {
+        dispatch('error', 'No chat model is selected. Please select a model in the settings.');
+        return;
+      }
+      
+      const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
+      
+      // Insert the generated text at the appropriate position
+      const newContent = documentContent.slice(0, insertionPos) + '\n' + generatedText + documentContent.slice(insertionPos);
+      dispatch('updatecontent', newContent);
+      
+      // Position cursor after the inserted text
+      requestAnimationFrame(() => {
+        if (markdownTextareaElement) {
+          const newCursorPos = insertionPos + generatedText.length + 1; // +1 for the newline
+          markdownTextareaElement.focus();
+          markdownTextareaElement.selectionStart = newCursorPos;
+          markdownTextareaElement.selectionEnd = newCursorPos;
+        }
+      });
+      
+    } catch (err) {
+      dispatch('error', `Continue writing failed: ${err}`);
+    } finally {
+      isContinuing = false;
+      dispatch('loading', false);
     }
   }
 
@@ -364,12 +463,17 @@
           }
           userMessageForChat = `User asked to ${action} selection.`;
           prompt = `System: ${action === 'summarize' ? 'Summarize' : 'Rephrase'} the following selected text from the user's draft.\n<selected_text>\n${selection}\n</selected_text>\nUser: ${action} the selected text.`;
+          handleSendWriteChat(prompt, userMessageForChat);
       } else if (action === 'continue') {
-          const textBefore = getTextBeforeCursor();
-          userMessageForChat = `User asked to continue writing.`;
-          prompt = `System: Continue writing from the current cursor position in the user's draft.\n<draft_context_before_cursor>\n${textBefore.slice(-1000)}\n</draft_context_before_cursor>\nUser: Continue writing.`;
+          const selection = getSelectedText();
+          if (!selection) {
+              // No selection - show confirmation modal
+              showContinueConfirmModal = true;
+          } else {
+              // Has selection - proceed with length selector
+              showLengthSelector = true;
+          }
       }
-      handleSendWriteChat(prompt, userMessageForChat);
   }
 
   // --- Write Mode Save Function ---
@@ -1344,14 +1448,14 @@ Based on the AI response and the surrounding context, generate enhanced text tha
       </div>
     {/if}
 
-    <!-- Weaving Loading Modal -->
-    {#if isWeaving}
+    <!-- Weaving/Continuing Loading Modal -->
+    {#if isWeaving || isContinuing}
   <div class="modal-backdrop">
     <div class="modal weaving-modal">
       <div class="weaving-content">
         <div class="weaving-spinner">✨</div>
-        <h3>Weaving...</h3>
-        <p>Crafting your narrative enhancement</p>
+        <h3>{isContinuing ? 'Continuing...' : 'Weaving...'}</h3>
+        <p>{isContinuing ? 'Generating your story continuation' : 'Crafting your narrative enhancement'}</p>
       </div>
     </div>
   </div>
@@ -1397,4 +1501,28 @@ Based on the AI response and the surrounding context, generate enhanced text tha
     on:close={() => showCodexSelector = false}
     on:weave={handleWritingWeave}
   />
+{/if}
+
+{#if showLengthSelector}
+  <LengthSelectorModal on:select={handleLengthSelection} on:close={() => showLengthSelector = false} />
+{/if}
+
+<!-- Continue Confirmation Modal -->
+{#if showContinueConfirmModal}
+  <div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3>Continue Writing</h3>
+      <p>Continue works either from a selection or from the end of the document.</p>
+      <p>No text is currently selected. Would you like to continue from the end of the document?</p>
+      <div class="modal-buttons">
+        <button on:click={() => showContinueConfirmModal = false} class="cancel-btn">Cancel</button>
+        <button on:click={() => {
+          showContinueConfirmModal = false;
+          markdownTextareaElement.selectionStart = documentContent.length;
+          markdownTextareaElement.selectionEnd = documentContent.length;
+          showLengthSelector = true;
+        }} class="save-btn">Continue from End</button>
+      </div>
+    </div>
+  </div>
 {/if}

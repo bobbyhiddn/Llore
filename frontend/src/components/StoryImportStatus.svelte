@@ -210,8 +210,8 @@
     border-radius: 8px;
     margin-top: 1.5rem;
     color: var(--text-secondary);
-    /* max-height: 300px; */ /* REMOVED height limit */
-    /* overflow-y: auto; */ /* REMOVED overflow - parent handles scrolling */
+    max-height: 70vh; /* Limit to 70% of viewport height */
+    overflow-y: auto; /* Enable scrolling when content exceeds max-height */
     display: flex; /* Use flexbox for internal layout */
     flex-direction: column; /* Stack children vertically */
   }
