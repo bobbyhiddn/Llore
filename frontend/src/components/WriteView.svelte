@@ -1,11 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
-  import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate } from '@wailsjs/go/main/App';
+  import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate, ProcessStory } from '@wailsjs/go/main/App';
   import { database } from '@wailsjs/go/models';
   import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
   import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
   import CodexSelectorModal from './CodexSelectorModal.svelte';
+  import ChatMessageMenu from './ChatMessageMenu.svelte';
   import '../styles/WriteView.css';
 
   // --- REVISED Props ---
@@ -48,6 +49,7 @@
   let writingWeaveSelectionEnd = 0; // To preserve selection across modals
   let isWeaveDragOver = false;
   let dropIndicatorStyle = '';
+  let activeMenuMessageIndex: number | null = null;
 
 
   const writingWeaves = [
@@ -991,7 +993,104 @@
     event.dataTransfer.effectAllowed = 'move';
   }
 
-  // ... (rest of the code remains the same)
+  function handleMenuAction(event: CustomEvent, messageText: string) {
+    const action = event.detail;
+    activeMenuMessageIndex = null; // Close menu after action
+
+    switch (action) {
+      case 'insert':
+        insertTextIntoDraft(messageText);
+        break;
+      case 'copy':
+        navigator.clipboard.writeText(messageText).catch(err => {
+          dispatch('error', `Failed to copy text: ${err}`);
+        });
+        break;
+      case 'weave':
+        handleWeaveFromChat(messageText);
+        break;
+      case 'index':
+        saveChatToCodex(messageText);
+        break;
+    }
+  }
+
+  function toggleMenu(index: number) {
+    if (activeMenuMessageIndex === index) {
+      activeMenuMessageIndex = null;
+    } else {
+      activeMenuMessageIndex = index;
+    }
+  }
+
+  async function handleWeaveFromChat(messageText: string) {
+    const selection = getSelectedText();
+    if (!selection) {
+        errorModalTitle = 'Text Selection Required';
+        errorModalMessage = 'Please select some text in your document to weave the AI response into.';
+        showErrorModal = true;
+        return;
+    }
+
+    isWeaving = true;
+    dispatch('loading', true);
+
+    const textBeforeSelection = documentContent.substring(0, markdownTextareaElement.selectionStart);
+    const textAfterSelection = documentContent.substring(markdownTextareaElement.selectionEnd);
+
+    const prompt = `You are a subtle and masterful fiction writing assistant. Your task is to weave the provided AI response into the user's selected text, enhancing it while maintaining the original tone and style.
+
+CRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.
+
+AI RESPONSE TO WEAVE:
+---
+${messageText}
+---
+
+SELECTED TEXT TO INCORPORATE:
+---
+${selection}
+---
+
+Text before selection:
+---
+${textBeforeSelection.slice(-1500)}
+---
+
+Text after selection:
+---
+${textAfterSelection.substring(0, 1500)}
+---
+
+Based on the AI response and the surrounding context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally.`;
+
+    try {
+        const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
+        replaceTextRange(generatedText, markdownTextareaElement.selectionStart, markdownTextareaElement.selectionEnd);
+    } catch (err) {
+        dispatch('error', `Weaving from chat failed: ${err}`);
+    } finally {
+        isWeaving = false;
+        dispatch('loading', false);
+    }
+  }
+  async function saveChatToCodex(text: string) {
+    if (!text) return;
+    try {
+      const result = await ProcessStory(text);
+      const newEntries = result.newEntries || [];
+      const updatedEntries = result.updatedEntries || [];
+      
+      if (newEntries.length > 0 || updatedEntries.length > 0) {
+        // Refresh the codex entries list
+        codexEntries = await GetAllEntries() || [];
+        // Optionally, dispatch a success message
+        dispatch('info', 'Codex has been updated.');
+      }
+    } catch (err) {
+      dispatch('error', `Failed to save to codex: ${err}`);
+    }
+  }
 </script>
 
 <svelte:window on:keydown={handleModalKeydown} />
@@ -1017,7 +1116,10 @@
                 {/if}
               </div>
               {#if msg.sender === 'ai'}
-                <button class="insert-btn" on:click={() => insertTextIntoDraft(msg.text)} title="Insert AI response into draft">↵ Insert</button>
+                <button class="message-menu-btn" on:click|stopPropagation={() => toggleMenu(i)}>⋮</button>
+                {#if activeMenuMessageIndex === i}
+                  <ChatMessageMenu on:action={(e) => handleMenuAction(e, msg.text)} />
+                {/if}
               {/if}
             </div>
         {/each}

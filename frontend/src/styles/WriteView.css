@@ -8,7 +8,6 @@
     cursor: help; /* Indicate it's interactive */
     border-bottom: 1px dotted var(--accent-secondary);
 }
-/* ... (keep most existing styles) ... */
 
 .codex-reference-panel {
     display: flex;
@@ -212,6 +211,25 @@
     transition: opacity 0.2s ease, background-color 0.2s ease;
 }
 .message.ai:hover .insert-btn { opacity: 1; background: var(--bg-hover-strong, rgba(255,255,255,0.2)); }
+
+.message-menu-btn {
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 4px;
+}
+
+.message-menu-btn:hover {
+    background-color: var(--bg-hover-medium);
+    color: var(--text-primary);
+}
 
 .left-column .write-chat-panel .write-chat-form input[type="text"] {
     flex-grow: 1;
