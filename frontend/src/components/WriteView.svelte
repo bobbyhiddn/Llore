@@ -1170,7 +1170,8 @@
     event.dataTransfer.effectAllowed = 'move';
   }
 
-  function handleMenuAction(action: string, messageIndex: number) {
+  function handleMenuAction(action: string, messageIndex: number | null) {
+    if (messageIndex === null) return;
     const message = writeChatMessages[messageIndex];
     if (!message) return;
     const messageText = message.text;

@@ -10,9 +10,11 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "moduleResolution": "node", // Important for resolving node_modules types
-    "strict": true, // Optional, but good practice
-    "noEmit": true, // We don't need TS to emit JS, Vite handles it
+    "moduleResolution": "node",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "baseUrl": "./",
     "paths": {
       "$lib": ["src/lib"],
@@ -20,6 +22,14 @@
       "@wailsjs/*": ["./wailsjs/*"]
     }
   },
-  "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.ts", "src/**/*.svelte", "wailsjs/**/*.js", "wailsjs/**/*.ts"],
-  "references": [{ "path": "./tsconfig.node.json" }] // Assumes you might have one for Vite config
+  "include": [
+    "src/**/*.d.ts", 
+    "src/**/*.js", 
+    "src/**/*.ts", 
+    "src/**/*.svelte", 
+    "wailsjs/**/*.js", 
+    "wailsjs/**/*.ts",
+    "wailsjs/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "build"]
 }
