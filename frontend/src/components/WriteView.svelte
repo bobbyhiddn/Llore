@@ -119,6 +119,21 @@
   // Custom renderer for links has been temporarily removed to resolve a build issue.
   // TODO: Re-implement the custom renderer with the correct signature for the installed marked version.
 
+    // --- Chat History Functions ---
+  async function loadChatLogs() {
+    isLoadingChatLogs = true;
+    chatLogError = '';
+    try {
+      const logs = await ListChatLogs();
+      availableChatLogs = logs.sort((a, b) => b.localeCompare(a)); // Sort descending
+    } catch (err) {
+      console.error('Error loading chat logs:', err);
+      chatLogError = `Failed to load chat history: ${err}`;
+    } finally {
+      isLoadingChatLogs = false;
+    }
+  }
+
   // --- Lifecycle ---
     onDestroy(() => {
     window.removeEventListener('click', handleClickOutside, true);
@@ -128,6 +143,7 @@
     window.addEventListener('click', handleClickOutside, true);
       // Initialize undo stack with the starting content
       undoStack = [documentContent || ''];
+      loadChatLogs(); // Load chat history on mount
 
       filenameForSaveModal = documentFilename || 'untitled.md'; // Default for modal
       
@@ -348,6 +364,9 @@
     }
   }
 
+    // --- Chat History Functions ---
+  
+
   async function handleSendWriteChat(overridePrompt?: string, userMessageOverride?: string) {
     const userMessageToSend = userMessageOverride || writeChatInput.trim();
     if (!userMessageToSend && !overridePrompt) {
@@ -379,58 +398,53 @@
     let finalPrompt = overridePrompt;
     if (!finalPrompt) {
         // Handle Slash Commands
-        if (userMessageToSend.startsWith('/summarize_selection')) {
-            const selection = getSelectedText();
-            if (!selection) { 
-                console.log('[WriteChat] No selection for summarize command, clearing loading state');
-                writeChatError = "You must select text to use /summarize_selection.";
+        if (userMessageToSend.startsWith('/')) {
+            const [command, ...args] = userMessageToSend.split(' ');
+            const commandArg = args.join(' ');
+            
+            if (command === '/rephrase') {
+                const selection = getSelectedText();
+                if (!selection) {
+                    writeChatError = 'You must select text to use /rephrase.';
+                    isWriteChatLoading = false;
+                    dispatch('loading', false);
+                    return;
+                }
+                finalPrompt = `Rephrase the following text, maintaining its core meaning but improving clarity and style. Respond with only the rephrased text, without any introductory phrases.\n\nText to rephrase:\n---\n${selection}`;
+                // We already added the user message override above, so we're good.
+            } else {
+                writeChatError = `Unknown command: ${command}`;
                 isWriteChatLoading = false;
                 dispatch('loading', false);
-                return; 
+                return;
             }
-            finalPrompt = `System: Summarize the following selected text from the user's draft.\n<selected_text>\n${selection}\n</selected_text>\nUser: Summarize the selected text.`;
-        } else if (userMessageToSend.startsWith('/rephrase_selection')) {
-            const selection = getSelectedText();
-            if (!selection) { 
-                console.log('[WriteChat] No selection for rephrase command, clearing loading state');
-                writeChatError = "You must select text to use /rephrase_selection.";
-                isWriteChatLoading = false;
-                dispatch('loading', false);
-                return; 
-            }
-            finalPrompt = `System: Rephrase the following selected text from the user's draft. Aim for clarity and improved style.\n<selected_text>\n${selection}\n</selected_text>\nUser: Rephrase the selected text.`;
-        } else if (userMessageToSend.startsWith('/continue_writing')) {
-            const textBefore = getTextBeforeCursor();
-            finalPrompt = `System: Continue writing from the current cursor position in the user's draft. Maintain the existing tone and style.\n<draft_context_before_cursor>\n${textBefore.slice(-1000)}\n</draft_context_before_cursor>\nUser: Continue writing.`;
+        } else {
+            // Regular chat message
+            finalPrompt = userMessageToSend;
         }
     }
 
-    // The query MUST be a string. Use the slash-command prompt if it exists, otherwise use the user's input.
-    const query = finalPrompt || userMessageToSend;
-
     try {
-        console.log('[WriteChat] Sending request to AI...');
-        const aiReply = await GetAIResponseWithContext(query, chatModelId);
-        console.log('[WriteChat] Received AI response, processing...');
-        
-        const markedResponse = await marked.parse(aiReply || '');
-
-        writeChatMessages = [
-            ...writeChatMessages, 
-            { sender: 'ai', text: aiReply, html: markedResponse }
-        ];
-        
-        console.log('[WriteChat] Successfully added AI response to chat');
-
+      const response = await GetAIResponseWithContext(finalPrompt, chatModelId);
+      if (!isWriteChatLoading) {
+        console.log('[WriteChat] Request was cancelled by user. Discarding response.');
+        return;
+      }
+      const aiMessage = { sender: 'ai' as const, text: response, html: marked.parse(response) as string };
+      writeChatMessages = [...writeChatMessages, aiMessage];
+      writeChatError = '';
     } catch (err) {
-        console.error('[WriteChat] Error during AI request:', err);
-        writeChatError = `AI error: ${err}`;
-        dispatch('error', writeChatError);
+      if (!isWriteChatLoading) {
+        console.log('[WriteChat] Request was cancelled by user. Discarding error.');
+        return;
+      }
+      writeChatError = `AI Error: ${err}`;
+      console.error('[WriteChat] AI Error:', err);
     } finally {
-        console.log('[WriteChat] Clearing loading state in finally block');
-        isWriteChatLoading = false;
-        isContinuing = false; // Clear continuing state
-        dispatch('loading', false);
+      if (isWriteChatLoading) { // Only set to false if it wasn't already cancelled
+          isWriteChatLoading = false;
+          dispatch('loading', false);
+      }
     }
   }
 
@@ -1271,19 +1285,7 @@ Based on the AI response and the surrounding context, generate enhanced text tha
     updatedIndexedEntries = [];
   }
 
-  // --- Chat History Management Functions ---
-  async function loadChatLogs() {
-    isLoadingChatLogs = true;
-    chatLogError = '';
-    try {
-      availableChatLogs = await ListChatLogs();
-    } catch (err) {
-      chatLogError = `Failed to load chat logs: ${err}`;
-      console.error('Load chat logs error:', err);
-    } finally {
-      isLoadingChatLogs = false;
-    }
-  }
+    // --- Chat History Management Functions ---
 
   async function loadSelectedChat(filename: string) {
     if (!filename) return;
@@ -1297,13 +1299,42 @@ Based on the AI response and the surrounding context, generate enhanced text tha
       }));
       currentChatLogFilename = filename;
       chatLogError = '';
+      showChatHistoryPanel = false; // Close panel on selection
     } catch (err) {
       chatLogError = `Error loading chat: ${err}`;
       console.error('Load selected chat error:', err);
     }
   }
 
+  
+
+    async function confirmSaveNewChat() {
+    if (!newChatFilename.trim()) {
+      saveChatError = 'Filename cannot be empty.';
+      return;
+    }
+
+    if (!newChatFilename.endsWith('.json')) {
+      newChatFilename += '.json';
+    }
+
+    try {
+      await SaveChatLog(newChatFilename, writeChatMessages);
+
+      showSaveChatModal = false;
+      currentChatLogFilename = newChatFilename;
+      saveChatError = '';
+      await loadChatLogs(); // Refresh the list
+    } catch (err) {
+      saveChatError = `Failed to save chat: ${err}`;
+      console.error('Save new chat error:', err);
+    }
+  }
+
   function startNewChat() {
+    if (isWriteChatLoading) {
+      isWriteChatLoading = false; // Abort ongoing API call
+    }
     writeChatMessages = [];
     currentChatLogFilename = null;
     chatLogError = '';
@@ -1380,6 +1411,24 @@ Based on the AI response and the surrounding context, generate enhanced text tha
 
 <svelte:window on:keydown={handleModalKeydown} />
 
+<!-- Save Chat Modal -->
+{#if showSaveChatModal}
+  <div class="modal-backdrop">
+    <div class="modal-content" role="dialog" aria-labelledby="save-chat-title">
+      <h3 id="save-chat-title">Save Chat</h3>
+      <p>Enter a filename for this chat session.</p>
+      <input type="text" bind:value={newChatFilename} class="modal-input" />
+      {#if saveChatError}
+        <p class="error-message">{saveChatError}</p>
+      {/if}
+      <div class="modal-actions">
+        <button on:click={() => showSaveChatModal = false} class="cancel-btn">Cancel</button>
+        <button on:click={confirmSaveNewChat} class="confirm-btn">Save</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- ... (rest of the HTML remains the same) -->
 
 <button class="back-btn" on:click={goBack}>← Back to Write Hub</button>
@@ -1407,7 +1456,10 @@ Based on the AI response and the surrounding context, generate enhanced text tha
       
       {#if showChatHistoryPanel}
         <div class="chat-history-panel">
-          <h4>Chat History</h4>
+          <div class="chat-history-header">
+            <h4>Chat History</h4>
+            <button on:click={loadChatLogs} class="refresh-chat-history-btn" title="Refresh History">🔄</button>
+          </div>
           {#if isLoadingChatLogs}
             <p class="loading-text">Loading chats...</p>
           {:else if chatLogError}
