@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate, onDestroy } from 'svelte';
+  import { Marked } from 'marked'; // Import Marked class
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import {
     GetAIResponseWithContext, // For all LLM interactions
@@ -28,7 +29,7 @@
   let isChatLoading = false; // Loading state for sending/receiving messages or loading logs
   let chatError = '';
   let chatDisplayElement: HTMLDivElement;
-  let chatMessages: { sender: 'user' | 'ai', text: string }[] = [];
+  let chatMessages: { sender: 'user' | 'ai', text: string, html?: string }[] = [];
   // Removed: let chatContextInjected = false; // Context is now handled by backend
 
   // Chat Message Menu State
@@ -73,6 +74,7 @@
   let selectedChatModel = initialSelectedModel; // Initialize with prop
 
   const dispatch = createEventDispatcher();
+  const marked = new Marked({ gfm: true, breaks: true });
 
   // --- Lifecycle ---
   onMount(async () => {
@@ -208,7 +210,11 @@
     try {
       const loadedMessages = (await LoadChatLog(filename)) || [];
       // Ensure the loaded data structure matches { sender: string, text: string }
-      chatMessages = loadedMessages.map(msg => ({ sender: msg.sender as ('user' | 'ai'), text: msg.text }));
+      chatMessages = loadedMessages.map(msg => ({ 
+        sender: msg.sender as ('user' | 'ai'), 
+        text: msg.text,
+        html: msg.sender === 'ai' ? (marked.parse(msg.text || '') as string) : undefined
+      }));
       currentChatLogFilename = filename;
       // Removed: chatContextInjected = true; // Context handling moved to backend
     } catch (err) {
@@ -251,7 +257,7 @@
 
       // Use the new backend function which handles context building
       const aiReply = await GetAIResponseWithContext(userPrompt, modelToUse);
-      const newAiMessage = { sender: 'ai' as const, text: aiReply };
+      const newAiMessage = { sender: 'ai' as const, text: aiReply, html: marked.parse(aiReply) as string };
       chatMessages = [...chatMessages, newAiMessage];
       // --- End Call LLM ---
 
@@ -522,7 +528,13 @@
                   ⋮
                 </button>
               </div>
-              <div class="message-text">{message.text}</div>
+              <div class="message-text">
+                {#if message.sender === 'ai' && message.html}
+                  {@html message.html}
+                {:else}
+                  {message.text}
+                {/if}
+              </div>
             </div>
           {/each}
 
@@ -963,6 +975,44 @@
     z-index: 99999;
     pointer-events: auto;
   }
+  
+  /* Chat panel container */
+  .chat-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  
+  /* Message styling for proper chat alignment */
+  .message {
+    margin-bottom: 0.8rem;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    line-height: 1.4;
+    font-size: 0.9rem;
+    word-wrap: break-word;
+    position: relative;
+    max-width: 85%;
+  }
+  
+  .message.user {
+    background-color: var(--accent-primary, #6d5ed9) !important;
+    color: var(--text-primary, #e0e0e0) !important;
+    margin-left: auto !important; /* Align to right */
+    margin-right: 0 !important;
+    border-bottom-right-radius: 2px;
+    display: block !important;
+  }
+  
+  .message.ai {
+    background-color: var(--bg-secondary, rgba(22, 33, 62, 0.9));
+    color: var(--text-primary, #e0e0e0);
+    margin-right: auto; /* Align to left */
+    margin-left: 0;
+    border-bottom-left-radius: 2px;
+    text-align: left;
+  }
 
   .message:hover .message-menu-btn {
     opacity: 1; /* Show on hover */
@@ -973,14 +1023,15 @@
     color: var(--text-primary);
   }
 
-  /* Chat display needs relative positioning for menu positioning context */
+  /* Chat display needs relative positioning and scrolling */
   .chat-display {
     position: relative;
-    overflow: visible; /* Allow menu to overflow */
-  }
-  
-  .chat-panel {
-    overflow: visible; /* Allow menu to overflow */
+    flex-grow: 1;
+    overflow-y: auto;
+    overflow-x: visible; /* Allow menu to overflow horizontally */
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Important for flex children to shrink */
   }
 
   /* ChatMessageMenu is positioned absolute relative to chat-display */
