@@ -180,9 +180,9 @@
       wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
   }
   
-  // Auto-scroll chat display
+  // Auto-scroll chat display (but not when menu is open)
   afterUpdate(() => {
-    if (writeChatDisplayElement) {
+    if (writeChatDisplayElement && activeMenuMessageIndex === null) {
        writeChatDisplayElement.scrollTop = writeChatDisplayElement.scrollHeight;
     }
   });
@@ -327,33 +327,24 @@
     }
 
     const button = event.currentTarget as HTMLElement;
-    if (!chatPanelElement) return;
-
-    const panelRect = chatPanelElement.getBoundingClientRect();
     const buttonRect = button.getBoundingClientRect();
-
-    const menuHeight = 140; // Estimated menu height
-    const menuWidth = 120;  // Estimated menu width
-
-    let top = buttonRect.top - panelRect.top;
-
-    // Position menu above the button by default
-    let finalTop = top - menuHeight - 5;
-
-    // Adjust if it goes off the top of the panel, position below instead
-    if (finalTop < 0) {
-      finalTop = top + buttonRect.height + 5;
+    
+    // Position menu using viewport coordinates (fixed positioning)
+    const menuWidth = 120;
+    let left = buttonRect.left - menuWidth - 2;
+    let top = buttonRect.top;
+    
+    // If no space on left, put it on the right
+    if (left < 10) {
+      left = buttonRect.right + 2;
     }
-
-    // Position menu to the left of the button
-    let finalLeft = buttonRect.left - panelRect.left - menuWidth + buttonRect.width;
-
-    // Adjust if it goes off the left of the panel
-    if (finalLeft < 0) {
-      finalLeft = buttonRect.left - panelRect.left;
+    
+    // Keep menu on screen vertically
+    if (top + 140 > window.innerHeight) {
+      top = window.innerHeight - 150;
     }
-
-    menuStyle = `top: ${finalTop}px; left: ${finalLeft}px;`;
+    
+    menuStyle = `position: fixed; top: ${top}px; left: ${left}px; z-index: 99999;`;
     activeMenuMessageIndex = index;
   }
 
@@ -1504,9 +1495,6 @@ Based on the AI response and the surrounding context, generate enhanced text tha
                 {/if}
               </div>
               <button class="message-menu-btn" on:click|stopPropagation={(e) => toggleMessageMenu(e, i)}>⋮</button>
-              {#if activeMenuMessageIndex === i}
-                <ChatMessageMenu on:action={(e) => handleMenuAction(e.detail, i)} style={menuStyle} />
-              {/if}
             </div>
         {/each}
         {#if isWriteChatLoading}<div class="message ai loading">AI Thinking...</div>{/if}
@@ -1793,5 +1781,12 @@ Based on the AI response and the surrounding context, generate enhanced text tha
         <button on:click={confirmContinueFromEnd} class="confirm-btn">Continue from End</button>
       </div>
     </div>
+  </div>
+{/if}
+
+<!-- Portal menu outside all containers -->
+{#if activeMenuMessageIndex !== null}
+  <div class="menu-portal" style={menuStyle}>
+    <ChatMessageMenu on:action={(e) => handleMenuAction(e.detail, activeMenuMessageIndex)} />
   </div>
 {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
+  import { createEventDispatcher, onMount, afterUpdate, onDestroy } from 'svelte';
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
   import {
     GetAIResponseWithContext, // For all LLM interactions
@@ -13,6 +13,7 @@
     SaveAPIKeyOnly // Needed for API key modal
   } from '@wailsjs/go/main/App';
   import StoryImportStatus from './StoryImportStatus.svelte'; // Import the status component
+  import ChatMessageMenu from './ChatMessageMenu.svelte';
 
   // --- Props ---
   export let vaultIsReady: boolean = false;
@@ -29,6 +30,11 @@
   let chatDisplayElement: HTMLDivElement;
   let chatMessages: { sender: 'user' | 'ai', text: string }[] = [];
   // Removed: let chatContextInjected = false; // Context is now handled by backend
+
+  // Chat Message Menu State
+  let activeMenuMessageIndex: number | null = null;
+  let menuStyle = '';
+  let chatPanelElement: HTMLDivElement;
 
   // Codex Save Status (mirrors StoryImportView for consistency)
   type CodexSaveStatus = 'idle' | 'sending' | 'receiving' | 'parsing' | 'checking_existing' | 'updating' | 'embedding' | 'complete' | 'error';
@@ -70,6 +76,8 @@
 
   // --- Lifecycle ---
   onMount(async () => {
+    window.addEventListener('click', handleClickOutside, true);
+
     // When component mounts, immediately try to load chat logs if vault is ready
     if (vaultIsReady) {
       await initiateChatSelection();
@@ -82,6 +90,10 @@
     selectedChatModel = initialSelectedModel || (modelList.length > 0 ? modelList[0].id : '');
   });
 
+  onDestroy(() => {
+    window.removeEventListener('click', handleClickOutside, true);
+  });
+
   // Keep local state synced with props when they change
   $: if (initialApiKey !== openrouterApiKey && !showApiKeyModal) openrouterApiKey = initialApiKey;
   $: if (initialSelectedModel !== selectedChatModel) selectedChatModel = initialSelectedModel;
@@ -90,14 +102,68 @@
       initiateChatSelection();
   }
 
-  // Auto-scroll chat display
+  // Auto-scroll chat display (but not when menu is open)
   afterUpdate(() => {
-    if (chatDisplayElement) {
+    if (chatDisplayElement && activeMenuMessageIndex === null) {
       chatDisplayElement.scrollTop = chatDisplayElement.scrollHeight;
     }
   });
 
   // --- Functions ---
+
+  // --- Message Menu Functions ---
+  function toggleMessageMenu(event: MouseEvent, index: number) {
+    if (activeMenuMessageIndex === index) {
+      activeMenuMessageIndex = null;
+      return;
+    }
+
+    const button = event.currentTarget as HTMLElement;
+    const buttonRect = button.getBoundingClientRect();
+    
+    // Position menu using viewport coordinates (fixed positioning)
+    const menuWidth = 120;
+    let left = buttonRect.left - menuWidth - 2;
+    let top = buttonRect.top;
+    
+    // If no space on left, put it on the right
+    if (left < 10) {
+      left = buttonRect.right + 2;
+    }
+    
+    // Keep menu on screen vertically
+    if (top + 140 > window.innerHeight) {
+      top = window.innerHeight - 150;
+    }
+    
+    menuStyle = `position: fixed; top: ${top}px; left: ${left}px; z-index: 99999;`;
+    activeMenuMessageIndex = index;
+  }
+
+  function handleMenuAction(event: CustomEvent) {
+    const { detail: action } = event;
+    if (activeMenuMessageIndex === null) return;
+
+    const message = chatMessages[activeMenuMessageIndex];
+    if (!message) return;
+
+    switch (action) {
+      case 'copy':
+        navigator.clipboard.writeText(message.text);
+        break;
+      case 'index':
+        saveChatToCodex(message.text);
+        break;
+    }
+    activeMenuMessageIndex = null; // Close menu after action
+  }
+
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (activeMenuMessageIndex !== null && !target.closest('.chat-message-menu') && !target.closest('.message-menu-btn')) {
+      activeMenuMessageIndex = null;
+    }
+  }
 
   function goBack() {
     dispatch('back');
@@ -201,6 +267,13 @@
       console.error("Chat send error:", err);
     } finally {
       isChatLoading = false;
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault(); // Prevent new line
+      sendChat();
     }
   }
 
@@ -438,43 +511,73 @@
           <button on:click={promptToSaveChat} class="inline-btn save-as-btn" title="Save current chat session">Save Chat As...</button>
         {/if}
       </div>
-      <div class="chat-messages-area" bind:this={chatDisplayElement}>
-        {#each chatMessages as message, i (i)}
-          <div class="message {message.sender}">
-            <strong class="sender-label">{message.sender === 'user' ? 'You' : 'AI'}:</strong>
-            <span class="message-text">{message.text}</span>
-            {#if message.sender === 'ai'}
-              <button class="codex-btn" on:click={() => saveChatToCodex(message.text)} title="Attempt to save AI response to Codex">Save to Codex</button>
-            {/if}
-          </div>
-        {/each}
-        {#if isChatLoading && chatMessages.length > 0} <!-- Show thinking only after first message -->
-          <div class="message ai thinking"><em>AI is thinking...</em></div>
-        {/if}
-        {#if chatMessages.length === 0 && !isChatLoading}
-          <div class="empty-chat">Ask a question about your lore to get started!</div>
-        {/if}
+
+      <div class="chat-panel" bind:this={chatPanelElement}>
+        <div class="chat-display" bind:this={chatDisplayElement}>
+          {#each chatMessages as message, i (i)}
+            <div class="message {message.sender}">
+              <div class="message-header">
+                <span class="sender-label">{message.sender === 'user' ? 'You' : 'AI'}</span>
+                <button class="message-menu-btn" on:click|stopPropagation={(e) => toggleMessageMenu(e, i)}>
+                  ⋮
+                </button>
+              </div>
+              <div class="message-text">{message.text}</div>
+            </div>
+          {/each}
+
+          {#if isChatLoading}
+            <div class="message ai">
+              <div class="message-header"><span class="sender-label">AI</span></div>
+              <div class="message-text loading-dots">
+                <span>.</span><span>.</span><span>.</span>
+              </div>
+            </div>
+          {/if}
+        </div>
+        <!-- chat-display ends -->
       </div>
-      <form on:submit|preventDefault={sendChat} class="chat-form">
-        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading || !vaultIsReady || !openrouterApiKey}>
-        <button type="submit" disabled={isChatLoading || !chatInput.trim() || !vaultIsReady || !openrouterApiKey}>Send</button>
-      </form>
+      <!-- chat-panel ends -->
+
       {#if chatError}
         <p class="error-message">{chatError}</p>
       {/if}
-      {#if codexSaveStatus !== 'idle'}
-        <div class="codex-status-container">
+
+      <div class="codex-status-container">
+        {#if codexSaveStatus !== 'idle'}
           <StoryImportStatus
             status={codexSaveStatus}
             errorMsg={codexSaveError}
             newEntries={codexSaveNewEntry ? [codexSaveNewEntry] : []}
-            updatedEntries={codexSaveUpdatedEntries || []}
+            updatedEntries={codexSaveUpdatedEntries}
           />
-        </div>
-      {/if}
+          {#if codexSaveStatus === 'complete' || codexSaveStatus === 'error'}
+            <div class="modal-buttons" style="margin-top: 1rem; justify-content: center;">
+              <button on:click={() => { codexSaveStatus = 'idle'; }} class="save-btn">OK</button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+
+      <form on:submit|preventDefault={sendChat} class="chat-form">
+        <input type="text" bind:value={chatInput} placeholder="Ask about your lore..." disabled={isChatLoading || !vaultIsReady || !openrouterApiKey} on:keydown={handleKeyDown}>
+        <button type="submit" disabled={isChatLoading || !chatInput.trim() || !vaultIsReady || !openrouterApiKey}>Send</button>
+      </form>
     </section>
   {/if}
 </div>
+
+<!-- Portal menu outside all containers -->
+{#if activeMenuMessageIndex !== null}
+  <div class="menu-portal" style={menuStyle}>
+    <ChatMessageMenu
+      className="chat-message-menu"
+      showWeave={false}
+      showInsert={false}
+      on:action={handleMenuAction}
+    />
+  </div>
+{/if}
 
 <!-- Save New Chat Modal -->
 {#if showSaveChatModal}
@@ -702,169 +805,8 @@
   .chat-view-container {
     display: flex;
     flex-direction: column;
-    background: var(--bg-primary);
-    padding: 1rem;
-    box-sizing: border-box;
-    height: 100%; /* Fill the grid cell */
-    max-height: 100%; /* Don't overflow the grid */
-    overflow: hidden; /* Contain the flex items */
-  }
-
-  .chat-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem; /* Reduced margin */
-    flex-shrink: 0;
-  }
-  .chat-header h2 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 1.4rem;
-  }
-  .select-chat-btn {
-    padding: 0.4rem 0.8rem;
-    font-size: 0.9rem;
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text-secondary);
-  }
-  .select-chat-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    color: var(--text-primary);
-  }
-
-  .chat-settings-row {
-    flex-shrink: 0; /* Prevent settings row from shrinking */
-    margin-bottom: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem; /* Spacing between items */
-    flex-wrap: wrap; /* Allow wrapping */
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  }
-  .chat-settings-row label {
-    color: var(--text-secondary);
-    margin-bottom: 0; /* Remove bottom margin */
-  }
-  .chat-settings-row select {
-    padding: 0.4rem 0.8rem;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
-    max-width: 250px; /* Limit width */
-  }
-  .inline-btn {
-    padding: 0.4rem 0.8rem;
-    font-size: 0.9rem;
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text-secondary);
-    margin-left: 0.5rem; /* Add some left margin */
-  }
-  .inline-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    color: var(--text-primary);
-  }
-  .save-as-btn {
-    background: #0984e3; /* Blue */
-    color: white;
-  }
-  .save-as-btn:hover {
-    background: #74b9ff;
-  }
-  .error-inline {
-    color: var(--error-color);
-    font-size: 0.9rem;
-    margin-right: 0.5rem;
-  }
-
-  .chat-messages-area {
-    flex: 1; /* Take remaining space */
-    overflow-y: auto; /* Enable scrolling */
-    margin-bottom: 1rem;
-    padding: 1rem;
-    min-height: 200px;
-    background: rgba(0, 0, 0, 0.1); /* Subtle background */
-    border-radius: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  .empty-chat {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     height: 100%;
-    color: var(--text-secondary);
-    font-style: italic;
-  }
-
-  .message {
-    margin-bottom: 1rem;
-    padding: 0.8rem 1.2rem; /* Slightly adjusted padding */
-    border-radius: 12px;
-    max-width: 85%; /* Slightly wider max */
-    display: flex; /* Use flex for better alignment */
-    flex-direction: column; /* Stack sender and text */
-    position: relative; /* For button positioning */
-  }
-
-  .message.user {
-    background: var(--accent-primary); /* Use primary accent */
-    color: white;
-    margin-left: auto;
-    border-bottom-right-radius: 4px;
-    align-items: flex-end; /* Align user text right */
-  }
-
-  .message.ai {
-    background: var(--bg-secondary); /* Use secondary background */
-    color: var(--text-primary);
-    margin-right: auto;
-    border-bottom-left-radius: 4px;
-    align-items: flex-start; /* Align AI text left */
-  }
-  .message.thinking {
-    background: transparent;
-    color: var(--text-secondary);
-    font-style: italic;
-    padding: 0.5rem 0;
-  }
-
-  .sender-label {
-    font-size: 0.8rem;
-    color: rgba(255, 255, 255, 0.7);
-    margin-bottom: 0.3rem;
-  }
-  .message.ai .sender-label {
-    color: var(--accent-secondary); /* Different color for AI label */
-  }
-
-  .message-text {
-    white-space: pre-wrap; /* Preserve line breaks */
-    word-wrap: break-word; /* Break long words */
-    line-height: 1.5;
-  }
-
-  .codex-btn {
-    position: absolute;
-    bottom: 5px;
-    right: 8px;
-    padding: 2px 6px;
-    font-size: 0.75rem;
-    background: rgba(255, 255, 255, 0.15);
-    color: var(--text-secondary);
-    border-radius: 3px;
-    opacity: 0; /* Hidden by default */
-    transition: opacity 0.2s ease;
-  }
-  .message.ai:hover .codex-btn {
-    opacity: 1; /* Show on hover */
-  }
-  .codex-btn:hover {
-    background: rgba(255, 255, 255, 0.3);
-    color: var(--text-primary);
+    background: var(--bg-secondary);
   }
 
   .chat-form {
@@ -991,5 +933,59 @@
     max-height: 200px; /* Limit height */
     overflow-y: auto; /* Enable scrolling */
     border-radius: 8px; /* Match other containers */
+  }
+  /* Message header with button */
+  .message-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+  
+  /* Message Menu Button */
+  .message-menu-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    margin-left: auto; /* Pushes button to the far right */
+    opacity: 0; /* Hidden by default */
+    transition: opacity 0.2s ease;
+    flex-shrink: 0; /* Prevent button from shrinking */
+  }
+  
+  .menu-portal {
+    position: fixed;
+    z-index: 99999;
+    pointer-events: auto;
+  }
+
+  .message:hover .message-menu-btn {
+    opacity: 1; /* Show on hover */
+  }
+
+  .message-menu-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+  }
+
+  /* Chat display needs relative positioning for menu positioning context */
+  .chat-display {
+    position: relative;
+    overflow: visible; /* Allow menu to overflow */
+  }
+  
+  .chat-panel {
+    overflow: visible; /* Allow menu to overflow */
+  }
+
+  /* ChatMessageMenu is positioned absolute relative to chat-display */
+  :global(.chat-message-menu) {
+    position: absolute;
+    z-index: 1000;
   }
 </style>
