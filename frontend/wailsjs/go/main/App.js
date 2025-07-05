@@ -10,6 +10,10 @@ export function CreateNewVault(arg1) {
   return window['go']['main']['App']['CreateNewVault'](arg1);
 }
 
+export function DeleteChatLog(arg1) {
+  return window['go']['main']['App']['DeleteChatLog'](arg1);
+}
+
 export function DeleteEntry(arg1) {
   return window['go']['main']['App']['DeleteEntry'](arg1);
 }

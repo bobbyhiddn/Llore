@@ -8,6 +8,8 @@ export function CreateEntry(arg1:string,arg2:string,arg3:string):Promise<databas
 
 export function CreateNewVault(arg1:string):Promise<string>;
 
+export function DeleteChatLog(arg1:string):Promise<void>;
+
 export function DeleteEntry(arg1:number):Promise<void>;
 
 export function FetchGeminiModels():Promise<Array<llm.OpenRouterModel>>;

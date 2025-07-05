@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
+  import { createEventDispatcher, onMount, afterUpdate, onDestroy } from 'svelte';
   import { Marked } from 'marked'; // Import Marked class
-  import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate, ProcessStory } from '@wailsjs/go/main/App';
+  import { SaveLibraryFile, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog, DeleteChatLog } from '@wailsjs/go/main/App';
   import { database, llm } from '@wailsjs/go/models';
   import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
   import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
@@ -52,6 +52,8 @@
   let isWeaveDragOver = false;
   let dropIndicatorStyle = '';
   let activeMenuMessageIndex: number | null = null;
+  let menuStyle = '';
+  let chatPanelElement: HTMLDivElement;
   let isContinuing = false; // New state to distinguish continuing from weaving
 
   const writingWeaves = [
@@ -87,6 +89,19 @@
   let errorModalTitle = '';
   let errorModalMessage = '';
 
+  // --- Chat History State ---
+  let showChatHistoryPanel = false;
+  let availableChatLogs: string[] = [];
+  let isLoadingChatLogs = false;
+  let chatLogError = '';
+  let currentChatLogFilename: string | null = null;
+  let showSaveChatModal = false;
+  let newChatFilename = '';
+  let saveChatError = '';
+  let showDeleteChatModal = false;
+  let chatToDelete = '';
+  let deleteChatError = '';
+
   // --- Length Selector Modal State ---
   let showLengthSelector = false;
   let showContinueConfirmModal = false;
@@ -105,7 +120,12 @@
   // TODO: Re-implement the custom renderer with the correct signature for the installed marked version.
 
   // --- Lifecycle ---
+    onDestroy(() => {
+    window.removeEventListener('click', handleClickOutside, true);
+  });
+
   onMount(async () => {
+    window.addEventListener('click', handleClickOutside, true);
       // Initialize undo stack with the starting content
       undoStack = [documentContent || ''];
 
@@ -284,6 +304,50 @@
   }
 
   // --- Write Mode Chat Function ---
+    function toggleMessageMenu(event: MouseEvent, index: number) {
+    if (activeMenuMessageIndex === index) {
+      activeMenuMessageIndex = null;
+      return;
+    }
+
+    const button = event.currentTarget as HTMLElement;
+    if (!chatPanelElement) return;
+
+    const panelRect = chatPanelElement.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+
+    const menuHeight = 140; // Estimated menu height
+    const menuWidth = 120;  // Estimated menu width
+
+    let top = buttonRect.top - panelRect.top;
+
+    // Position menu above the button by default
+    let finalTop = top - menuHeight - 5;
+
+    // Adjust if it goes off the top of the panel, position below instead
+    if (finalTop < 0) {
+      finalTop = top + buttonRect.height + 5;
+    }
+
+    // Position menu to the left of the button
+    let finalLeft = buttonRect.left - panelRect.left - menuWidth + buttonRect.width;
+
+    // Adjust if it goes off the left of the panel
+    if (finalLeft < 0) {
+      finalLeft = buttonRect.left - panelRect.left;
+    }
+
+    menuStyle = `top: ${finalTop}px; left: ${finalLeft}px;`;
+    activeMenuMessageIndex = index;
+  }
+
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (!target.closest('.chat-message-menu') && !target.closest('.message-menu-btn')) {
+        activeMenuMessageIndex = null;
+    }
+  }
+
   async function handleSendWriteChat(overridePrompt?: string, userMessageOverride?: string) {
     const userMessageToSend = userMessageOverride || writeChatInput.trim();
     if (!userMessageToSend && !overridePrompt) {
@@ -1101,8 +1165,10 @@
     event.dataTransfer.effectAllowed = 'move';
   }
 
-  function handleMenuAction(event: CustomEvent, messageText: string) {
-    const action = event.detail;
+  function handleMenuAction(action: string, messageIndex: number) {
+    const message = writeChatMessages[messageIndex];
+    if (!message) return;
+    const messageText = message.text;
     activeMenuMessageIndex = null; // Close menu after action
 
     switch (action) {
@@ -1204,6 +1270,112 @@ Based on the AI response and the surrounding context, generate enhanced text tha
     newIndexedEntries = [];
     updatedIndexedEntries = [];
   }
+
+  // --- Chat History Management Functions ---
+  async function loadChatLogs() {
+    isLoadingChatLogs = true;
+    chatLogError = '';
+    try {
+      availableChatLogs = await ListChatLogs();
+    } catch (err) {
+      chatLogError = `Failed to load chat logs: ${err}`;
+      console.error('Load chat logs error:', err);
+    } finally {
+      isLoadingChatLogs = false;
+    }
+  }
+
+  async function loadSelectedChat(filename: string) {
+    if (!filename) return;
+    try {
+      const messages = await LoadChatLog(filename);
+      // Convert backend ChatMessage format to frontend format
+      writeChatMessages = messages.map(msg => ({
+        sender: msg.sender as 'user' | 'ai',
+        text: msg.text,
+        html: msg.sender === 'ai' ? (marked.parse(msg.text || '') as string) : undefined
+      }));
+      currentChatLogFilename = filename;
+      chatLogError = '';
+    } catch (err) {
+      chatLogError = `Error loading chat: ${err}`;
+      console.error('Load selected chat error:', err);
+    }
+  }
+
+  function startNewChat() {
+    writeChatMessages = [];
+    currentChatLogFilename = null;
+    chatLogError = '';
+  }
+
+  function promptToSaveChat() {
+    const today = new Date();
+    const dateStr = today.toISOString().split('T')[0];
+    newChatFilename = `Write Chat ${dateStr}.json`;
+    saveChatError = '';
+    showSaveChatModal = true;
+  }
+
+  async function saveNewChat() {
+    if (!newChatFilename.trim()) {
+      saveChatError = "Filename cannot be empty.";
+      return;
+    }
+    let filenameToSave = newChatFilename.trim();
+    if (!filenameToSave.toLowerCase().endsWith('.json')) {
+      filenameToSave += '.json';
+    }
+    try {
+      // Convert frontend format to backend ChatMessage format
+      const backendMessages = writeChatMessages.map(msg => ({
+        sender: msg.sender,
+        text: msg.text
+      }));
+      await SaveChatLog(filenameToSave, backendMessages);
+      currentChatLogFilename = filenameToSave;
+      showSaveChatModal = false;
+      newChatFilename = '';
+      saveChatError = '';
+      // Refresh the list to show the new chat
+      await loadChatLogs();
+    } catch (err) {
+      saveChatError = `Failed to save chat: ${err}`;
+      console.error('Save new chat error:', err);
+    }
+  }
+
+  function promptDeleteChat(filename: string) {
+    chatToDelete = filename;
+    deleteChatError = '';
+    showDeleteChatModal = true;
+  }
+
+  async function confirmDeleteChat() {
+    if (!chatToDelete) return;
+    try {
+      await DeleteChatLog(chatToDelete);
+      showDeleteChatModal = false;
+      chatToDelete = '';
+      deleteChatError = '';
+      // If we deleted the currently loaded chat, clear it
+      if (currentChatLogFilename === chatToDelete) {
+        startNewChat();
+      }
+      // Refresh the list to remove the deleted chat
+      await loadChatLogs();
+    } catch (err) {
+      deleteChatError = `Failed to delete chat: ${err}`;
+      console.error('Delete chat error:', err);
+    }
+  }
+
+  function confirmContinueFromEnd() {
+    showContinueConfirmModal = false;
+    markdownTextareaElement.selectionStart = documentContent.length;
+    markdownTextareaElement.selectionEnd = documentContent.length;
+    showLengthSelector = true;
+  }
 </script>
 
 <svelte:window on:keydown={handleModalKeydown} />
@@ -1215,8 +1387,59 @@ Based on the AI response and the surrounding context, generate enhanced text tha
 <div class="write-view-main-content">
   <!-- LEFT COLUMN: Chat and Tools -->
   <div class="left-column">
-    <div class="write-chat-panel">
-      <h3>Contextual Chat</h3>
+    <div class="write-chat-panel" bind:this={chatPanelElement}>
+      <div class="chat-header">
+        <h3>Contextual Chat {currentChatLogFilename ? `(${currentChatLogFilename})` : '(New Chat)'}</h3>
+        <div class="chat-controls">
+          <button class="chat-control-btn" on:click={() => showChatHistoryPanel = !showChatHistoryPanel} title="Toggle chat history">
+            📋
+          </button>
+          <button class="chat-control-btn" on:click={startNewChat} title="Start new chat">
+            ➕
+          </button>
+          {#if !currentChatLogFilename && writeChatMessages.length > 0}
+            <button class="chat-control-btn" on:click={promptToSaveChat} title="Save current chat">
+              💾
+            </button>
+          {/if}
+        </div>
+      </div>
+      
+      {#if showChatHistoryPanel}
+        <div class="chat-history-panel">
+          <h4>Chat History</h4>
+          {#if isLoadingChatLogs}
+            <p class="loading-text">Loading chats...</p>
+          {:else if chatLogError}
+            <p class="error-message">{chatLogError}</p>
+            <button class="retry-btn" on:click={loadChatLogs}>Retry</button>
+          {:else if availableChatLogs.length === 0}
+            <p class="empty-state">No saved chats found.</p>
+          {:else}
+            <ul class="chat-history-list">
+              {#each availableChatLogs as filename (filename)}
+                <li class="chat-history-item">
+                  <button 
+                    class="chat-history-btn" 
+                    class:active={currentChatLogFilename === filename}
+                    on:click={() => loadSelectedChat(filename)}
+                    title="Load {filename}"
+                  >
+                    {filename.replace('.json', '')}
+                  </button>
+                  <button 
+                    class="delete-chat-btn" 
+                    on:click={() => promptDeleteChat(filename)} 
+                    title="Delete {filename}"
+                  >
+                    🗑️
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/if}
       <div class="chat-messages-area" bind:this={writeChatDisplayElement}>
         {#each writeChatMessages as msg, i (i)} <!-- Simple key for reactivity -->
           <div class="message {msg.sender}">
@@ -1228,9 +1451,9 @@ Based on the AI response and the surrounding context, generate enhanced text tha
                   {msg.text}
                 {/if}
               </div>
-              <button class="message-menu-btn" on:click|stopPropagation={() => toggleMenu(i)}>⋮</button>
+              <button class="message-menu-btn" on:click|stopPropagation={(e) => toggleMessageMenu(e, i)}>⋮</button>
               {#if activeMenuMessageIndex === i}
-                <ChatMessageMenu on:action={(e) => handleMenuAction(e, msg.text)} />
+                <ChatMessageMenu on:action={(e) => handleMenuAction(e.detail, i)} style={menuStyle} />
               {/if}
             </div>
         {/each}
@@ -1512,16 +1735,10 @@ Based on the AI response and the surrounding context, generate enhanced text tha
   <div class="modal-backdrop">
     <div class="modal" role="dialog" aria-modal="true">
       <h3>Continue Writing</h3>
-      <p>Continue works either from a selection or from the end of the document.</p>
-      <p>No text is currently selected. Would you like to continue from the end of the document?</p>
+      <p>No text is selected. Do you want to continue writing from the end of the document?</p>
       <div class="modal-buttons">
         <button on:click={() => showContinueConfirmModal = false} class="cancel-btn">Cancel</button>
-        <button on:click={() => {
-          showContinueConfirmModal = false;
-          markdownTextareaElement.selectionStart = documentContent.length;
-          markdownTextareaElement.selectionEnd = documentContent.length;
-          showLengthSelector = true;
-        }} class="save-btn">Continue from End</button>
+        <button on:click={confirmContinueFromEnd} class="confirm-btn">Continue from End</button>
       </div>
     </div>
   </div>

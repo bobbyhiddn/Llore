@@ -6,6 +6,7 @@
     ListChatLogs,
     LoadChatLog,
     SaveChatLog,
+    DeleteChatLog, // For chat deletion
     GetAllEntries, // Needed for context injection
     ProcessStory, // Needed for save to codex
     CreateEntry, // Needed for save to codex
@@ -47,6 +48,11 @@
   let showSaveChatModal = false;
   let newChatFilename = '';
   let saveChatError = '';
+
+  // Delete Chat State
+  let showDeleteChatModal = false;
+  let chatToDelete = '';
+  let deleteChatError = '';
 
   // API Key Modal State (Simplified for chat view)
   let showApiKeyModal = false;
@@ -295,6 +301,32 @@
     }
   }
 
+  // --- Delete Chat Logic ---
+  function promptDeleteChat(filename: string) {
+    chatToDelete = filename;
+    deleteChatError = '';
+    showDeleteChatModal = true;
+  }
+
+  async function confirmDeleteChat() {
+    if (!chatToDelete) return;
+    
+    isChatLoading = true;
+    try {
+      await DeleteChatLog(chatToDelete);
+      showDeleteChatModal = false;
+      chatToDelete = '';
+      deleteChatError = '';
+      // Refresh the list to remove the deleted chat
+      await initiateChatSelection();
+    } catch (err) {
+      deleteChatError = `Failed to delete chat: ${err}`;
+      console.error("Delete chat error:", err);
+    } finally {
+      isChatLoading = false;
+    }
+  }
+
   // --- API Key Modal Logic ---
   function openApiKeyModal(modeOrEvent: string | Event = 'openrouter') {
     // Reset modal state when opening
@@ -370,8 +402,9 @@
         <h3>Load Existing Chat:</h3>
         <ul class="log-list">
           {#each availableChatLogs as filename (filename)}
-            <li>
+            <li class="log-item">
               <button on:click={() => loadSelectedChat(filename)} class="log-item-btn">{filename}</button>
+              <button on:click={() => promptDeleteChat(filename)} class="delete-chat-btn" title="Delete this chat">🗑️</button>
             </li>
           {/each}
         </ul>
@@ -449,13 +482,31 @@
     <div class="modal save-chat-modal">
       <h3>Save New Chat Log</h3>
       <label for="chat-filename">Filename:</label>
-      <input id="chat-filename" type="text" bind:value={newChatFilename} placeholder="e.g., Chat with Claude.json">
+      <input type="text" id="chat-filename" bind:value={newChatFilename} placeholder="Chat 2024-01-01.json">
       {#if saveChatError}
         <p class="error-message">{saveChatError}</p>
       {/if}
       <div class="modal-buttons">
-        <button on:click={saveNewChat} disabled={isChatLoading || !newChatFilename.trim()}>Save</button>
-        <button on:click={() => showSaveChatModal = false} disabled={isChatLoading}>Cancel</button>
+        <button on:click={() => showSaveChatModal = false} class="cancel-btn">Cancel</button>
+        <button on:click={saveNewChat} class="save-btn" disabled={isChatLoading}>Save</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete Chat Modal -->
+{#if showDeleteChatModal}
+  <div class="modal-backdrop">
+    <div class="modal delete-chat-modal">
+      <h3>Delete Chat Log</h3>
+      <p>Are you sure you want to delete <strong>{chatToDelete}</strong>?</p>
+      <p class="warning-text">This action cannot be undone.</p>
+      {#if deleteChatError}
+        <p class="error-message">{deleteChatError}</p>
+      {/if}
+      <div class="modal-buttons">
+        <button on:click={() => showDeleteChatModal = false} class="cancel-btn">Cancel</button>
+        <button on:click={confirmDeleteChat} class="delete-btn" disabled={isChatLoading}>Delete</button>
       </div>
     </div>
   </div>
@@ -605,25 +656,42 @@
   .log-list {
     list-style: none;
     padding: 0;
-    margin: 0;
-    max-height: 40vh;
-    overflow-y: auto;
-    width: 100%;
-    max-width: 400px;
+    margin: 1rem 0;
+  }
+  .log-item {
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: 0.5rem;
+    margin-bottom: 0.5rem;
   }
   .log-item-btn {
-    width: 100%;
-    padding: 0.6rem 1rem;
+    flex: 1;
+    padding: 0.75rem 1rem;
     background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
     color: var(--text-primary);
     text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
   }
   .log-item-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--accent-primary);
+  }
+  .delete-chat-btn {
+    padding: 0.5rem;
+    background: rgba(255, 71, 87, 0.1);
+    border: 1px solid rgba(255, 71, 87, 0.3);
+    border-radius: 4px;
+    color: var(--error-color, #ff4757);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+  }
+  .delete-chat-btn:hover {
+    background: rgba(255, 71, 87, 0.2);
+    border-color: var(--error-color, #ff4757);
   }
   .empty-state {
     color: var(--text-secondary);
@@ -887,6 +955,18 @@
   }
   .modal-buttons { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.5rem; }
   .modal-buttons button { padding: 0.6rem 1.2rem; }
+  .delete-btn {
+    background: var(--error-color, #ff4757) !important;
+    color: white !important;
+  }
+  .delete-btn:hover:not(:disabled) {
+    background: #ff3838 !important;
+  }
+  .warning-text {
+    color: var(--error-color, #ff4757);
+    font-size: 0.9rem;
+    margin: 0.5rem 0;
+  }
 
   .error-message {
     color: var(--error-color); background: rgba(255, 71, 87, 0.1);

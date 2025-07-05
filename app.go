@@ -1106,6 +1106,30 @@ func (a *App) SaveChatLog(filename string, messages []ChatMessage) error {
 	return nil
 }
 
+// DeleteChatLog deletes a chat log file from the vault's Chat folder
+func (a *App) DeleteChatLog(filename string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	// Basic validation to prevent path traversal
+	if strings.Contains(filename, "..") || strings.ContainsRune(filename, filepath.Separator) {
+		return fmt.Errorf("invalid chat log filename")
+	}
+
+	chatFilePath := filepath.Join(a.dbPath, "Chat", filename)
+	// Check if file exists before attempting to delete
+	if _, err := os.Stat(chatFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("chat log file '%s' does not exist", filename)
+	}
+
+	if err := os.Remove(chatFilePath); err != nil {
+		return fmt.Errorf("failed to delete chat log file '%s': %w", filename, err)
+	}
+
+	log.Printf("Deleted chat log: %s", chatFilePath)
+	return nil
+}
+
 // ChatMessage represents a single message in a chat log.
 type ChatMessage struct {
 	Sender string `json:"sender"` // "user" or "ai"
@@ -1202,9 +1226,7 @@ func (a *App) ProcessStory(storyText string) (ProcessStoryResult, error) {
 			llmResponse = llmResponse[newlineIndex+1:]
 		}
 		// Remove closing code block
-		if strings.HasSuffix(llmResponse, "```") {
-			llmResponse = strings.TrimSuffix(llmResponse, "```")
-		}
+		llmResponse = strings.TrimSuffix(llmResponse, "```")
 	}
 	llmResponse = strings.TrimSpace(llmResponse)
 
