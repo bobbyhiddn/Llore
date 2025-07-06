@@ -4,13 +4,19 @@ import {database} from '../models';
 import {llm} from '../models';
 import {main} from '../models';
 
+export function CopyLibraryItem(arg1:string,arg2:string):Promise<void>;
+
 export function CreateEntry(arg1:string,arg2:string,arg3:string):Promise<database.CodexEntry>;
+
+export function CreateLibraryFolder(arg1:string):Promise<void>;
 
 export function CreateNewVault(arg1:string):Promise<string>;
 
 export function DeleteChatLog(arg1:string):Promise<void>;
 
 export function DeleteEntry(arg1:number):Promise<void>;
+
+export function DeleteLibraryItem(arg1:string):Promise<void>;
 
 export function FetchGeminiModels():Promise<Array<llm.OpenRouterModel>>;
 
@@ -42,6 +48,8 @@ export function ListChatLogs():Promise<Array<string>>;
 
 export function ListLibraryFiles():Promise<Array<string>>;
 
+export function ListLibraryHierarchy():Promise<Array<main.LibraryItem>>;
+
 export function ListTemplates():Promise<Array<string>>;
 
 export function LoadChatLog(arg1:string):Promise<Array<main.ChatMessage>>;
@@ -50,17 +58,23 @@ export function MergeEntryContentDirect(arg1:database.CodexEntry,arg2:string,arg
 
 export function MergeEntryContentWithRAG(arg1:database.CodexEntry,arg2:string,arg3:string):Promise<string>;
 
+export function MoveLibraryItem(arg1:string,arg2:string):Promise<void>;
+
 export function ProcessAndSaveTextAsEntries(arg1:string):Promise<number>;
 
 export function ProcessStory(arg1:string):Promise<main.ProcessStoryResult>;
 
 export function ReadLibraryFile(arg1:string):Promise<string>;
 
+export function ReadLibraryFileWithPath(arg1:string):Promise<string>;
+
 export function SaveAPIKeyOnly(arg1:string):Promise<void>;
 
 export function SaveChatLog(arg1:string,arg2:Array<main.ChatMessage>):Promise<void>;
 
 export function SaveLibraryFile(arg1:string,arg2:string):Promise<void>;
+
+export function SaveLibraryFileWithPath(arg1:string,arg2:string):Promise<void>;
 
 export function SaveSettings(arg1:llm.OpenRouterConfig):Promise<void>;
 

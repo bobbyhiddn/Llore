@@ -1,24 +1,24 @@
 <script lang="ts">
   import { onMount, afterUpdate } from 'svelte';
   import { database, llm } from '@wailsjs/go/models'; // Import namespaces
-  import LibraryFileViewer from './LibraryFileViewer.svelte'; // Keep this separate modal
+  import LibraryFileViewer from './components/Library/LibraryFileViewer.svelte'; // Keep this separate modal
   // Import the new components
-  import VaultSelector from './components/VaultSelector.svelte';
+  import VaultSelector from './components/Settings/VaultSelector.svelte';
   import ModeSelector from './components/ModeSelector.svelte';
-  import CodexView from './components/CodexView.svelte';
-  import StoryImportView from './components/StoryImportView.svelte';
-  import LibraryView from './components/LibraryView.svelte';
-  import ChatView from './components/ChatView.svelte';
-  import SettingsView from './components/SettingsView.svelte';
-  import WriteView from './components/WriteView.svelte'; // Assuming WriteView is in components
-  import WriteHub from './components/WriteHub.svelte'; // Import the new hub
+  import CodexView from './components/Codex/CodexView.svelte';
+  import StoryImportView from './components/Story/StoryImportView.svelte';
+  import LibraryTreeView from './components/Library/LibraryTreeView.svelte';
+  import ChatView from './components/Chat/ChatView.svelte';
+  import SettingsView from './components/Settings/SettingsView.svelte';
+  import WriteView from './components/Write/WriteView.svelte'; // Assuming WriteView is in components
+  import WriteHub from './components/Write/WriteHub.svelte'; // Import the new hub
 
   import {
     // Keep all backend functions needed by App or passed down
     GetAllEntries, CreateEntry, UpdateEntry, DeleteEntry,
     SelectVaultFolder, CreateNewVault, SwitchVault,
-    GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile,
-    SaveLibraryFile, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
+    GetCurrentVaultPath, ListLibraryFiles, ImportStoryTextAndFile, ReadLibraryFile, ReadLibraryFileWithPath,
+    SaveLibraryFile, SaveLibraryFileWithPath, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog,
     FetchOpenRouterModelsWithKey, FetchOllamaModels, GetSettings, SaveSettings, SaveAPIKeyOnly, // Added FetchOllamaModels
     GetAIResponseWithContext, FetchOpenAIModels, FetchGeminiModels, // Added new model fetchers
   } from '@wailsjs/go/main/App';
@@ -67,12 +67,10 @@
   }
 
   // --- Library State ---
-  let libraryFiles: string[] = [];
-  let isLibraryLoading = false;
-  let libraryErrorMsg = ''; // Specific errors for LibraryView
   let showLibraryViewer = false;
   let viewingFilename = '';
   let viewingFileContent = '';
+  let libraryErrorMsg = ''; // For compatibility with error clearing
 
   // --- Story Import State ---
   let isProcessingStory = false; // Processing text area content
@@ -162,7 +160,6 @@
         await loadSettings(); // Reload settings in case vault-specific settings exist later
         // Reset data states
         entries = [];
-        libraryFiles = [];
         mode = null; // Go to mode selection
       } else {
         vaultErrorMsg = 'Vault creation was cancelled or failed.';
@@ -187,7 +184,6 @@
         await loadSettings(); // Reload settings
         // Reset data states
         entries = [];
-        libraryFiles = [];
         mode = null; // Go to mode selection
       } else {
         // User cancelled selection, do nothing
@@ -229,12 +225,7 @@
             codexErrorMsg = `Failed to load Codex entries: ${err}`; // Show specific error
         }
       } else if (newMode === 'library') {
-        try {
-            await refreshLibraryFiles();
-        } catch (err) {
-             console.error("Error caught during refreshLibraryFiles in setModeAndUpdate:", err);
-             libraryErrorMsg = `Failed to load Library files: ${err}`;
-        }
+        // Library loading is now handled by LibraryTreeView component
       } else if (newMode === 'story') {
         // Reset story import specific state if necessary (handled mostly in component now)
       } else if (newMode === 'chat') {
@@ -811,23 +802,8 @@
 
 
   // --- Library Actions ---
-  async function refreshLibraryFiles() {
-    if (!vaultIsReady) return;
-    isLibraryLoading = true;
-    libraryErrorMsg = '';
-    try {
-      libraryFiles = (await ListLibraryFiles()) || [];
-    } catch (err) {
-      console.error("Error loading library files:", err);
-      libraryErrorMsg = `Error loading library: ${err}`;
-      libraryFiles = [];
-    } finally {
-      isLibraryLoading = false;
-    }
-  }
-
   async function viewLibraryFileContent(event: CustomEvent<string>) {
-    const filename = event.detail;
+    const filePath = event.detail;
     if (!vaultIsReady) {
       libraryErrorMsg = 'No vault is currently loaded';
       return;
@@ -835,12 +811,12 @@
     isLoading = true; // Use global loading indicator
     libraryErrorMsg = '';
     try {
-      const content = await ReadLibraryFile(filename);
-      viewingFilename = filename;
+      const content = await ReadLibraryFileWithPath(filePath);
+      viewingFilename = filePath;
       viewingFileContent = content;
       showLibraryViewer = true; // Show the modal
     } catch (err) {
-      console.error(`Error reading library file ${filename}:`, err);
+      console.error(`Error reading library file ${filePath}:`, err);
       libraryErrorMsg = `Error reading file: ${err}`;
       alert(libraryErrorMsg); // Simple feedback
     } finally {
@@ -849,7 +825,7 @@
   }
 
   async function handleSaveLibraryFile(event: CustomEvent<{ filename: string, content: string }>) {
-    const { filename, content } = event.detail;
+    const { filename: filePath, content } = event.detail;
     if (!vaultIsReady) {
       // Error handled within LibraryFileViewer? Or show here?
       alert('No vault is currently loaded');
@@ -858,16 +834,13 @@
     isLoading = true; // Use global loading indicator
     // Clear specific errors?
     try {
-      await SaveLibraryFile(filename, content);
-      console.log(`Successfully saved ${filename}`);
+      await SaveLibraryFileWithPath(filePath, content);
+      console.log(`Successfully saved ${filePath}`);
       showLibraryViewer = false; // Close viewer on success
-      // Optionally refresh library list if the saved file was new or renamed?
-      // For simplicity, maybe just rely on manual refresh for now.
-      // await refreshLibraryFiles();
     } catch (err) {
       console.error('Error saving library file:', err);
       // Show error within the modal?
-      alert(`Failed to save file ${filename}: ${err}`);
+      alert(`Failed to save file ${filePath}: ${err}`);
     } finally {
       isLoading = false;
     }
@@ -941,8 +914,7 @@
       // This function both saves the file and processes it for codex entries
       const result = await ImportStoryTextAndFile(content, filename);
       
-      // Refresh library files to ensure the new file appears in the list
-      await refreshLibraryFiles();
+      // Library will be refreshed when user navigates to library view
       
       // Step 6: Complete
       if (storyImportViewRef) {
@@ -1045,15 +1017,13 @@
   // --- Write Actions ---
   function handleWriteFileSaved(event: CustomEvent<string>) {
       const filename = event.detail;
-      // Refresh library if the file might be new/relevant
-      refreshLibraryFiles();
-      // Show feedback? Maybe a temporary message bar?
+      // Library will refresh automatically when navigated to
       console.log(`Write file saved: ${filename}`);
   }
   
   // REVISE handler for editing a file from the library
   async function handleEditInWriteMode(event: CustomEvent<string>) {
-    const filename = event.detail;
+    const filePath = event.detail;
     if (!vaultIsReady) {
       libraryErrorMsg = 'No vault is currently loaded';
       return;
@@ -1061,22 +1031,46 @@
     isLoading = true;
     libraryErrorMsg = '';
     try {
-      const content = await ReadLibraryFile(filename);
+      const content = await ReadLibraryFileWithPath(filePath);
       await loadEntries(); // Load entries before switching
       activeDocument = {
         content: content,
-        filename: filename,
+        filename: filePath,
         templateType: 'chapter', // Assumption, can be improved later
         isDirty: false
       };
       mode = 'write';
       currentWriteView = 'editor';
     } catch (err) {
-      console.error(`Error reading library file ${filename} for write mode:`, err);
+      console.error(`Error reading library file ${filePath} for write mode:`, err);
       libraryErrorMsg = `Error reading file: ${err}`;
       alert(libraryErrorMsg);
     } finally {
       isLoading = false;
+    }
+  }
+
+  // Handler for loading library file from within WriteView
+  async function handleLoadLibraryFileInWrite(event: CustomEvent<string>) {
+    const filePath = event.detail;
+    
+    // Check if current document has unsaved changes
+    if (activeDocument.isDirty) {
+      const confirmed = confirm("You have unsaved changes. Opening a new file will discard them. Continue?");
+      if (!confirmed) return;
+    }
+    
+    try {
+      const content = await ReadLibraryFileWithPath(filePath);
+      activeDocument = {
+        content,
+        filename: filePath,
+        templateType: 'chapter',
+        isDirty: false
+      };
+    } catch (err) {
+      console.error(`Error reading library file ${filePath}:`, err);
+      alert(`Error reading file: ${err}`);
     }
   }
 
@@ -1223,12 +1217,8 @@
       on:gotocodex={() => setModeAndUpdate('codex')}
     />
   {:else if mode === 'library'}
-    <LibraryView
-      bind:libraryFiles
-      bind:isLibraryLoading
-      bind:errorMsg={libraryErrorMsg}
+    <LibraryTreeView
       on:back={() => setModeAndUpdate(null)}
-      on:refresh={refreshLibraryFiles}
       on:viewfile={viewLibraryFileContent}
       on:editinwrite={handleEditInWriteMode}
     />
@@ -1291,6 +1281,7 @@
         on:loading={handleWriteLoading}
         on:error={handleGenericError}
         on:savecodex={handleSaveCodexFromChat}
+        on:loadlibraryfile={handleLoadLibraryFileInWrite}
       />
     {/if}
   {/if}

@@ -878,3 +878,63 @@
     font-size: 0.9rem;
     margin: 0.5rem 0;
 }
+
+/* Tab Navigation Styles */
+.tab-navigation {
+    display: flex;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 0;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+}
+
+.tab-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    color: var(--accent-primary);
+    background: rgba(var(--accent-primary-rgb, 0, 123, 255), 0.1);
+    border-bottom-color: var(--accent-primary);
+}
+
+/* Library Panel Styles */
+.library-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.library-panel :global(.library-view) {
+    padding: 0;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.library-panel :global(.library-header) {
+    padding: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.library-panel :global(.back-btn) {
+    display: none; /* Hide back button in write mode */
+}
+
+.library-panel :global(.tree-container) {
+    padding: 0.5rem;
+}
+}

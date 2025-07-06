@@ -923,6 +923,399 @@ func (a *App) SaveLibraryFile(filename string, content string) error {
 	return nil
 }
 
+// LibraryItem represents a file or folder in the library with hierarchical information
+type LibraryItem struct {
+	Name     string        `json:"name"`
+	Path     string        `json:"path"`     // Relative path from Library root
+	IsDir    bool          `json:"isDir"`
+	Size     int64         `json:"size"`     // File size in bytes (0 for directories)
+	ModTime  time.Time     `json:"modTime"`  // Last modification time
+	Children []LibraryItem `json:"children"` // Child items for directories
+}
+
+// isValidLibraryPath validates a library path for security
+func isValidLibraryPath(path string) bool {
+	// Reject empty paths
+	if path == "" {
+		return false
+	}
+	
+	// Reject paths containing ".." (path traversal)
+	if strings.Contains(path, "..") {
+		return false
+	}
+	
+	// Split path into components
+	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	
+	// Validate each path component
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+		// Check for valid characters in each component
+		for _, r := range part {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || 
+				 r == '-' || r == '_' || r == ' ' || r == '.') {
+				return false
+			}
+		}
+	}
+	
+	return true
+}
+
+// ListLibraryHierarchy returns the complete library structure with folders and files
+func (a *App) ListLibraryHierarchy() ([]LibraryItem, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("no vault is currently loaded")
+	}
+	
+	libraryPath := filepath.Join(a.dbPath, "Library")
+	
+	// Ensure library directory exists
+	if err := os.MkdirAll(libraryPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create library directory: %w", err)
+	}
+	
+	return a.buildLibraryTree(libraryPath, "")
+}
+
+// buildLibraryTree recursively builds the library tree structure
+func (a *App) buildLibraryTree(basePath, relativePath string) ([]LibraryItem, error) {
+	currentPath := filepath.Join(basePath, relativePath)
+	entries, err := os.ReadDir(currentPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %w", currentPath, err)
+	}
+	
+	items := make([]LibraryItem, 0)
+	
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			log.Printf("Warning: failed to get info for %s: %v", entry.Name(), err)
+			continue
+		}
+		
+		itemPath := filepath.Join(relativePath, entry.Name())
+		if relativePath == "" {
+			itemPath = entry.Name()
+		}
+		
+		item := LibraryItem{
+			Name:    entry.Name(),
+			Path:    itemPath,
+			IsDir:   entry.IsDir(),
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		}
+		
+		// If it's a directory, recursively get children
+		if entry.IsDir() {
+			children, err := a.buildLibraryTree(basePath, itemPath)
+			if err != nil {
+				log.Printf("Warning: failed to read subdirectory %s: %v", itemPath, err)
+				continue
+			}
+			item.Children = children
+		}
+		
+		items = append(items, item)
+	}
+	
+	// Sort items: directories first, then files, both alphabetically
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].IsDir != items[j].IsDir {
+			return items[i].IsDir // Directories first
+		}
+		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+	})
+	
+	return items, nil
+}
+
+// CreateLibraryFolder creates a new folder in the library
+func (a *App) CreateLibraryFolder(folderPath string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	
+	// Validate the folder path
+	if !isValidLibraryPath(folderPath) {
+		return fmt.Errorf("invalid folder path: %s", folderPath)
+	}
+	
+	fullPath := filepath.Join(a.dbPath, "Library", folderPath)
+	
+	// Create the folder
+	if err := os.MkdirAll(fullPath, 0755); err != nil {
+		return fmt.Errorf("failed to create folder %s: %w", folderPath, err)
+	}
+	
+	log.Printf("Created library folder: %s", folderPath)
+	return nil
+}
+
+// DeleteLibraryItem deletes a file or folder from the library
+func (a *App) DeleteLibraryItem(itemPath string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	
+	// Validate the item path
+	if !isValidLibraryPath(itemPath) {
+		return fmt.Errorf("invalid item path: %s", itemPath)
+	}
+	
+	fullPath := filepath.Join(a.dbPath, "Library", itemPath)
+	
+	// Check if item exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("item not found: %s", itemPath)
+		}
+		return fmt.Errorf("failed to access item %s: %w", itemPath, err)
+	}
+	
+	// Remove the item (works for both files and directories)
+	if err := os.RemoveAll(fullPath); err != nil {
+		return fmt.Errorf("failed to delete %s: %w", itemPath, err)
+	}
+	
+	itemType := "file"
+	if info.IsDir() {
+		itemType = "folder"
+	}
+	log.Printf("Deleted library %s: %s", itemType, itemPath)
+	return nil
+}
+
+// MoveLibraryItem moves or renames a file or folder in the library
+func (a *App) MoveLibraryItem(sourcePath, destPath string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	
+	log.Printf("MoveLibraryItem called: source='%s', dest='%s'", sourcePath, destPath)
+	
+	// Validate both paths
+	if !isValidLibraryPath(sourcePath) {
+		return fmt.Errorf("invalid source path: %s", sourcePath)
+	}
+	if !isValidLibraryPath(destPath) {
+		return fmt.Errorf("invalid destination path: %s", destPath)
+	}
+	
+	libraryBase := filepath.Join(a.dbPath, "Library")
+	sourceFullPath := filepath.Join(libraryBase, sourcePath)
+	destFullPath := filepath.Join(libraryBase, destPath)
+	
+	// Check if source exists
+	if _, err := os.Stat(sourceFullPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("source item not found: %s", sourcePath)
+		}
+		return fmt.Errorf("failed to access source item %s: %w", sourcePath, err)
+	}
+	
+	// Check if destination parent directory exists, create if necessary
+	destDir := filepath.Dir(destFullPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+	
+	// Check if destination already exists
+	if _, err := os.Stat(destFullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", destPath)
+	}
+	
+	// Move the item
+	if err := os.Rename(sourceFullPath, destFullPath); err != nil {
+		return fmt.Errorf("failed to move %s to %s: %w", sourcePath, destPath, err)
+	}
+	
+	log.Printf("Successfully moved library item from '%s' to '%s'", sourcePath, destPath)
+	return nil
+}
+
+// CopyLibraryItem copies a file or folder in the library
+func (a *App) CopyLibraryItem(sourcePath, destPath string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	
+	log.Printf("CopyLibraryItem called: source='%s', dest='%s'", sourcePath, destPath)
+	
+	// Validate both paths
+	if !isValidLibraryPath(sourcePath) {
+		return fmt.Errorf("invalid source path: %s", sourcePath)
+	}
+	if !isValidLibraryPath(destPath) {
+		return fmt.Errorf("invalid destination path: %s", destPath)
+	}
+	
+	libraryBase := filepath.Join(a.dbPath, "Library")
+	sourceFullPath := filepath.Join(libraryBase, sourcePath)
+	destFullPath := filepath.Join(libraryBase, destPath)
+	
+	// Check if source exists
+	sourceInfo, err := os.Stat(sourceFullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("source item not found: %s", sourcePath)
+		}
+		return fmt.Errorf("failed to access source item %s: %w", sourcePath, err)
+	}
+	
+	// Check if destination already exists
+	if _, err := os.Stat(destFullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", destPath)
+	}
+	
+	// Ensure parent directory exists
+	destDir := filepath.Dir(destFullPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+	
+	// Copy the item (file or directory)
+	if sourceInfo.IsDir() {
+		err = copyDir(sourceFullPath, destFullPath)
+	} else {
+		err = copyFile(sourceFullPath, destFullPath)
+	}
+	
+	if err != nil {
+		return fmt.Errorf("failed to copy %s to %s: %w", sourcePath, destPath, err)
+	}
+	
+	log.Printf("Successfully copied library item from '%s' to '%s'", sourcePath, destPath)
+	return nil
+}
+
+// Helper function to copy a file
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+	
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+	
+	// Copy file permissions
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	
+	return os.Chmod(dst, sourceInfo.Mode())
+}
+
+// Helper function to copy a directory recursively
+func copyDir(src, dst string) error {
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	
+	// Create destination directory
+	if err := os.MkdirAll(dst, sourceInfo.Mode()); err != nil {
+		return err
+	}
+	
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	
+	return nil
+}
+
+// ReadLibraryFileWithPath reads a file from the library using its full path
+func (a *App) ReadLibraryFileWithPath(filePath string) (string, error) {
+	if a.db == nil {
+		return "", fmt.Errorf("no vault is currently loaded")
+	}
+	
+	// Validate the file path
+	if !isValidLibraryPath(filePath) {
+		return "", fmt.Errorf("invalid file path: %s", filePath)
+	}
+	
+	fullPath := filepath.Join(a.dbPath, "Library", filePath)
+	
+	// Check if it's a file (not a directory)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to access file %s: %w", filePath, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory, not a file: %s", filePath)
+	}
+	
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+	
+	return string(content), nil
+}
+
+// SaveLibraryFileWithPath saves a file to the library using its full path
+func (a *App) SaveLibraryFileWithPath(filePath string, content string) error {
+	if a.db == nil {
+		return fmt.Errorf("no vault is currently loaded")
+	}
+	
+	// Validate the file path
+	if !isValidLibraryPath(filePath) {
+		return fmt.Errorf("invalid file path: %s", filePath)
+	}
+	
+	fullPath := filepath.Join(a.dbPath, "Library", filePath)
+	
+	// Ensure parent directory exists
+	parentDir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+	
+	// Write the file
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", filePath, err)
+	}
+	
+	log.Printf("Successfully saved library file: %s", filePath)
+	return nil
+}
+
 // ListTemplates returns a list of .md files in the vault's Templates folder
 func (a *App) ListTemplates() ([]string, error) {
 	if a.db == nil {
