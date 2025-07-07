@@ -1,0 +1,65 @@
+/* Editor Component Styles */
+
+.editor-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.editor-toolbar {
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color-medium);
+    background-color: var(--bg-secondary);
+    display: flex;
+    gap: 8px;
+}
+
+.toolbar-btn {
+    padding: 4px 8px;
+    border: 1px solid var(--border-color-medium);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: var(--font-weight-medium);
+    transition: all var(--transition-fast);
+}
+
+.toolbar-btn:hover:not(:disabled) {
+    background-color: var(--bg-hover-medium);
+    border-color: var(--accent-primary);
+    color: var(--text-accent);
+}
+
+.toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.editor-textarea {
+    flex-grow: 1;
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    padding: 1rem;
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 1.6;
+    resize: none;
+    background-color: transparent;
+    color: var(--text-primary);
+}
+
+.editor-textarea:focus {
+    outline: none;
+}
+
+.editor-textarea::placeholder {
+    color: var(--text-tertiary);
+}
