@@ -3,6 +3,7 @@
     import { createHistory } from '../../lib/history';
     import { onMount, onDestroy } from 'svelte';
     import { get } from 'svelte/store';
+    import '../../styles/Editor.css';
 
     // The initial content passed to the editor
     export let content: string = '';
@@ -103,61 +104,3 @@
         {placeholder}
     ></textarea>
 </div>
-
-<style>
-    .editor-container {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        width: 100%;
-        background-color: var(--color-bg-editor, #fff);
-        border: 1px solid var(--color-border, #ccc);
-        border-radius: 4px;
-        overflow: hidden;
-    }
-
-    .editor-toolbar {
-        padding: 8px;
-        border-bottom: 1px solid var(--color-border, #ccc);
-        background-color: var(--color-bg-toolbar, #f9f9f9);
-        display: flex;
-        gap: 8px;
-    }
-    
-    .toolbar-btn {
-        padding: 4px 8px;
-        border: 1px solid var(--color-border, #ccc);
-        background-color: #fff;
-        cursor: pointer;
-        border-radius: 3px;
-        font-size: 12px;
-        transition: background-color 0.2s;
-    }
-
-    .toolbar-btn:hover:not(:disabled) {
-        background-color: #f0f0f0;
-    }
-
-    .toolbar-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .editor-textarea {
-        flex-grow: 1;
-        width: 100%;
-        box-sizing: border-box;
-        border: none;
-        padding: 1rem;
-        font-family: inherit;
-        font-size: 16px;
-        line-height: 1.6;
-        resize: none;
-        background-color: transparent;
-        color: var(--color-text, #000);
-    }
-    
-    .editor-textarea:focus {
-        outline: none;
-    }
-</style>

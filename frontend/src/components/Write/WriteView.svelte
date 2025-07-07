@@ -1,8 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, afterUpdate, onDestroy } from 'svelte';
-  import { Marked } from 'marked'; // Import Marked class
+  import { Marked } from 'marked';
   import { SaveLibraryFileWithPath, GetAIResponseWithContext, GetAllEntries, WeaveEntryIntoText, SaveTemplate, ProcessStory, ListChatLogs, LoadChatLog, SaveChatLog, DeleteChatLog } from '@wailsjs/go/main/App';
   import { database, llm } from '@wailsjs/go/models';
+  import { writable, get, type Writable } from 'svelte/store';
   import DropContextMenu from './DropContextMenu.svelte'; // Import the new component
   import AutocompleteMenu from './AutocompleteMenu.svelte'; // Import the new component
   import CodexSelectorModal from '../Codex/CodexSelectorModal.svelte';
@@ -105,6 +106,8 @@
   let showDeleteChatModal = false;
   let chatToDelete = '';
   let deleteChatError = '';
+  let showTemplateGenerationBuffer = false;
+  let isTemplateGenerating: Writable<boolean> = writable(false);
 
   // --- Length Selector Modal State ---
   let showLengthSelector = false;
@@ -165,12 +168,12 @@
   });
 
   // --- REVISED Logic ---
-  // The parent will pass down the new rendered HTML when content changes.
+  // Update rendered HTML when content changes
   $: if (documentContent !== undefined) {
     (async () => {
       try {
         const result = await marked.parse(documentContent || '');
-        renderedWriteHtml = result;
+        renderedWriteHtml = String(result);
       } catch (e) {
         console.error("Markdown parsing error:", e);
         renderedWriteHtml = "Error parsing markdown.";
