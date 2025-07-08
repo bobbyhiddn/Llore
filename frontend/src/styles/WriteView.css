@@ -698,34 +698,35 @@
 /* Code */
 .markdown-preview :global(code) {
     font-family: var(--font-mono, 'Consolas', 'Monaco', 'Courier New', monospace);
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.15);
     color: var(--text-primary, #e0e0e0);
     padding: 0.2em 0.4em;
-    border-radius: 4px;
-    font-size: 0.9em;
-    word-break: break-all;
-    overflow-wrap: break-word;
+    border-radius: 3px;
+    font-size: 0.85em;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 .markdown-preview :global(pre) {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    padding: 0.75rem !important;
-    border-radius: 4px !important;
-    overflow-x: auto !important;
-    white-space: pre-wrap !important;
-    word-wrap: break-word !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-    margin-bottom: 1.25em !important;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    white-space: pre;
+    font-family: var(--font-mono, 'Consolas', 'Monaco', 'Courier New', monospace);
+    font-size: 0.85em;
+    line-height: 1.4;
+    margin: 1em 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 .markdown-preview :global(pre code) {
-    background: transparent !important;
-    color: var(--text-primary, #e0e0e0) !important;
-    padding: 0 !important;
-    border-radius: 0 !important;
-    font-size: 0.9em !important;
-    word-break: normal !important;
-    overflow-wrap: normal !important;
+    background: transparent;
+    color: var(--text-primary, #e0e0e0);
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    font-size: inherit;
+    word-break: normal;
+    overflow-wrap: normal;
 }
 
 /* Horizontal Rule */
@@ -1308,17 +1309,29 @@
     overflow: hidden;
     background: transparent;
     padding: 0;
+    max-height: 100%;
+    box-sizing: border-box;
 }
 
 .library-panel :global(.library-view) {
     padding: 0;
     height: 100%;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    font-size: 0.85rem;
 }
 
 .library-panel :global(.library-header) {
-    padding: 1rem;
+    padding: 0.75rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+    font-size: 0.9rem;
+}
+
+.library-panel :global(.library-header h2) {
+    font-size: 1rem;
+    margin: 0;
 }
 
 .library-panel :global(.back-btn) {
@@ -1327,4 +1340,42 @@
 
 .library-panel :global(.tree-container) {
     padding: 0.5rem;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.library-panel :global(.tree-item) {
+    font-size: 0.8rem;
+    line-height: 1.3;
+    padding: 0.25rem 0;
+}
+
+.library-panel :global(.tree-item-name) {
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.library-panel :global(.tree-item-content) {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.library-panel :global(.search-input) {
+    font-size: 0.85rem;
+    padding: 0.5rem;
+}
+
+.library-panel :global(.folder-name) {
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.library-panel :global(.file-name) {
+    font-size: 0.75rem;
 }

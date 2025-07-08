@@ -120,7 +120,12 @@
   const historyDebounce = 1000; // ms
 
   const dispatch = createEventDispatcher();
-  const marked = new Marked({ gfm: true, breaks: true });
+  const marked = new Marked({ 
+    gfm: true, 
+    breaks: true,
+    pedantic: false,
+    sanitize: false
+  });
 
   // Custom renderer for links
   // Custom renderer for links has been temporarily removed to resolve a build issue.
