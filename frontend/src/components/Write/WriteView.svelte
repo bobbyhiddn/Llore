@@ -24,6 +24,7 @@
   let renderedWriteHtml = '';
   let markdownTextareaElement: HTMLTextAreaElement;
   let editorMode: 'split' | 'edit' | 'preview' = 'split';
+  let previewAlignment: 'left' | 'center' | 'right' = 'center';
   let wordCount: number = 0;
   let charCount: number = 0;
   let writeChatDisplayElement: HTMLDivElement; // For auto-scrolling
@@ -123,8 +124,7 @@
   const marked = new Marked({ 
     gfm: true, 
     breaks: true,
-    pedantic: false,
-    sanitize: false
+    pedantic: false
   });
 
   // Custom renderer for links
@@ -186,6 +186,7 @@
     })();
   }
   $: updateCounts(documentContent);
+  $: console.log('Preview alignment changed to:', previewAlignment);
 
   function updateCounts(text: string) {
       charCount = text.length;
@@ -1596,14 +1597,29 @@ Based on the AI response and the surrounding context, generate enhanced text tha
   <!-- CENTER COLUMN: Editor -->
   <div class="center-column">
     <div class="editor-toolbar">
-      <div class="view-mode-toggles">
-        <button class:active={editorMode === 'edit'} on:click={() => editorMode = 'edit'} title="Edit mode">📝 Edit</button>
-        <button class:active={editorMode === 'split'} on:click={() => editorMode = 'split'} title="Split mode">⚔️ Split</button>
-        <button class:active={editorMode === 'preview'} on:click={() => editorMode = 'preview'} title="Preview mode">👁️ Preview</button>
+      <div class="toolbar-left-controls">
+        <div class="view-mode-toggles">
+          <button class:active={editorMode === 'edit'} on:click={() => editorMode = 'edit'} title="Edit mode">📝 Edit</button>
+          <button class:active={editorMode === 'split'} on:click={() => editorMode = 'split'} title="Split mode">⚔️ Split</button>
+          <button class:active={editorMode === 'preview'} on:click={() => editorMode = 'preview'} title="Preview mode">👁️ Preview</button>
+        </div>
+
+        <!-- Alignment Toggles (only for preview/split) -->
+        {#if editorMode === 'preview' || editorMode === 'split'}
+          <div class="preview-alignment-toggles">
+            <button class="tool-btn alignment-btn" class:active={previewAlignment === 'left'} on:click={() => previewAlignment = 'left'} title="Align Left">⬅</button>
+            <button class="tool-btn alignment-btn" class:active={previewAlignment === 'center'} on:click={() => previewAlignment = 'center'} title="Align Center">↔</button>
+            <button class="tool-btn alignment-btn" class:active={previewAlignment === 'right'} on:click={() => previewAlignment = 'right'} title="Align Right">➡</button>
+          </div>
+        {/if}
       </div>
+
       <div class="current-file-display">
         {documentFilename || "New Document"}{#if isDocumentDirty && documentFilename}*{/if}
       </div>
+
+      <!-- This empty div will have the same width as the left controls, ensuring the title is perfectly centered -->
+      <div class="toolbar-left-controls" style="visibility: hidden;"></div>
     </div>
     <div class="editor-pane">
       {#if isWeaveDragOver}
@@ -1623,11 +1639,16 @@ Based on the AI response and the surrounding context, generate enhanced text tha
         on:dragover|preventDefault
         on:keydown={handleWriteViewKeydown}
       ></textarea>
-      <div 
-        class="markdown-preview-container"
-        class:hidden={editorMode === 'edit'}
+      <div
+        class={`markdown-preview-container align-${previewAlignment} ${editorMode === 'edit' ? 'hidden' : ''}`}
+        on:dragover|preventDefault={handleDragOver}
+        on:dragleave={handleDragLeave}
+        on:drop|preventDefault={handleDrop}
+        role="group"
       >
-        <div class="markdown-preview">{@html renderedWriteHtml}</div>
+        <div class="markdown-preview">
+          {@html renderedWriteHtml}
+        </div>
       </div>
     </div>
     <div class="bottom-formatting-bar">
