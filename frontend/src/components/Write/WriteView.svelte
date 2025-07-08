@@ -113,6 +113,7 @@
   // --- Length Selector Modal State ---
   let showLengthSelector = false;
   let showContinueConfirmModal = false;
+  let showGenerateNextModal = false;
 
   // --- Undo/Redo State ---
   let undoStack: string[] = [];
@@ -1692,18 +1693,39 @@ Based on the AI response and the surrounding context, generate enhanced text tha
     <!-- Writing Weaving -->
     <div class="tool-section">
       <h4>Writing Weaving</h4>
-      <div class="writing-weave-buttons">
+      <p>Drag or click a weave to enhance your writing with selected codex entries.</p>
+      <div 
+        class="writing-weave-buttons"
+        role="group" 
+        aria-label="Writing Weave Tools"
+        on:dragover|preventDefault={handleDragOver}
+        on:dragleave={handleDragLeave}
+        on:drop|preventDefault={handleDrop}
+        class:drag-over={isWeaveDragOver}
+      >
         {#each writingWeaves as weave}
           <button 
             class="tool-btn writing-weave-btn" 
             title={weave.description}
+            on:click={(e) => openWritingWeave(e, weave)}
             draggable="true"
             on:dragstart={(e) => handleWeaveButtonDragStart(e, weave)}
-            on:click={(e) => openWritingWeave(e, weave)}
           >
-            <span class="icon">{weave.icon}</span> {weave.label}
+            <span class="weave-icon">{weave.icon}</span>
+            <span class="weave-label">{weave.label}</span>
           </button>
         {/each}
+      </div>
+    </div>
+
+    <!-- Generation Tools Section -->
+    <div class="tool-section">
+      <h4>Generation Tools</h4>
+      <div class="generation-tool-buttons">
+        <button class="tool-btn generate-next-btn" on:click={() => showGenerateNextModal = true}>
+          <span class="generate-next-icon">🔮</span>
+          <span class="generate-next-label">Generate Next Chapter</span>
+        </button>
       </div>
     </div>
 
@@ -1852,6 +1874,11 @@ Based on the AI response and the surrounding context, generate enhanced text tha
 
 {#if showLengthSelector}
   <LengthSelectorModal on:select={handleLengthSelection} on:close={() => showLengthSelector = false} />
+{/if}
+
+<!-- Generate Next Modal Placeholder -->
+{#if showGenerateNextModal}
+  <!-- TODO: Create and import GenerateNextModal.svelte -->
 {/if}
 
 <!-- Continue Confirmation Modal -->
