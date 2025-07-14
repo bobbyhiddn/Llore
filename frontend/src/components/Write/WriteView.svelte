@@ -65,6 +65,7 @@
   let isDraggingCodexEntry = false;
   let isDraggingWritingWeave = false;
   let lastHighlightUpdate = 0;
+  let isHandlingPaste = false;
 
   const writingWeaves = [
     { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
@@ -1090,7 +1091,12 @@
 
   function handleInput(event: Event) {
     const target = event.target as HTMLTextAreaElement;
-    pushToHistory(documentContent);
+    
+    // Don't push to history if we're handling paste (to avoid duplicate entries)
+    if (!isHandlingPaste) {
+      pushToHistory(documentContent);
+    }
+    
     dispatch('updatecontent', target.value);
 
     // Also handle autocomplete logic
@@ -1113,6 +1119,71 @@
     } else {
       showAutocomplete = false;
     }
+  }
+
+  function handleCopy(event: ClipboardEvent) {
+    if (!markdownTextareaElement) return;
+    
+    const start = markdownTextareaElement.selectionStart;
+    const end = markdownTextareaElement.selectionEnd;
+    
+    if (start !== end) {
+      // There's a selection - copy it
+      const selectedText = documentContent.substring(start, end);
+      if (event.clipboardData) {
+        event.clipboardData.setData('text/plain', selectedText);
+        event.preventDefault();
+        console.log('Copied text:', selectedText); // Debug logging
+      }
+    }
+  }
+
+  function handlePaste(event: ClipboardEvent) {
+    console.log('Paste event triggered'); // Debug logging
+    if (!markdownTextareaElement || !event.clipboardData) {
+      console.log('Missing textarea or clipboardData');
+      return;
+    }
+    
+    // Set flag to prevent duplicate history entries
+    isHandlingPaste = true;
+    
+    // Push current state to history before pasting
+    pushToHistory(documentContent, true);
+    
+    const pastedText = event.clipboardData.getData('text/plain');
+    console.log('Pasted text:', pastedText); // Debug logging
+    
+    if (!pastedText) {
+      console.log('No text to paste');
+      isHandlingPaste = false;
+      return;
+    }
+    
+    const start = markdownTextareaElement.selectionStart;
+    const end = markdownTextareaElement.selectionEnd;
+    
+    // Create new content with pasted text
+    const newContent = documentContent.substring(0, start) + pastedText + documentContent.substring(end);
+    
+    // Update the content
+    dispatch('updatecontent', newContent);
+    
+    // Set cursor position after pasted text
+    requestAnimationFrame(() => {
+      if (markdownTextareaElement) {
+        const newCursorPos = start + pastedText.length;
+        markdownTextareaElement.focus();
+        markdownTextareaElement.selectionStart = newCursorPos;
+        markdownTextareaElement.selectionEnd = newCursorPos;
+      }
+      
+      // Reset the flag after the paste is complete
+      isHandlingPaste = false;
+    });
+    
+    // Prevent default paste behavior
+    event.preventDefault();
   }
 
   function handleAutocompleteSelect(event: CustomEvent<database.CodexEntry>) {
@@ -1565,7 +1636,7 @@ Based on the AI response and the surrounding context, generate enhanced text tha
 
     <!-- Tab Content -->
     {#if activeLeftTab === 'chat'}
-    <div class="write-chat-panel" bind:this={chatPanelElement}>
+      <div class="write-chat-panel" bind:this={chatPanelElement}>
       <div class="chat-header">
         <h3>Contextual Chat {currentChatLogFilename ? `(${currentChatLogFilename})` : '(New Chat)'}</h3>
         <div class="chat-controls">
@@ -1650,16 +1721,16 @@ Based on the AI response and the surrounding context, generate enhanced text tha
        {#if !chatModelId}
         <p class="info-text">Chat disabled. Select a chat model in Settings.</p>
       {/if}
-    </div>
+      </div>
     {:else if activeLeftTab === 'library'}
-    <!-- Library Tab Content -->
-    <div class="library-panel">
-      <LibraryTreeView 
-        on:fileselected={handleLibraryFileSelected}
-        on:viewfile={handleLibraryViewFile}
-        on:back={() => {}} 
-      />
-    </div>
+      <!-- Library Tab Content -->
+      <div class="library-panel">
+        <LibraryTreeView 
+          on:fileselected={handleLibraryFileSelected}
+          on:viewfile={handleLibraryViewFile}
+          on:back={() => {}} 
+        />
+      </div>
     {/if}
     
     <div class="save-tools-module">
@@ -1740,6 +1811,8 @@ Based on the AI response and the surrounding context, generate enhanced text tha
         on:dragover={handleDragOver}
         on:dragover|preventDefault
         on:keydown={handleWriteViewKeydown}
+        on:copy={handleCopy}
+        on:paste={handlePaste}
       ></textarea>
       <div
         class={`markdown-preview-container align-${previewAlignment} ${editorMode === 'edit' ? 'hidden' : ''}`}
