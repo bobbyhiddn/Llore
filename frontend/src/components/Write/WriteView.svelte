@@ -937,7 +937,7 @@
   }
 
   // --- Enhanced Codex Weaving Function with Length Control ---
-  async function performEnhancedCodexWeaving(selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large') {
+  async function performEnhancedCodexWeaving(selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large', guidanceText: string = '') {
     if (!droppedEntry && selectedEntries.length === 0) return;
     
     isWeaving = true;
@@ -988,12 +988,13 @@ CRITICAL: Your response must be ONLY the replacement text for "${wordToReplace}"
 2. Naturally incorporate or reference the codex entries
 3. Flow seamlessly with the surrounding text
 4. Preserve the narrative style and tone
-5. Match the specified length requirement
+5. Match the specified length requirement${guidanceText ? '\n6. Follow the specific guidance provided below' : ''}
 
 CONTEXT:
 ${modifiedContent}
+${guidanceText ? `\nSPECIFIC GUIDANCE:\n${guidanceText}` : ''}
 
-Generate replacement text for "${wordToReplace}" that weaves in the codex entries naturally while matching the length requirement.`;
+Generate replacement text for "${wordToReplace}" that weaves in the codex entries naturally while matching the length requirement${guidanceText ? ' and following the specific guidance' : ''}.`;
 
         const generatedText = await GetAIResponseWithContext(customPrompt, chatModelId);
         
@@ -1021,7 +1022,7 @@ CRITICAL: Your response must be ONLY the text to insert. Do not include explanat
 1. Naturally incorporate or reference the codex entries
 2. Flow seamlessly with the surrounding text
 3. Enhance the narrative at this position
-4. Match the specified length requirement
+4. Match the specified length requirement${guidanceText ? '\n5. Follow the specific guidance provided below' : ''}
 
 TEXT BEFORE INSERTION:
 ---
@@ -1032,8 +1033,9 @@ TEXT AFTER INSERTION:
 ---
 ${textAfter.substring(0, 1500)}
 ---
+${guidanceText ? `\nSPECIFIC GUIDANCE:\n${guidanceText}` : ''}
 
-Generate text that weaves in the codex entries naturally at the insertion point while matching the length requirement.`;
+Generate text that weaves in the codex entries naturally at the insertion point while matching the length requirement${guidanceText ? ' and following the specific guidance' : ''}.`;
 
         const generatedText = await GetAIResponseWithContext(customPrompt, chatModelId);
         
@@ -1391,15 +1393,15 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
     }
   }
 
-  async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large' }>) {
-    const { selectedEntries, selectedLength } = event.detail;
+  async function handleWritingWeave(event: CustomEvent<{ selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large', guidanceText: string }>) {
+    const { selectedEntries, selectedLength, guidanceText } = event.detail;
     showCodexSelector = false;
     
     if (!activeWritingWeave || writingWeaveCursorPos === null || !markdownTextareaElement) return;
 
     // Handle codex weaving differently
     if (activeWritingWeave.type === 'codex-weave') {
-      await performEnhancedCodexWeaving(selectedEntries, selectedLength);
+      await performEnhancedCodexWeaving(selectedEntries, selectedLength, guidanceText);
       return;
     }
 
@@ -1438,22 +1440,22 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
         taskDescription = `Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.`;
         criticalInstruction = `CRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.`;
         selectedTextContext = `\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n`;
-        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement${guidanceText ? ' and follow the specific guidance provided' : ''}.`;
       } else if (isWordDrop) {
         // Word replacement from drag and drop - replace the targeted word contextually
         taskDescription = `Your task is to replace the word "${selectedText}" with a '${activeWritingWeave.label}' element that fits the context.`;
         criticalInstruction = `CRITICAL: Your response must be ONLY the replacement text. Do not include any conversational pleasantries or introductions. Your output will directly replace the highlighted word.\n\nIMPORTANT: You are replacing the word "${selectedText}" with contextually appropriate content. The replacement should maintain narrative flow and feel natural in the sentence. Consider the word's grammatical role and replace it with content that makes grammatical and narrative sense.`;
         selectedTextContext = `\n\nWORD TO REPLACE: "${selectedText}"\n`;
-        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate replacement text for "${selectedText}" that enhances the narrative while maintaining grammatical coherence. The result should flow naturally from the before text, through your replacement, and into the after text. Match the specified length requirement.`;
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate replacement text for "${selectedText}" that enhances the narrative while maintaining grammatical coherence. The result should flow naturally from the before text, through your replacement, and into the after text. Match the specified length requirement${guidanceText ? ' and follow the specific guidance provided' : ''}.`;
       } else {
         // Cursor position insertion
         taskDescription = `Your task is to generate and insert a '${activeWritingWeave.label}' element at the user's cursor position.`;
         criticalInstruction = `CRITICAL: Your response must be ONLY the generated text to insert. Do not include any conversational pleasantries or introductions. Your output will be directly inserted into the document.`;
         selectedTextContext = '';
-        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate new text to be inserted. The result should flow naturally from the text before the cursor and into the text after it. Match the specified length requirement.`;
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate new text to be inserted. The result should flow naturally from the text before the cursor and into the text after it. Match the specified length requirement${guidanceText ? ' and follow the specific guidance provided' : ''}.`;
       }
 
-      const prompt = `You are a subtle and masterful fiction writing assistant. ${taskDescription}\n\n${criticalInstruction}\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---${selectedTextContext}\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\n${finalInstruction}`;
+      const prompt = `You are a subtle and masterful fiction writing assistant. ${taskDescription}\n\n${criticalInstruction}\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---${selectedTextContext}\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n${guidanceText ? `\nSPECIFIC GUIDANCE:\n${guidanceText}\n` : ''}\n${finalInstruction}`;
       
       const generatedText = await GetAIResponseWithContext(prompt, chatModelId);
       

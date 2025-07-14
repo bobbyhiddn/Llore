@@ -9,6 +9,7 @@
   let selectedEntries: database.CodexEntry[] = [];
   let searchTerm = '';
   let selectedLength = 'medium'; // Default to medium
+  let guidanceText = ''; // Optional guidance for the AI
   const dispatch = createEventDispatcher();
 
   const lengthOptions = [
@@ -46,7 +47,7 @@
   }
 
   function handleWeave() {
-    dispatch('weave', { selectedEntries, selectedLength });
+    dispatch('weave', { selectedEntries, selectedLength, guidanceText });
   }
 </script>
 
@@ -54,7 +55,6 @@
   <div class="modal codex-selector-modal" role="dialog" aria-modal="true" on:click|stopPropagation>
     <h3>Attach Codex Entries for '{nodeType}'</h3>
     <p>Select entries to provide specific context for the AI. This is optional.</p>
-        <input type="search" bind:this={searchInput} bind:value={searchTerm} placeholder="Search entries..."/>
     
     <!-- Length Selector -->
     <div class="length-selector">
@@ -65,6 +65,22 @@
         {/each}
       </select>
     </div>
+
+    <!-- Guidance Text -->
+    <div class="guidance-section">
+      <label for="guidance-input">Guidance (optional):</label>
+      <textarea 
+        id="guidance-input" 
+        bind:value={guidanceText} 
+        placeholder="Provide specific instructions for the AI (e.g., 'Focus on the emotional impact', 'Write from character's perspective', 'Emphasize the mystical elements')..."
+        rows="3"
+      ></textarea>
+      <small>Add specific instructions to guide the AI's writing style, focus, or approach.</small>
+    </div>
+
+    <!-- Search Filter -->
+    <input type="search" bind:this={searchInput} bind:value={searchTerm} placeholder="Search entries..."/>
+    
     <div class="entry-list" role="listbox">
       {#each filteredEntries as entry (entry.id)}
         <button 
@@ -161,6 +177,43 @@
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.2);
+  }
+
+  .guidance-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .guidance-section label {
+    color: var(--text-primary);
+    font-weight: 500;
+    font-size: 0.9rem;
+  }
+
+  .guidance-section textarea {
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+  }
+
+  .guidance-section textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(109, 94, 217, 0.2);
+  }
+
+  .guidance-section small {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-top: -0.25rem;
   }
 
   .entry-list {
