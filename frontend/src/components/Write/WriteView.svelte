@@ -75,6 +75,8 @@
     { type: 'introspection', label: 'Introspection', description: 'Explore a character\'s internal thoughts.', icon: '🧠' },
   ];
   let dropCursorPosition: number = 0;
+  let dropCursorEndPosition: number = 0;
+  let droppedWordInfo: WordInfo | null = null;
   let isWeaving = false;
   
   // --- Left sidebar tab state ---
@@ -866,17 +868,19 @@
         console.log('Drop data:', dropData); // Debug logging
         if (dropData.type === 'writing-weave') {
           // Handle writing weave drop - use highlighted word position if available
-          let cursorPos;
+          let cursorPos, selectionEnd;
           if (highlightedWordAtDrop) {
             cursorPos = highlightedWordAtDrop.index;
-            console.log('Using highlighted word position for weave:', cursorPos); // Debug logging
+            selectionEnd = highlightedWordAtDrop.index + highlightedWordAtDrop.word.length;
+            console.log('Using highlighted word position for weave:', cursorPos, 'to', selectionEnd, 'word:', highlightedWordAtDrop.word); // Debug logging
           } else {
             cursorPos = getCursorPositionFromMouseEvent(event);
+            selectionEnd = cursorPos; // No selection if no word highlighted
             console.log('Using fallback position for weave:', cursorPos); // Debug logging
           }
-          activeWritingWeave = dropData.weave;
+          activeWritingWeave = { ...dropData.weave, fromDrop: true };
           writingWeaveCursorPos = cursorPos;
-          writingWeaveSelectionEnd = cursorPos; // Set end to start for a drop (no selection)
+          writingWeaveSelectionEnd = selectionEnd; // Set end to word boundary for proper replacement
           showCodexSelector = true;
         } else {
           // Handle codex entry drop (has id, name, type, content properties) - use highlighted word position if available
@@ -886,11 +890,15 @@
           dropMenuY = event.clientY;
           if (highlightedWordAtDrop) {
             dropCursorPosition = highlightedWordAtDrop.index;
-            console.log('Using highlighted word position:', dropCursorPosition); // Debug logging
+            dropCursorEndPosition = highlightedWordAtDrop.index + highlightedWordAtDrop.word.length;
+            droppedWordInfo = highlightedWordAtDrop;
+            console.log('Using highlighted word position for codex:', dropCursorPosition, 'to', dropCursorEndPosition, 'word:', highlightedWordAtDrop.word); // Debug logging
           } else {
             const target = event.target as HTMLTextAreaElement;
             dropCursorPosition = target.selectionStart;
-            console.log('Using fallback position:', dropCursorPosition); // Debug logging
+            dropCursorEndPosition = target.selectionStart;
+            droppedWordInfo = null;
+            console.log('Using fallback position for codex:', dropCursorPosition); // Debug logging
           }
           showDropMenu = true;
         }
@@ -929,22 +937,61 @@
     if (!droppedEntry) return;
     isWeaving = true;
     dispatch('loading', true);
-    let weavingIndicator = '... weaving ...';
-    insertTextAt(weavingIndicator, dropCursorPosition);
-
+    
     try {
-      const generatedText = await WeaveEntryIntoText(
-        droppedEntry,
-        documentContent.replace(weavingIndicator, ''), // Send content without the indicator
-        dropCursorPosition,
-        templateType
-      );
+      const isWordReplacement = droppedWordInfo && dropCursorPosition !== dropCursorEndPosition;
+      
+      if (isWordReplacement) {
+        // Word replacement: replace the highlighted word with contextually appropriate content
+        const wordToReplace = droppedWordInfo.word;
+        const textBefore = documentContent.substring(0, dropCursorPosition);
+        const textAfter = documentContent.substring(dropCursorEndPosition);
+        
+        // Create a modified document for the AI with a marker where the word was
+        const modifiedContent = textBefore + '<<REPLACE_WORD>>' + textAfter;
+        
+        // Use a custom prompt that focuses on word replacement
+        const customPrompt = `You are an expert fiction writing assistant. Your task is to replace a specific word with contextually appropriate content that incorporates the provided codex entry.
 
-      // Replace indicator with generated text
-      dispatch('updatecontent', documentContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`));
+WORD TO REPLACE: "${wordToReplace}"
+CODEX ENTRY: ${droppedEntry.name} (${droppedEntry.type})
+${droppedEntry.content}
+
+CRITICAL: Your response must be ONLY the replacement text for "${wordToReplace}". Do not include explanations, introductions, or conversational text. The replacement should:
+1. Maintain grammatical coherence in the sentence
+2. Naturally incorporate or reference the codex entry
+3. Flow seamlessly with the surrounding text
+4. Preserve the narrative style and tone
+
+CONTEXT:
+${modifiedContent}
+
+Generate replacement text for "${wordToReplace}" that weaves in the codex entry naturally.`;
+
+        const generatedText = await GetAIResponseWithContext(customPrompt, chatModelId);
+        
+        // Replace the word directly
+        replaceTextRange(generatedText.trim(), dropCursorPosition, dropCursorEndPosition);
+      } else {
+        // Traditional cursor insertion
+        let weavingIndicator = '... weaving ...';
+        insertTextAt(weavingIndicator, dropCursorPosition);
+
+        const generatedText = await WeaveEntryIntoText(
+          droppedEntry,
+          documentContent.replace(weavingIndicator, ''), // Send content without the indicator
+          dropCursorPosition,
+          templateType
+        );
+
+        // Replace indicator with generated text
+        dispatch('updatecontent', documentContent.replace(weavingIndicator, `\n${generatedText.trim()}\n`));
+      }
     } catch(err) {
       dispatch('error', `Llore-weaving failed: ${err}`);
-      dispatch('updatecontent', documentContent.replace(weavingIndicator, '')); // Remove indicator on error
+      if (documentContent.includes('... weaving ...')) {
+        dispatch('updatecontent', documentContent.replace('... weaving ...', '')); // Remove indicator on error
+      }
     } finally {
       isWeaving = false;
       dispatch('loading', false);
@@ -1128,10 +1175,13 @@
     
     if (start !== end) {
       const selectedText = documentContent.substring(start, end);
-      console.log('Copied text:', selectedText); // Debug logging
+      console.log('Copy event - selected text:', selectedText); // Debug logging
+    } else {
+      console.log('Copy event - no text selected'); // Debug logging
     }
     
-    // Don't prevent default - let browser handle the copy
+    // Explicitly allow the browser to handle the copy operation
+    // Do not call event.preventDefault()
   }
 
   function handlePaste(event: ClipboardEvent) {
@@ -1237,6 +1287,11 @@
       const hasSelection = selectedText.length > 0;
       const textBeforeSelection = documentContent.substring(0, writingWeaveCursorPos);
       const textAfterSelection = documentContent.substring(writingWeaveSelectionEnd);
+      
+      // Determine the interaction type: manual selection vs word drop vs cursor insertion
+      const isManualSelection = hasSelection && activeWritingWeave && !activeWritingWeave.fromDrop;
+      const isWordDrop = hasSelection && activeWritingWeave && activeWritingWeave.fromDrop;
+      const isCursorInsertion = !hasSelection;
 
       const contextEntries = selectedEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
       
@@ -1251,21 +1306,27 @@
       const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
       
       // --- Conditional Prompting ---
-      const taskDescription = hasSelection 
-        ? `Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.`
-        : `Your task is to generate and insert a '${activeWritingWeave.label}' element at the user's cursor position.`;
-
-      const criticalInstruction = hasSelection
-        ? `CRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.`
-        : `CRITICAL: Your response must be ONLY the generated text to insert. Do not include any conversational pleasantries or introductions. Your output will be directly inserted into the document.`;
-
-      const selectedTextContext = hasSelection 
-        ? `\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n` 
-        : '';
+      let taskDescription, criticalInstruction, selectedTextContext, finalInstruction;
       
-      const finalInstruction = hasSelection
-        ? `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`
-        : `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate new text to be inserted. The result should flow naturally from the text before the cursor and into the text after it. Match the specified length requirement.`;
+      if (isManualSelection) {
+        // Manual text selection weaving - enhance and incorporate the selected text
+        taskDescription = `Your task is to enhance and weave a '${activeWritingWeave.label}' element into the selected text.`;
+        criticalInstruction = `CRITICAL: Your response must be ONLY the enhanced text. Do not include any conversational pleasantries, introductions, or the original text. Your output will be directly inserted into a document.\n\nIMPORTANT: You must INCORPORATE the selected text into your response, not replace it. The selected text should be woven into and enhanced by your generated content, creating a richer, more detailed version that maintains the original meaning while adding the requested weave type.`;
+        selectedTextContext = `\n\nSELECTED TEXT TO INCORPORATE:\n---\n${selectedText}\n---\n`;
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate enhanced text that incorporates and builds upon the selected text. The result should flow naturally from the before text, through your enhanced version of the selection, and into the after text. Match the specified length requirement.`;
+      } else if (isWordDrop) {
+        // Word replacement from drag and drop - replace the targeted word contextually
+        taskDescription = `Your task is to replace the word "${selectedText}" with a '${activeWritingWeave.label}' element that fits the context.`;
+        criticalInstruction = `CRITICAL: Your response must be ONLY the replacement text. Do not include any conversational pleasantries or introductions. Your output will directly replace the highlighted word.\n\nIMPORTANT: You are replacing the word "${selectedText}" with contextually appropriate content. The replacement should maintain narrative flow and feel natural in the sentence. Consider the word's grammatical role and replace it with content that makes grammatical and narrative sense.`;
+        selectedTextContext = `\n\nWORD TO REPLACE: "${selectedText}"\n`;
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate replacement text for "${selectedText}" that enhances the narrative while maintaining grammatical coherence. The result should flow naturally from the before text, through your replacement, and into the after text. Match the specified length requirement.`;
+      } else {
+        // Cursor position insertion
+        taskDescription = `Your task is to generate and insert a '${activeWritingWeave.label}' element at the user's cursor position.`;
+        criticalInstruction = `CRITICAL: Your response must be ONLY the generated text to insert. Do not include any conversational pleasantries or introductions. Your output will be directly inserted into the document.`;
+        selectedTextContext = '';
+        finalInstruction = `Based on the weave type ('${activeWritingWeave.label}') and the provided context, generate new text to be inserted. The result should flow naturally from the text before the cursor and into the text after it. Match the specified length requirement.`;
+      }
 
       const prompt = `You are a subtle and masterful fiction writing assistant. ${taskDescription}\n\n${criticalInstruction}\n\nWhen incorporating the context entries, do so with nuance. Use them to inform the atmosphere, character voice, or narrative direction. The result should feel like a natural evolution of the original text.\n\nLENGTH REQUIREMENT: ${lengthInstruction}\n\nText before selection:\n---\n${textBeforeSelection.slice(-1500)}\n---${selectedTextContext}\n\nText after selection:\n---\n${textAfterSelection.substring(0, 1500)}\n---\n\nContext entries for inspiration:\n---\n${contextEntries || 'No specific context provided.'}\n---\n\n${finalInstruction}`;
       
