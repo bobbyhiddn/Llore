@@ -11,6 +11,7 @@
   import StoryImportStatus from '../Story/StoryImportStatus.svelte';
   import LengthSelectorModal from './LengthSelectorModal.svelte';
   import LibraryTreeView from '../Library/LibraryTreeView.svelte';
+  import { getCharIndexAtPoint, getWordAtPoint, type WordInfo } from '../../lib/utils/text-positioning';
   import '../../styles/WriteView.css';
 
   // --- REVISED Props ---
@@ -58,6 +59,12 @@
   let menuStyle = '';
   let chatPanelElement: HTMLDivElement;
   let isContinuing = false; // New state to distinguish continuing from weaving
+  
+  // Word highlighting state
+  let highlightedWord: WordInfo | null = null;
+  let isDraggingCodexEntry = false;
+  let isDraggingWritingWeave = false;
+  let lastHighlightUpdate = 0;
 
   const writingWeaves = [
     { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
@@ -150,10 +157,12 @@
   // --- Lifecycle ---
     onDestroy(() => {
     window.removeEventListener('click', handleClickOutside, true);
+    window.removeEventListener('dragend', handleGlobalDragEnd, true);
   });
 
   onMount(async () => {
     window.addEventListener('click', handleClickOutside, true);
+    window.addEventListener('dragend', handleGlobalDragEnd, true);
       // Initialize undo stack with the starting content
       undoStack = [documentContent || ''];
       loadChatLogs(); // Load chat history on mount
@@ -386,6 +395,15 @@
     if (!target.closest('.chat-message-menu') && !target.closest('.message-menu-btn')) {
         activeMenuMessageIndex = null;
     }
+  }
+
+  function handleGlobalDragEnd(event: DragEvent) {
+    // Reset all drag states when any drag operation ends
+    console.log('Global drag end - clearing all states');
+    isWeaveDragOver = false;
+    isDraggingCodexEntry = false;
+    isDraggingWritingWeave = false;
+    highlightedWord = null;
   }
 
     // --- Chat History Functions ---
@@ -717,6 +735,7 @@
   // --- New Drag and Drop Handlers ---
   function handleDragStart(e: DragEvent, entry: database.CodexEntry) {
     e.dataTransfer?.setData('application/json', JSON.stringify({ type: 'codex-entry', entry }));
+    isDraggingCodexEntry = true;
   }
 
   function getCoordsFromPos(pos: number): { x: number, y: number } {
@@ -767,9 +786,22 @@
   }
 
     function handleDragEnter(event: DragEvent) {
+    console.log('DragEnter - Available types:', event.dataTransfer?.types); // Debug all types
     if (event.dataTransfer?.types.includes('application/x-llore-writing-weave') || 
         event.dataTransfer?.types.includes('application/json')) {
       isWeaveDragOver = true;
+      
+      // Check what type of item we're dragging - prioritize specific types
+      if (event.dataTransfer?.types.includes('application/x-llore-writing-weave')) {
+        isDraggingWritingWeave = true;
+        console.log('Detected writing weave drag'); // Debug logging
+      } else if (event.dataTransfer?.types.includes('application/json')) {
+        // For JSON-only drags, assume it's a codex entry
+        isDraggingCodexEntry = true;
+        console.log('Detected codex entry drag'); // Debug logging
+      }
+      
+      console.log('Drag states:', { isDraggingWritingWeave, isDraggingCodexEntry, isWeaveDragOver }); // Debug states
     }
   }
 
@@ -778,6 +810,9 @@
     const rect = target.getBoundingClientRect();
     if (event.clientX <= rect.left || event.clientX >= rect.right || event.clientY <= rect.top || event.clientY >= rect.bottom) {
       isWeaveDragOver = false;
+      isDraggingCodexEntry = false;
+      isDraggingWritingWeave = false;
+      highlightedWord = null;
     }
   }
 
@@ -785,16 +820,37 @@
     if (event.dataTransfer?.types.includes('application/x-llore-writing-weave') ||
         event.dataTransfer?.types.includes('application/json')) {
       event.preventDefault(); // Allow drop
-      const pos = getCursorPositionFromMouseEvent(event);
-      const coords = getCoordsFromPos(pos);
-      dropIndicatorStyle = `top: ${coords.y}px; left: ${coords.x}px;`;
+      
+      // Add word highlighting for both codex entries and writing weaves
+      if ((isDraggingCodexEntry || isDraggingWritingWeave) && markdownTextareaElement) {
+        // Throttle updates to improve performance
+        const now = Date.now();
+        if (now - lastHighlightUpdate > 16) { // ~60fps
+          lastHighlightUpdate = now;
+          const wordInfo = getWordAtPoint(markdownTextareaElement, event.clientX, event.clientY);
+          highlightedWord = wordInfo;
+          console.log('DragOver - highlighting word:', wordInfo?.word, 'states:', { isDraggingCodexEntry, isDraggingWritingWeave }); // Debug
+        }
+      } else {
+        // Only show the old drop indicator if we're not doing word highlighting
+        const pos = getCursorPositionFromMouseEvent(event);
+        const coords = getCoordsFromPos(pos);
+        dropIndicatorStyle = `top: ${coords.y}px; left: ${coords.x}px;`;
+        console.log('DragOver - using fallback indicator, states:', { isDraggingCodexEntry, isDraggingWritingWeave }); // Debug
+      }
     }
   }
 
     
 
   function handleDrop(event: DragEvent) {
+    // Capture the highlighted word position before clearing state
+    const highlightedWordAtDrop = highlightedWord;
+    
     isWeaveDragOver = false;
+    isDraggingCodexEntry = false;
+    isDraggingWritingWeave = false;
+    highlightedWord = null;
     event.preventDefault();
     event.stopPropagation();
 
@@ -806,28 +862,50 @@
     if (jsonData) {
       try {
         const dropData = JSON.parse(jsonData);
+        console.log('Drop data:', dropData); // Debug logging
         if (dropData.type === 'writing-weave') {
-          // Handle writing weave drop
-          const cursorPos = getCursorPositionFromMouseEvent(event);
+          // Handle writing weave drop - use highlighted word position if available
+          let cursorPos;
+          if (highlightedWordAtDrop) {
+            cursorPos = highlightedWordAtDrop.index;
+            console.log('Using highlighted word position for weave:', cursorPos); // Debug logging
+          } else {
+            cursorPos = getCursorPositionFromMouseEvent(event);
+            console.log('Using fallback position for weave:', cursorPos); // Debug logging
+          }
           activeWritingWeave = dropData.weave;
           writingWeaveCursorPos = cursorPos;
           writingWeaveSelectionEnd = cursorPos; // Set end to start for a drop (no selection)
           showCodexSelector = true;
         } else {
-          // Handle codex entry drop (has id, name, type, content properties)
-          droppedEntry = dropData;
+          // Handle codex entry drop (has id, name, type, content properties) - use highlighted word position if available
+          droppedEntry = dropData.entry || dropData; // Extract the actual entry from the wrapper
+          console.log('Extracted entry:', droppedEntry); // Debug logging
           dropMenuX = event.clientX;
           dropMenuY = event.clientY;
-          const target = event.target as HTMLTextAreaElement;
-          dropCursorPosition = target.selectionStart;
+          if (highlightedWordAtDrop) {
+            dropCursorPosition = highlightedWordAtDrop.index;
+            console.log('Using highlighted word position:', dropCursorPosition); // Debug logging
+          } else {
+            const target = event.target as HTMLTextAreaElement;
+            dropCursorPosition = target.selectionStart;
+            console.log('Using fallback position:', dropCursorPosition); // Debug logging
+          }
           showDropMenu = true;
         }
       } catch (e) {
         console.error('Error parsing JSON drop data:', e);
       }
     } else if (textData) {
-      // Handle plain text drop
-      const cursorPos = getCursorPositionFromMouseEvent(event);
+      // Handle plain text drop - use highlighted word position if available
+      let cursorPos;
+      if (highlightedWordAtDrop) {
+        cursorPos = highlightedWordAtDrop.index;
+        console.log('Using highlighted word position for text:', cursorPos); // Debug logging
+      } else {
+        cursorPos = getCursorPositionFromMouseEvent(event);
+        console.log('Using fallback position for text:', cursorPos); // Debug logging
+      }
       insertTextAt(textData, cursorPos);
     }
   }
@@ -1190,7 +1268,11 @@
   }
 
   function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string, description: string, icon: string }) {
-    if (!event.dataTransfer) return;
+    console.log('DRAG START CALLED:', weave.label); // Debug logging
+    if (!event.dataTransfer) {
+      console.log('No dataTransfer available');
+      return;
+    }
     
     const payload = {
       type: 'writing-weave',
@@ -1201,6 +1283,8 @@
     event.dataTransfer.setData('application/x-llore-writing-weave', 'true');
     event.dataTransfer.setData('application/json', JSON.stringify(payload));
     event.dataTransfer.effectAllowed = 'move';
+    isDraggingWritingWeave = true;
+    console.log('Started writing weave drag:', weave.label, 'isDraggingWritingWeave:', isDraggingWritingWeave); // Debug logging
   }
 
   function handleMenuAction(action: string, messageIndex: number | null) {
@@ -1623,9 +1707,26 @@ Based on the AI response and the surrounding context, generate enhanced text tha
       <div class="toolbar-left-controls" style="visibility: hidden;"></div>
     </div>
     <div class="editor-pane">
-      {#if isWeaveDragOver}
+      {#if isWeaveDragOver && !isDraggingCodexEntry && !isDraggingWritingWeave}
       <div class="drop-indicator" style={dropIndicatorStyle}></div>
     {/if}
+      
+      <!-- Word highlight overlay -->
+      {#if highlightedWord && (isDraggingCodexEntry || isDraggingWritingWeave)}
+        <div 
+          class="word-highlight-overlay"
+          style="
+            position: fixed;
+            left: {highlightedWord.rect.left}px;
+            top: {highlightedWord.rect.top}px;
+            width: {highlightedWord.rect.width}px;
+            height: {highlightedWord.rect.height}px;
+            pointer-events: none;
+            z-index: 15;
+          "
+        ></div>
+      {/if}
+      
       <textarea
         class="markdown-input"
         value={documentContent}
