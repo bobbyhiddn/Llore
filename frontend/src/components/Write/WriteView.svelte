@@ -928,7 +928,126 @@
       const referenceText = `[@${droppedEntry.name}](codex://entry/${droppedEntry.id})`;
       insertTextAt(referenceText, dropCursorPosition);
     } else if (action === 'weave') {
-      performLloreWeaving();
+      // Set up for codex weaving with length selection
+      activeWritingWeave = { type: 'codex-weave', label: 'Codex Weave', description: 'Weave a codex entry into the text.', icon: '📚', fromDrop: true };
+      writingWeaveCursorPos = dropCursorPosition;
+      writingWeaveSelectionEnd = dropCursorEndPosition;
+      showCodexSelector = true;
+    }
+  }
+
+  // --- Enhanced Codex Weaving Function with Length Control ---
+  async function performEnhancedCodexWeaving(selectedEntries: database.CodexEntry[], selectedLength: 'small' | 'medium' | 'large' | 'extra-large') {
+    if (!droppedEntry && selectedEntries.length === 0) return;
+    
+    isWeaving = true;
+    dispatch('loading', true);
+    
+    try {
+      // Use droppedEntry if available, otherwise use first selected entry
+      const primaryEntry = droppedEntry || selectedEntries[0];
+      const isWordReplacement = droppedWordInfo && writingWeaveCursorPos !== writingWeaveSelectionEnd;
+      
+      // Convert length selection to prompt instruction
+      const lengthInstructions: Record<string, string> = {
+        'small': 'Keep your response to exactly 1 sentence that flows naturally.',
+        'medium': 'Write approximately 1 paragraph (3-5 sentences) that develops the scene.',
+        'large': 'Write approximately 1 page worth of content (multiple paragraphs, around 200-400 words).',
+        'extra-large': 'Write approximately 2 pages worth of content (multiple paragraphs, around 400-800 words).'
+      };
+      
+      const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
+      
+      if (isWordReplacement) {
+        // Word replacement: replace the highlighted word with contextually appropriate content
+        const wordToReplace = droppedWordInfo.word;
+        const textBefore = documentContent.substring(0, writingWeaveCursorPos);
+        const textAfter = documentContent.substring(writingWeaveSelectionEnd);
+        
+        // Create a modified document for the AI with a marker where the word was
+        const modifiedContent = textBefore + '<<REPLACE_WORD>>' + textAfter;
+        
+        // Include all selected entries in context
+        const allEntries = selectedEntries.length > 0 ? selectedEntries : [primaryEntry];
+        const contextEntries = allEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
+        
+        // Use a custom prompt that focuses on word replacement
+        const customPrompt = `You are an expert fiction writing assistant. Your task is to replace a specific word with contextually appropriate content that incorporates the provided codex entries.
+
+WORD TO REPLACE: "${wordToReplace}"
+PRIMARY CODEX ENTRY: ${primaryEntry.name} (${primaryEntry.type})
+${primaryEntry.content}
+
+ADDITIONAL CONTEXT ENTRIES:
+${contextEntries}
+
+LENGTH REQUIREMENT: ${lengthInstruction}
+
+CRITICAL: Your response must be ONLY the replacement text for "${wordToReplace}". Do not include explanations, introductions, or conversational text. The replacement should:
+1. Maintain grammatical coherence in the sentence
+2. Naturally incorporate or reference the codex entries
+3. Flow seamlessly with the surrounding text
+4. Preserve the narrative style and tone
+5. Match the specified length requirement
+
+CONTEXT:
+${modifiedContent}
+
+Generate replacement text for "${wordToReplace}" that weaves in the codex entries naturally while matching the length requirement.`;
+
+        const generatedText = await GetAIResponseWithContext(customPrompt, chatModelId);
+        
+        // Replace the word directly
+        replaceTextRange(generatedText.trim(), writingWeaveCursorPos, writingWeaveSelectionEnd);
+      } else {
+        // Traditional cursor insertion with length control
+        const allEntries = selectedEntries.length > 0 ? selectedEntries : [primaryEntry];
+        const contextEntries = allEntries.map(entry => `${entry.name} (${entry.type}): ${entry.content}`).join('\n\n');
+        
+        const textBefore = documentContent.substring(0, writingWeaveCursorPos);
+        const textAfter = documentContent.substring(writingWeaveCursorPos);
+        
+        const customPrompt = `You are an expert fiction writing assistant. Your task is to weave codex entries into the narrative at a specific position.
+
+PRIMARY CODEX ENTRY: ${primaryEntry.name} (${primaryEntry.type})
+${primaryEntry.content}
+
+ADDITIONAL CONTEXT ENTRIES:
+${contextEntries}
+
+LENGTH REQUIREMENT: ${lengthInstruction}
+
+CRITICAL: Your response must be ONLY the text to insert. Do not include explanations, introductions, or conversational text. The insertion should:
+1. Naturally incorporate or reference the codex entries
+2. Flow seamlessly with the surrounding text
+3. Enhance the narrative at this position
+4. Match the specified length requirement
+
+TEXT BEFORE INSERTION:
+---
+${textBefore.slice(-1500)}
+---
+
+TEXT AFTER INSERTION:
+---
+${textAfter.substring(0, 1500)}
+---
+
+Generate text that weaves in the codex entries naturally at the insertion point while matching the length requirement.`;
+
+        const generatedText = await GetAIResponseWithContext(customPrompt, chatModelId);
+        
+        // Insert the generated text
+        insertTextAt(`\n${generatedText.trim()}\n`, writingWeaveCursorPos);
+      }
+    } catch(err) {
+      dispatch('error', `Enhanced codex weaving failed: ${err}`);
+    } finally {
+      isWeaving = false;
+      dispatch('loading', false);
+      activeWritingWeave = null;
+      droppedEntry = null;
+      droppedWordInfo = null;
     }
   }
 
@@ -1277,6 +1396,12 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
     showCodexSelector = false;
     
     if (!activeWritingWeave || writingWeaveCursorPos === null || !markdownTextareaElement) return;
+
+    // Handle codex weaving differently
+    if (activeWritingWeave.type === 'codex-weave') {
+      await performEnhancedCodexWeaving(selectedEntries, selectedLength);
+      return;
+    }
 
     isWeaving = true;
     dispatch('loading', true);
@@ -2098,7 +2223,15 @@ Based on the AI response and the surrounding context, generate enhanced text tha
   <CodexSelectorModal
     allEntries={codexEntries}
     nodeType={activeWritingWeave?.label || ''}
-    on:close={() => showCodexSelector = false}
+    preSelectedEntries={activeWritingWeave?.type === 'codex-weave' && droppedEntry ? [droppedEntry] : []}
+    on:close={() => {
+      showCodexSelector = false;
+      if (activeWritingWeave?.type === 'codex-weave') {
+        activeWritingWeave = null;
+        droppedEntry = null;
+        droppedWordInfo = null;
+      }
+    }}
     on:weave={handleWritingWeave}
   />
 {/if}

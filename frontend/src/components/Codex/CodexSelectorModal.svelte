@@ -4,6 +4,7 @@
 
   export let allEntries: database.CodexEntry[];
   export let nodeType: string;
+  export let preSelectedEntries: database.CodexEntry[] = [];
 
   let selectedEntries: database.CodexEntry[] = [];
   let searchTerm = '';
@@ -23,10 +24,11 @@
     }
   }
 
-  // Focus the search input on mount
+  // Focus the search input on mount and initialize pre-selected entries
   let searchInput: HTMLInputElement;
   onMount(() => {
     searchInput?.focus();
+    selectedEntries = [...preSelectedEntries];
   });
 
   $: filteredEntries = searchTerm
