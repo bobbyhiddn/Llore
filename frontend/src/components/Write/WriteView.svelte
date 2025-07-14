@@ -1122,20 +1122,16 @@
   }
 
   function handleCopy(event: ClipboardEvent) {
-    if (!markdownTextareaElement) return;
-    
-    const start = markdownTextareaElement.selectionStart;
-    const end = markdownTextareaElement.selectionEnd;
+    // Let the browser handle copy normally - only log for debugging
+    const start = markdownTextareaElement?.selectionStart ?? 0;
+    const end = markdownTextareaElement?.selectionEnd ?? 0;
     
     if (start !== end) {
-      // There's a selection - copy it
       const selectedText = documentContent.substring(start, end);
-      if (event.clipboardData) {
-        event.clipboardData.setData('text/plain', selectedText);
-        event.preventDefault();
-        console.log('Copied text:', selectedText); // Debug logging
-      }
+      console.log('Copied text:', selectedText); // Debug logging
     }
+    
+    // Don't prevent default - let browser handle the copy
   }
 
   function handlePaste(event: ClipboardEvent) {
