@@ -14,6 +14,15 @@
   import { getCharIndexAtPoint, getWordAtPoint, type WordInfo } from '../../lib/utils/text-positioning';
   import '../../styles/WriteView.css';
 
+  // --- Type Definitions ---
+  type WritingWeave = {
+    type: string;
+    label: string;
+    description: string;
+    icon: string;
+    fromDrop?: boolean; // Optional flag for drag-and-drop actions
+  };
+
   // --- REVISED Props ---
   export let documentContent: string = '';
   export let documentFilename: string = '';
@@ -50,7 +59,7 @@
   let dropMenuY = 0;
   let droppedEntry: database.CodexEntry | null = null;
   let showCodexSelector = false;
-  let activeWritingWeave: { type: string, label: string } | null = null;
+  let activeWritingWeave: WritingWeave | null = null;
   let writingWeaveCursorPos = 0;
   let writingWeaveSelectionEnd = 0; // To preserve selection across modals
   let isWeaveDragOver = false;
@@ -67,7 +76,7 @@
   let lastHighlightUpdate = 0;
   let isHandlingPaste = false;
 
-  const writingWeaves = [
+  const writingWeaves: WritingWeave[] = [
     { type: 'narrative', label: 'Narrative', description: 'Continue the story with action or events.', icon: '🏃' },
     { type: 'exposition', label: 'Exposition', description: 'Explain background or world details.', icon: '🌍' },
     { type: 'dialogue', label: 'Dialogue', description: 'Write a conversation between characters.', icon: '💬' },
@@ -958,7 +967,7 @@
       
       const lengthInstruction = lengthInstructions[selectedLength] || lengthInstructions['medium'];
       
-      if (isWordReplacement) {
+      if (isWordReplacement && droppedWordInfo) {
         // Word replacement: replace the highlighted word with contextually appropriate content
         const wordToReplace = droppedWordInfo.word;
         const textBefore = documentContent.substring(0, writingWeaveCursorPos);
@@ -1062,7 +1071,7 @@ Generate text that weaves in the codex entries naturally at the insertion point 
     try {
       const isWordReplacement = droppedWordInfo && dropCursorPosition !== dropCursorEndPosition;
       
-      if (isWordReplacement) {
+      if (isWordReplacement && droppedWordInfo) {
         // Word replacement: replace the highlighted word with contextually appropriate content
         const wordToReplace = droppedWordInfo.word;
         const textBefore = documentContent.substring(0, dropCursorPosition);
@@ -1230,46 +1239,12 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
       }
     }
 
-    // 2. Handle Undo/Redo and formatting
-    if (event.ctrlKey || event.metaKey) {
-        switch (event.key.toLowerCase()) {
-            case 'z':
-                event.preventDefault();
-                if (event.shiftKey) {
-                    handleRedo();
-                } else {
-                    handleUndo();
-                }
-                break;
-            case 'y':
-                event.preventDefault();
-                handleRedo();
-                break;
-            case 'b':
-                event.preventDefault();
-                applyMarkdownFormat('bold');
-                break;
-            case 'i':
-                event.preventDefault();
-                applyMarkdownFormat('italic');
-                break;
-        }
-    }
-  }
-
-  function handleInput(event: Event) {
-    const target = event.target as HTMLTextAreaElement;
-    
-    // Don't push to history if we're handling paste (to avoid duplicate entries)
-    if (!isHandlingPaste) {
-      pushToHistory(documentContent);
-    }
-    
-    dispatch('updatecontent', target.value);
-
-    // Also handle autocomplete logic
-    const text = target.value;
-    const cursorPos = target.selectionStart;
+    // This keydown handler should not dispatch content updates, 
+    // that is handled by the on:input handler (handleInput).
+    // Autocomplete logic that was here is also now handled by handleInput.
+    const textarea = event.target as HTMLTextAreaElement;
+    const text = textarea.value;
+    const cursorPos = textarea.selectionStart;
     const lastAt = text.lastIndexOf('@', cursorPos - 1);
 
     if (lastAt !== -1) {
@@ -1477,7 +1452,7 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
     }
   }
 
-  function openWritingWeave(event: MouseEvent, node: { type: string, label: string }) {
+  function openWritingWeave(event: MouseEvent, node: WritingWeave) {
     event.stopPropagation();
     if (!markdownTextareaElement) return;
     
@@ -1493,7 +1468,7 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
       return;
     }
     
-    activeWritingWeave = node;
+    activeWritingWeave = { ...node, fromDrop: false };
     writingWeaveCursorPos = selectionStart;
     writingWeaveSelectionEnd = selectionEnd; // Will be same as start if no selection
     showCodexSelector = true;
@@ -1516,13 +1491,13 @@ Generate replacement text for "${wordToReplace}" that weaves in the codex entry 
     }
     
     // If text is selected, trigger weaving flow with this codex entry
-    activeWritingWeave = { type: 'codex', label: entry.name };
+    activeWritingWeave = { type: 'codex', label: entry.name, description: 'Weave with a codex entry', icon: '📚', fromDrop: false };
     writingWeaveCursorPos = markdownTextareaElement.selectionStart;
     writingWeaveSelectionEnd = markdownTextareaElement.selectionEnd;
     showCodexSelector = true;
   }
 
-  function handleWeaveButtonDragStart(event: DragEvent, weave: { type: string, label: string, description: string, icon: string }) {
+  function handleWeaveButtonDragStart(event: DragEvent, weave: WritingWeave) {
     console.log('DRAG START CALLED:', weave.label); // Debug logging
     if (!event.dataTransfer) {
       console.log('No dataTransfer available');
@@ -1771,6 +1746,42 @@ Based on the AI response and the surrounding context, generate enhanced text tha
     markdownTextareaElement.selectionEnd = documentContent.length;
     showLengthSelector = true;
   }
+
+  function handleInput(event: Event) {
+    const target = event.target as HTMLTextAreaElement;
+    
+    // Don't push to history if we're handling paste (to avoid duplicate entries)
+    if (!isHandlingPaste) {
+      pushToHistory(documentContent);
+    }
+    
+    dispatch('updatecontent', target.value);
+
+    const text = target.value;
+    const cursorPos = target.selectionStart;
+    const charBeforeCursor = text[cursorPos - 1];
+
+    if (charBeforeCursor === '@') {
+      autocompleteTriggerPos = cursorPos;
+      autocompleteQuery = '';
+      showAutocomplete = true;
+      updateAutocompletePosition();
+      filterAutocompleteItems();
+    } else if (showAutocomplete && text.substring(autocompleteTriggerPos - 1, cursorPos).includes('@')) {
+      autocompleteQuery = text.substring(autocompleteTriggerPos, cursorPos);
+      updateAutocompletePosition();
+      filterAutocompleteItems();
+    } else {
+      showAutocomplete = false;
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (showErrorModal && event.key === 'Escape') {
+      showErrorModal = false;
+    }
+  }
+
 </script>
 
 <svelte:window on:keydown={handleModalKeydown} />
@@ -1983,20 +1994,20 @@ Based on the AI response and the surrounding context, generate enhanced text tha
       {/if}
       
       <textarea
-        class="markdown-input"
-        value={documentContent}
-        on:input={handleInput}
         bind:this={markdownTextareaElement}
-        placeholder="Start writing your masterpiece (Markdown supported)..."
+        bind:value={documentContent}
+        class="markdown-input"
         class:hidden={editorMode === 'preview'}
-        on:drop={handleDrop}
-        on:dragenter={handleDragEnter}
-        on:dragleave={handleDragLeave}
-        on:dragover={handleDragOver}
-        on:dragover|preventDefault
+        placeholder="Start writing your masterpiece (Markdown supported)..."
+        on:input={handleInput}
         on:keydown={handleWriteViewKeydown}
-        on:copy={handleCopy}
         on:paste={handlePaste}
+        on:copy={handleCopy}
+        on:dragover|preventDefault={handleDragOver}
+        on:dragleave={handleDragLeave}
+        on:drop|preventDefault={handleDrop}
+        on:dragenter={handleDragEnter}
+        on:blur={() => dispatch('updatecontent', documentContent)}
       ></textarea>
       <div
         class={`markdown-preview-container align-${previewAlignment} ${editorMode === 'edit' ? 'hidden' : ''}`}
