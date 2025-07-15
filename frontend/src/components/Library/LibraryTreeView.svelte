@@ -87,13 +87,18 @@
       // Ctrl-click: toggle selection
       toggleItemSelection(item.path);
     } else {
-      // Normal click: single selection
+      // Normal click: single selection and show context menu for files
       if (item.isDir) {
         toggleFolder(item.path);
-      }
-      selectSingleItem(item.path);
-      if (!item.isDir) {
+        selectSingleItem(item.path);
+      } else {
+        selectSingleItem(item.path);
         dispatch('fileselected', item);
+        
+        // Show context menu for files on single click
+        contextMenuItem = item.path;
+        positionContextMenu(mouseEvent);
+        showContextMenu = true;
       }
     }
   }
@@ -155,6 +160,8 @@
   function handleItemDoubleClick(event: CustomEvent) {
     const { item } = event.detail;
     if (!item.isDir) {
+      // Close any open context menus before opening preview
+      showContextMenu = false;
       dispatch('viewfile', item.path);
     }
   }
@@ -165,16 +172,14 @@
     mouseEvent.stopPropagation();
     
     contextMenuItem = item.path;
-    contextMenuX = mouseEvent.clientX;
-    contextMenuY = mouseEvent.clientY;
+    positionContextMenu(mouseEvent);
     showContextMenu = true;
   }
 
   function handleBackgroundRightClick(event: MouseEvent) {
     event.preventDefault();
     contextMenuItem = null; // Root level
-    contextMenuX = event.clientX;
-    contextMenuY = event.clientY;
+    positionContextMenu(event);
     showContextMenu = true;
   }
 
@@ -191,6 +196,46 @@
   function closeContextMenu() {
     showContextMenu = false;
     contextMenuItem = null;
+  }
+
+  // Smart positioning for context menu - opens above cursor if in bottom half of screen
+  function positionContextMenu(mouseEvent: MouseEvent) {
+    const menuHeight = 200; // Approximate height of context menu
+    const menuWidth = 180; // Approximate width of context menu
+    const screenHeight = window.innerHeight;
+    const screenWidth = window.innerWidth;
+    const mouseX = mouseEvent.clientX;
+    const mouseY = mouseEvent.clientY;
+    const padding = 10; // Minimum distance from screen edges
+    const offsetX = 15; // Offset to avoid interfering with double-clicks
+    const offsetY = 5; // Small vertical offset
+    
+    // Handle horizontal positioning
+    if (mouseX + offsetX + menuWidth > screenWidth - padding) {
+      // Position to the left of cursor if too close to right edge
+      contextMenuX = mouseX - menuWidth - offsetX;
+      if (contextMenuX < padding) {
+        contextMenuX = padding;
+      }
+    } else {
+      contextMenuX = mouseX + offsetX;
+    }
+    
+    // Handle vertical positioning
+    if (mouseY > screenHeight / 2) {
+      // Position above cursor if in bottom half of screen
+      contextMenuY = mouseY - menuHeight - offsetY;
+      if (contextMenuY < padding) {
+        contextMenuY = padding;
+      }
+    } else {
+      // Default position below cursor with offset
+      contextMenuY = mouseY + offsetY;
+      // Ensure it doesn't go below screen
+      if (contextMenuY + menuHeight > screenHeight - padding) {
+        contextMenuY = screenHeight - menuHeight - padding;
+      }
+    }
   }
 
   // Context menu actions
