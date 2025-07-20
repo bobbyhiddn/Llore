@@ -8,6 +8,10 @@
     dispatch('setmode', mode);
   }
 
+  function backToVaultSelect() {
+    dispatch('backtovault');
+  }
+
   let startAnimation = false;
   onMount(() => {
     setTimeout(() => {
@@ -17,6 +21,11 @@
 </script>
 
 <div class="mode-select" class:animate-scroll={startAnimation}>
+  <!-- Back to Vault Select Button -->
+  <button class="back-to-vault-btn" on:click={backToVaultSelect} title="Back to Vault Selection">
+    ← Back to Vault Selection
+  </button>
+
   <div class="scroll-stave-assembly top-stave">
     <div class="stave-handle left"></div>
     <div class="stave-roller"></div>
@@ -349,6 +358,52 @@
     to {
       opacity: 1;
       transform: translateY(0px); /* Explicitly to 0px */
+    }
+  }
+
+  /* Back to Vault Button */
+  .back-to-vault-btn {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color-medium);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    z-index: 20;
+    transition: all 0.2s ease;
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  .animate-scroll .back-to-vault-btn {
+    animation: fadeInButton 0.5s ease-out forwards;
+    animation-delay: 0.8s;
+  }
+
+  .back-to-vault-btn:hover {
+    background: var(--bg-hover-medium);
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .back-to-vault-btn:active {
+    transform: translateY(0);
+  }
+
+  @keyframes fadeInButton {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
     }
   }
 

@@ -4,6 +4,7 @@
   import LibraryFileViewer from './components/Library/LibraryFileViewer.svelte'; // Keep this separate modal
   // Import the new components
   import VaultSelector from './components/Settings/VaultSelector.svelte';
+  import RecentVaultsModal from './components/Settings/RecentVaultsModal.svelte';
   import ModeSelector from './components/ModeSelector.svelte';
   import CodexView from './components/Codex/CodexView.svelte';
   import StoryImportView from './components/Story/StoryImportView.svelte';
@@ -31,6 +32,64 @@
   let errorMsg = ''; // General error message
   let vaultErrorMsg = ''; // Specific vault errors for VaultSelector
   let initialErrorMsg = ''; // Error for initial vault screen
+  
+  // --- Recent Vaults Modal State ---
+  let showRecentVaultsModal = false;
+  let recentVaults = []; // Will be populated from localStorage
+
+  // --- Recent Vaults Management ---
+  const RECENT_VAULTS_KEY = 'llore_recent_vaults';
+  const MAX_RECENT_VAULTS = 10;
+
+  function loadRecentVaults() {
+    try {
+      const stored = localStorage.getItem(RECENT_VAULTS_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Convert LastAccessed back to Date objects
+        recentVaults = parsed.map(vault => ({
+          ...vault,
+          LastAccessed: new Date(vault.LastAccessed)
+        }));
+      }
+    } catch (err) {
+      console.error('Error loading recent vaults:', err);
+      recentVaults = [];
+    }
+  }
+
+  function saveRecentVaults() {
+    try {
+      localStorage.setItem(RECENT_VAULTS_KEY, JSON.stringify(recentVaults));
+    } catch (err) {
+      console.error('Error saving recent vaults:', err);
+    }
+  }
+
+  function addToRecentVaults(vaultPath: string) {
+    if (!vaultPath) return;
+
+    // Remove existing entry if it exists
+    recentVaults = recentVaults.filter(vault => vault.Path !== vaultPath);
+    
+    // Add to beginning of array
+    recentVaults.unshift({
+      Path: vaultPath,
+      LastAccessed: new Date()
+    });
+
+    // Limit to MAX_RECENT_VAULTS
+    if (recentVaults.length > MAX_RECENT_VAULTS) {
+      recentVaults = recentVaults.slice(0, MAX_RECENT_VAULTS);
+    }
+
+    saveRecentVaults();
+  }
+
+  function removeFromRecentVaults(vaultPath: string) {
+    recentVaults = recentVaults.filter(vault => vault.Path !== vaultPath);
+    saveRecentVaults();
+  }
 
   // --- Shared State (used across multiple components) ---
   let openrouterApiKey = '';
@@ -108,9 +167,14 @@
 
   // --- Initialization ---
   onMount(async () => {
+    // Load recent vaults from localStorage
+    loadRecentVaults();
+    
     await fetchCurrentVaultPath();
     if (currentVaultPath) {
       vaultIsReady = true;
+      // Add current vault to recent history
+      addToRecentVaults(currentVaultPath);
       // Load settings regardless of vault, API key might be global
       await loadSettings();
       // Don't auto-load data, wait for mode selection
@@ -157,6 +221,7 @@
       if (newVaultPath) {
         await SwitchVault(newVaultPath);
         await fetchCurrentVaultPath(); // Updates vaultIsReady
+        addToRecentVaults(newVaultPath); // Add to recent history
         await loadSettings(); // Reload settings in case vault-specific settings exist later
         // Reset data states
         entries = [];
@@ -181,6 +246,7 @@
       if (selectedPath) {
         await SwitchVault(selectedPath);
         await fetchCurrentVaultPath(); // Updates vaultIsReady
+        addToRecentVaults(selectedPath); // Add to recent history
         await loadSettings(); // Reload settings
         // Reset data states
         entries = [];
@@ -190,7 +256,70 @@
         vaultErrorMsg = '';
       }
     } catch (err) {
-      vaultErrorMsg = `Error loading vault: ${err}`;
+      // Check if error is due to user cancelling dialog
+      const errorMsg = err.toString();
+      if (errorMsg.includes('shellItem is nil') || errorMsg.includes('cancelled') || errorMsg.includes('dialog')) {
+        // User cancelled file dialog, just clear error and stay on vault select
+        vaultErrorMsg = '';
+      } else {
+        vaultErrorMsg = `Error loading vault: ${err}`;
+        vaultIsReady = false;
+        mode = null;
+      }
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  // Handle Recent Vaults button click
+  async function handleRecentVaults() {
+    try {
+      // Recent vaults are already loaded from localStorage
+      // Sort by most recent first (just in case)
+      recentVaults.sort((a, b) => new Date(b.LastAccessed).getTime() - new Date(a.LastAccessed).getTime());
+      showRecentVaultsModal = true;
+    } catch (err) {
+      vaultErrorMsg = `Error loading recent vaults: ${err}`;
+    }
+  }
+
+  // Handle Recent Vaults Modal Events
+  function handleRecentVaultSelect(event) {
+    const vaultPath = event.detail;
+    showRecentVaultsModal = false;
+    // Switch to the selected vault
+    switchToVault(vaultPath);
+  }
+
+  function handleRecentVaultRemove(event) {
+    const vaultPath = event.detail;
+    removeFromRecentVaults(vaultPath);
+  }
+
+  function handleRecentVaultBrowse() {
+    showRecentVaultsModal = false;
+    // Trigger the same action as "Load Lore Vault"
+    handleLoadLore();
+  }
+
+  function handleRecentVaultClose() {
+    showRecentVaultsModal = false;
+  }
+
+  // Helper function to switch to a vault
+  async function switchToVault(vaultPath) {
+    isLoading = true;
+    vaultErrorMsg = '';
+    try {
+      await SwitchVault(vaultPath);
+      await fetchCurrentVaultPath(); // Updates vaultIsReady
+      addToRecentVaults(vaultPath); // Add to recent history
+      await loadSettings(); // Reload settings
+      // Reset data states
+      entries = [];
+      mode = null; // Go to mode selection
+    } catch (err) {
+      vaultErrorMsg = `Error switching to vault: ${err}`;
       vaultIsReady = false;
       mode = null;
     } finally {
@@ -249,6 +378,17 @@
   // Specific handler for the 'setmode' event from ModeSelector
   function handleModeSelectEvent(event: CustomEvent<'codex' | 'story' | 'library' | 'chat' | 'settings' | 'write'>) {
       setModeAndUpdate(event.detail);
+  }
+
+  // Handler for 'backtovault' event from ModeSelector
+  function handleBackToVault() {
+    vaultIsReady = false;
+    mode = null;
+    currentVaultPath = null;
+    // Clear any error messages
+    vaultErrorMsg = '';
+    initialErrorMsg = '';
+    errorMsg = '';
   }
 
   // --- Settings & Models ---
@@ -1177,9 +1317,10 @@
       bind:initialErrorMsg={vaultErrorMsg}
       on:loadlore={handleLoadLore}
       on:newlore={handleNewLore}
+      on:recentvaults={handleRecentVaults}
     />
   {:else if mode === null}
-    <ModeSelector on:setmode={handleModeSelectEvent} />
+    <ModeSelector on:setmode={handleModeSelectEvent} on:backtovault={handleBackToVault} />
   {:else if mode === 'codex'}
     <CodexView
       bind:entries
@@ -1293,6 +1434,16 @@
       initialContent={viewingFileContent}
       on:close={() => showLibraryViewer = false}
       on:save={handleSaveLibraryFile}
+    />
+  {/if}
+
+  {#if showRecentVaultsModal}
+    <RecentVaultsModal
+      {recentVaults}
+      on:close={handleRecentVaultClose}
+      on:select={handleRecentVaultSelect}
+      on:remove={handleRecentVaultRemove}
+      on:browse={handleRecentVaultBrowse}
     />
   {/if}
 
