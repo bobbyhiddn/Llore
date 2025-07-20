@@ -14,6 +14,10 @@
   function handleNewLore() {
     dispatch('newlore');
   }
+
+  function handleRecentVaults() {
+    dispatch('recentvaults');
+  }
 </script>
 
 <div class="initial-prompt">
@@ -25,6 +29,9 @@
   {/if}
   <button on:click={handleLoadLore} disabled={isLoading}>
       {#if isLoading}Loading...{:else}Load Lore Vault{/if}
+  </button>
+  <button on:click={handleRecentVaults} disabled={isLoading} class="recent-vaults-btn">
+      Recent Vaults
   </button>
   <button on:click={handleNewLore} disabled={isLoading}>
       {#if isLoading}Creating...{:else}Create New Vault{/if}
@@ -99,5 +106,17 @@
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+  }
+
+  .recent-vaults-btn {
+    background: var(--accent-gradient);
+    color: white;
+    border: none;
+    box-shadow: 0 4px 12px rgba(109, 94, 217, 0.2);
+  }
+
+  .recent-vaults-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(109, 94, 217, 0.3);
   }
 </style>
